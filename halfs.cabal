@@ -1,0 +1,24 @@
+name:           halfs
+version:        0.2
+license:        LGPL
+license-file:   LGPL
+author:         Isaac Jones <ijones@galois.com>,
+                Adam Wick <awick@galois.com>
+maintainer:     Adam Wick <awick@galois.com>,
+                Isaac Jones <ijones@galois.com>
+description:    A library implementing a file system in Haskell given an
+                underlying block layer. Includes support for enforcing 
+                read-only\/read-write distinguishment via monads. 
+synopsis:       The Haskell File System, ported to the HaLVM
+category:       System
+stability:      experimental
+build-type:     Simple
+cabal-version:  >= 1.2
+tested-with:    GHC ==6.8.0
+
+library
+  build-depends:    base >=4, binary
+
+  Exposed-Modules:  Halfs
+  GHC-Options:      -O2 -Wall -fno-ignore-asserts
+
