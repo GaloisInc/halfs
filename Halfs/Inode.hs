@@ -8,9 +8,8 @@ module Halfs.Inode(
  where
 
 import Control.Exception
-import Data.Binary
-import Data.ByteString.Lazy(ByteString)
-import qualified Data.ByteString.Lazy as BS
+import Data.ByteString(ByteString)
+import qualified Data.ByteString as BS
 import Data.Char
 import Data.Time.Clock
 import Data.Word
@@ -19,7 +18,7 @@ import Halfs.Classes
 import Halfs.Protection
 
 newtype InodeRef = IR Word64
-  deriving (Binary, Eq, Ord, Num, Show, Integral, Enum, Real)
+  deriving (Eq, Ord, Num, Show, Integral, Enum, Real)
 
 blockAddrToInodeRef :: Word64 -> InodeRef
 blockAddrToInodeRef = IR
@@ -27,7 +26,7 @@ blockAddrToInodeRef = IR
 inodeRefToBlockAddr :: InodeRef -> Word64
 inodeRefToBlockAddr (IR x) = x
 
-data (Binary t, Eq t, Ord t) => Inode t = Inode {
+data (Eq t, Ord t) => Inode t = Inode {
     address       :: InodeRef
   , parent        :: InodeRef
   , continuation  :: Maybe InodeRef
@@ -41,14 +40,10 @@ data (Binary t, Eq t, Ord t) => Inode t = Inode {
   , blocks        :: [InodeRef]
   }
 
-instance Binary t => Binary (Inode t) where
-  get = undefined
-  put = undefined
-
 minimalInodeSize :: Timed t m => m Word64
-minimalInodeSize = do
-  now <- getTime
-  return $ fromIntegral $ BS.length $ encode $ emptyInode now
+minimalInodeSize = undefined
+{-  now <- getTime
+  return $ fromIntegral $ BS.length $ encode $ emptyInode now -}
  where
   emptyInode now = Inode {
     address       = IR 0

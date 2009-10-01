@@ -15,7 +15,7 @@ module Halfs.BlockMap(
 import Control.Monad
 import Data.Array.MArray
 import Data.Bits
-import qualified Data.ByteString.Lazy as BS
+import qualified Data.ByteString as BS
 import Data.FingerTree
 import Data.Monoid
 import Data.Word

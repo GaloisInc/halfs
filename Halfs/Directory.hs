@@ -9,8 +9,7 @@ module Halfs.Directory (
  where
 
 import Control.Exception(assert)
-import Data.Binary
-import qualified Data.ByteString.Lazy as BS
+import qualified Data.ByteString as BS
 import Data.Map(Map)
 import Data.Word
 import System.FilePath
@@ -76,7 +75,7 @@ makeDirectory :: Timed t m =>
                  m InodeRef
 makeDirectory bd addr mommy user group = do
   now <- getTime
-  let bstr = encode $ inode now
+  let bstr = undefined {- encode $ inode now -}
   -- sanity check
   let bsize = fromIntegral $ bdBlockSize bd
   assert (BS.length bstr == bsize) $ return ()

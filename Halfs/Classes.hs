@@ -13,19 +13,17 @@ import Control.Concurrent.MVar
 import Control.Monad.Reader
 import Control.Monad.ST
 import Data.Array.MArray
-import Data.Binary
-import Data.Binary.Put
-import Data.Binary.Get
 import Data.IORef
 import Data.STRef
 import Data.Time.Clock
+import Data.Word
 
 -- ----------------------------------------------------------------------------
 
 -- |A monad implementing Timed implements a monotonic clock that can be read
 -- from. One obvious implementation is using the system clock. Another might
 -- be a step counter.
-class (Monad m, Binary t, Eq t, Ord t) => Timed t m | m -> t where
+class (Monad m, Eq t, Ord t) => Timed t m | m -> t where
   getTime :: m t
 
 
@@ -47,13 +45,6 @@ instance Timed UTCTime IO where
 
 instance Monad m => Timed Word64 (TimedT m) where
   getTime = ttGetTime
-
-instance Binary UTCTime where
-  get   = do d <- (toEnum . fromIntegral) `fmap` getWord64host
-             s <- (toEnum . fromIntegral) `fmap` getWord64host
-             return $ UTCTime d (fromIntegral s)
-  put t = do putWord64host (fromIntegral $ fromEnum $ utctDay t)
-             putWord64host (fromIntegral $ fromEnum $ utctDayTime t)
 
 -- ---------------------------------------------------------------------------
 

@@ -6,11 +6,8 @@ module Halfs.SuperBlock(
 
 import Control.Exception
 import Halfs.Inode
-import Data.Binary
-import Data.Binary.Get
-import Data.Binary.Put
-import Data.ByteString.Lazy(ByteString)
-import qualified Data.ByteString.Lazy as BS
+import Data.ByteString(ByteString)
+import qualified Data.ByteString as BS
 import Data.Char
 import Data.Word
 
@@ -27,37 +24,8 @@ data SuperBlock = SuperBlock {
      }
 
 superBlockSize :: Word64
-superBlockSize = fromIntegral $ BS.length $ encode blank
+superBlockSize = fromIntegral $ BS.length $ undefined {- encode blank -}
  where blank = SuperBlock 0 0 0 False 0 0 0 0 0
-
-instance Binary SuperBlock where
-  get    = do m1 <- getLazyByteString 8
-              v  <- get
-              bs <- get
-              bc <- get
-              m2 <- getLazyByteString 8
-              uc <- get
-              fb <- get
-              ub <- get
-              m3 <- getLazyByteString 8
-              fc <- get
-              rd <- get
-              bl <- get
-              m4 <- getLazyByteString 8
-              return $! SuperBlock v bs bc (uc == cleanMark) fb ub fc rd bl
-  put sb = do putLazyByteString magic1
-              put $ version sb
-              put $ blockSize sb
-              put $ blockCount sb
-              putLazyByteString magic2
-              put $ if unmountClean sb then cleanMark else 0
-              put $ freeBlocks sb
-              put $ usedBlocks sb
-              putLazyByteString magic3
-              put $ fileCount sb
-              put $ rootDir sb
-              put $ blockList sb
-              putLazyByteString magic4
 
 -- ----------------------------------------------------------------------------
 

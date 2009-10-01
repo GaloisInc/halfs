@@ -8,8 +8,8 @@ module System.Device.BlockDevice(
  where
 
 import Control.Monad.State.Strict
-import Data.ByteString.Lazy(ByteString)
-import qualified Data.ByteString.Lazy as BS
+import Data.ByteString(ByteString)
+import qualified Data.ByteString as BS
 import Data.Map(Map)
 import qualified Data.Map as Map
 import Data.Time.Clock
@@ -67,13 +67,12 @@ newRescaledBlockDevice bsize dev
   oldbs          = fromIntegral $! bdBlockSize dev
   ratio          = bsize `div` bdBlockSize dev
   blocks         = bdNumBlocks dev `div` ratio
-  readBlock  i   = read (i*ratio) ratio
-  writeBlock i b = write (i*ratio) b
+  readBlock  i   = do let start = i * ratio
+                          end   = (start + ratio) - 1
+                      blocks <- forM [start..end] $ bdReadBlock dev
+                      return $ BS.concat blocks
+  writeBlock i b = write i b
   --
-  read i 0 = return BS.empty
-  read i c = do rest <- read (i + 1) (c - 1)
-                cur  <- bdReadBlock dev i
-                return $! BS.append cur rest
   write i b | BS.null b = return ()
             | otherwise = do let (start, rest) = BS.splitAt oldbs b
                              bdWriteBlock dev i start

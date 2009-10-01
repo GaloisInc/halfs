@@ -3,9 +3,8 @@ module Halfs.CoreAPI where
 
 import Control.Monad.Reader
 import Data.Array.MArray
-import Data.Binary
-import Data.ByteString.Lazy(ByteString)
-import qualified Data.ByteString.Lazy as BS
+import Data.ByteString(ByteString)
+import qualified Data.ByteString as BS
 import Data.Word
 import System.FilePath
 
@@ -46,7 +45,7 @@ newfs dev = do
   when (fromIntegral (BS.length superBlockBstr) > bdBlockSize dev) $
     fail "The device's block size is insufficiently large!"
   forM_ [1..bitmapNumBlocks] $ \ i -> do
-    bdWriteBlock dev i $ BS.take blockSizeI $ BS.repeat 0
+    bdWriteBlock dev i $ BS.replicate blockSizeI 0
   blockMap <- readBlockMap dev
   markBlocksUsed blockMap 0 rootDirAddr
   writeBlockMap dev blockMap
@@ -59,7 +58,7 @@ newfs dev = do
   rootDirAddr     = bitmapNumBlocks + 1
   rootDirInode    = blockAddrToInodeRef rootDirAddr
   --
-  superBlockBstr  = encode superBlock
+  superBlockBstr  = undefined {- encode superBlock -}
   superBlock      = SuperBlock {
     version       = 1
   , blockSize     = blockSize
