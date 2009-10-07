@@ -14,6 +14,9 @@ import Control.Monad.Reader
 import Control.Monad.ST
 import Data.Array.MArray
 import Data.IORef
+import Data.Serialize
+import Data.Serialize.Get
+import Data.Serialize.Put
 import Data.STRef
 import Data.Time.Clock
 import Data.Word
@@ -39,6 +42,13 @@ instance Monad m => Monad (TimedT m) where
   m >>= k  = TimedT $ \ t -> do
                a <- runTimerT m t
                runTimerT (k a) (t + 1)
+
+instance Serialize UTCTime where
+  put x = do putWord64be $ fromIntegral $ fromEnum $ utctDay x
+             putWord64be $ fromIntegral $ fromEnum $ utctDayTime x
+  get   = do day <- (toEnum . fromIntegral) `fmap` getWord64be
+             off <- (toEnum . fromIntegral) `fmap` getWord64be
+             return $ UTCTime day off
 
 instance Timed UTCTime IO where
   getTime = getCurrentTime
