@@ -13,8 +13,7 @@ module Halfs.BlockMap(
  where
 
 import Control.Monad
-import Data.Array.MArray
-import Data.Bits
+import Data.Bits hiding (setBit)
 import qualified Data.ByteString as BS
 import Data.FingerTree
 import Data.Monoid
@@ -46,9 +45,9 @@ insert a@(Extent _ size) tr = treeL >< (a <| treeR)
 
 -- ----------------------------------------------------------------------------
 
-data BlockMap a r = BM {
+data BlockMap b r = BM {
     freeTree :: r (FingerTree ExtentSize Extent)
-  , freeMap  :: a Word64 Bool -- ^Is the given block free?
+  , freeMap  :: b -- ^Is the given block free?
   , numFree  :: r Word64
   }
 
@@ -64,13 +63,13 @@ blockMapSizeBlocks x = (bytes + (x - 1)) `div` x
  where bytes = blockMapSizeBytes x
 
 -- |Read in the block map from the disk
-readBlockMap :: (Monad m, Reffable r m, MArray a Bool m) =>
+readBlockMap :: (Monad m, Reffable r m, Bitmapped b m) =>
                 BlockDevice m ->
-                m (BlockMap a r)
+                m (BlockMap b r)
 readBlockMap dev = do
   -- unsafeInterleaveIO is what we want, here, but this is probably the
   -- only place where its use is safe, so we do this by hand.
-  bArr <- newArray (0, numBlocks - 1) False
+  bArr <- newBitmap numBlocks False
   (numFree, _, freeMap) <- foldM (pullIn bArr) (0, Nothing, empty) bmapBlocks
   tree <- newRef freeMap
   free <- newRef numFree
@@ -96,20 +95,20 @@ readBlockMap dev = do
   pullIn'' arr res@(freeBs, Nothing, map) (block, False) =
     return res
   pullIn'' arr res@(freeBs, Nothing, map) (block, True)  = do
-    writeArray arr block True
+    setBit arr block
     return (freeBs + 1, Just block, map)
   pullIn'' arr res@(freeBs, Just f,  map) (block, False) =
     return (freeBs, Nothing, insert (Extent f (block - f)) map)
   pullIn'' arr res@(freeBs, Just f,  map) (block, True)  = do
-    writeArray arr block True
+    setBit arr block
     return (freeBs + 1, Just f, map)
 
 -- |Write the block map to the disk
-writeBlockMap :: (Monad m, Reffable r m, MArray a Bool m) =>
-                 BlockDevice m -> BlockMap a r ->
+writeBlockMap :: (Monad m, Reffable r m, Bitmapped b m) =>
+                 BlockDevice m -> BlockMap b r ->
                  m ()
 writeBlockMap dev bmap = do
-  bits <- getElems (freeMap bmap)
+  bits <- undefined -- getElems (freeMap bmap)
   let bits'     = byN 8 bits
       bytes     = map bitsToByte bits'
       bsBlocks  = map BS.pack $ byN blockSize bytes
@@ -128,27 +127,27 @@ writeBlockMap dev bmap = do
                     map (\ x -> if x then 1 else 0) xs
 
 -- |Mark a given set of blocks as used
-markBlocksUsed :: (Monad m, Reffable r m, MArray a Bool m) =>
-                  BlockMap a r -> Word64 -> Word64 ->
+markBlocksUsed :: (Monad m, Reffable r m, Bitmapped b m) =>
+                  BlockMap b r -> Word64 -> Word64 ->
                   m ()
 markBlocksUsed = undefined
 
 -- |Mark a given set of blocks as unused
-markBlocksUnused :: (Monad m, Reffable r m, MArray a Bool m) =>
-                    BlockMap a r -> Word64 -> Word64 ->
+markBlocksUnused :: (Monad m, Reffable r m, Bitmapped b m) =>
+                    BlockMap b r -> Word64 -> Word64 ->
                     m ()
 markBlocksUnused = undefined
 
 -- |Return the number of blocks currently left
-numFreeBlocks :: (Monad m, Reffable r m, MArray a Bool m) =>
-                 BlockMap a r ->
+numFreeBlocks :: (Monad m, Reffable r m, Bitmapped b m) =>
+                 BlockMap b r ->
                  m Word64
 numFreeBlocks bm = readRef (numFree bm)
 
 -- |Get a set of blocks from the disk. This routine will attempt to fetch
 -- a contiguous set of blocks, but isn't guaranteed to do so. If there aren't
 -- enough blocks, returns Nothing.
-getFreeBlocks :: (Monad m, Reffable r m, MArray a Bool m) =>
-                 BlockMap a r -> Word64 ->
+getFreeBlocks :: (Monad m, Reffable r m, Bitmapped b m) =>
+                 BlockMap b r -> Word64 ->
                  m (Maybe [Word64])
 getFreeBlocks = undefined

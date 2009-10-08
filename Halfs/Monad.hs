@@ -1,4 +1,4 @@
-{-# LANGUAGE MultiParamTypeClasses, FlexibleContexts, FlexibleInstances #-}
+{-# LANGUAGE MultiParamTypeClasses, FlexibleContexts, FlexibleInstances, FunctionalDependencies #-}
 module Halfs.Monad(
          Halfs
        , HalfsM
@@ -6,7 +6,13 @@ module Halfs.Monad(
        )
   where
 
-import Data.Array.MArray
+import Control.Monad.ST
+import Data.Array.IO
+import Data.Array.ST
+import Data.IORef
+import Data.Serialize
+import Data.STRef
+import Data.Time.Clock
 import Data.Word
 
 import Halfs.BlockMap
@@ -15,20 +21,25 @@ import Halfs.Errors
 import System.Device.BlockDevice
 
 -- Any monad used in Halfs must implement the following interface:
-class (MArray a Bool m, Timed t m, Reffable r m, Lockable l m) =>
-   HalfsCapable a t r l m
+class (Bitmapped b m, Timed t m, Reffable r m, Lockable l m, Serialize t) =>
+   HalfsCapable b t r l m | m -> b t r l
 
-instance (MArray a Bool m, Timed t m, Reffable r m, Lockable l m) =>
+instance HalfsCapable (IOUArray Word64 Bool)   UTCTime IORef     IOLock IO
+instance HalfsCapable (STUArray s Word64 Bool) Word64  (STRef s) ()     (ST s)
+
+{-
+instance (MArray a Bool m, Timed t m, Reffable r m, Lockable l m, Serialize t) =>
    HalfsCapable a t r l m
+-}
 
 type HalfsM m a = m (Either HalfsError a)
 
 data HalfsState a m = HS (a Word64 Bool) (BlockDevice m)
 
-data Halfs a r m l =
+data Halfs b r m l =
   HalfsState {
     blockDev   :: BlockDevice m
-  , blockMap   :: BlockMap a r
+  , blockMap   :: BlockMap b r
   , numFiles   :: r Word64
   , lock       :: l
   }

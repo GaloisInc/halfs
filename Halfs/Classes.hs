@@ -6,13 +6,17 @@ module Halfs.Classes(
        , Reffable(..)
        , TimedT(..)
        , Timed(..)
+       , Bitmapped(..)
+       , IOLock
        )
  where
 
 import Control.Concurrent.MVar
 import Control.Monad.Reader
 import Control.Monad.ST
+import Data.Array.IO
 import Data.Array.MArray
+import Data.Array.ST
 import Data.IORef
 import Data.Serialize
 import Data.Serialize.Get
@@ -52,6 +56,9 @@ instance Serialize UTCTime where
 
 instance Timed UTCTime IO where
   getTime = getCurrentTime
+
+instance Timed Word64 (ST s) where
+  getTime = undefined
 
 instance Monad m => Timed Word64 (TimedT m) where
   getTime = ttGetTime
@@ -96,4 +103,23 @@ instance Lockable IOLock IO where
   lock (IOLock l)    = takeMVar l
   release (IOLock l) = putMVar l ()
 
+-- ---------------------------------------------------------------------------
+
+class Monad m => Bitmapped b m | m -> b where
+  newBitmap :: Word64 -> Bool -> m b
+  clearBit  :: b -> Word64 -> m ()
+  setBit    :: b -> Word64 -> m ()
+  checkBit  :: b -> Word64 -> m Bool
+
+instance Bitmapped (IOUArray Word64 Bool) IO where
+  newBitmap s e = newArray (0, s - 1) e
+  clearBit b i  = writeArray b i False
+  setBit b i    = writeArray b i True
+  checkBit b i  = readArray b i
+
+instance Bitmapped (STUArray s Word64 Bool) (ST s) where
+  newBitmap s e = newArray (0, s - 1) e
+  clearBit b i  = writeArray b i False
+  setBit b i    = writeArray b i True
+  checkBit b i  = readArray b i
 

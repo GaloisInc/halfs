@@ -2,7 +2,6 @@
 module Halfs.CoreAPI where
 
 import Control.Monad.Reader
-import Data.Array.MArray
 import Data.ByteString(ByteString)
 import qualified Data.ByteString as BS
 import Data.Word
@@ -40,7 +39,7 @@ data FileSystemStats = FSS {
 -- free blocks. Larger block sizes will decrease the cost of these structures
 -- per underlying disk megabyte, but may also lead to more wasted space for
 -- small files and directories.
--- newfs :: (HalfsCapable a t r l m) => BlockDevice m -> m ()
+newfs :: (HalfsCapable b t r l m) => BlockDevice m -> m ()
 newfs dev = do
   when (fromIntegral (BS.length superBlockBstr) > bdBlockSize dev) $
     fail "The device's block size is insufficiently large!"
@@ -71,130 +70,130 @@ newfs dev = do
   , blockList     = fromIntegral 1
   }
 
-mount :: (HalfsCapable a t r l m) => BlockDevice m -> Halfs a r m l
+mount :: (HalfsCapable b t r l m) => BlockDevice m -> Halfs b r m l
 mount = undefined
 
 fsck :: Int
 fsck = undefined
 
-fstat :: (HalfsCapable a t r l m) =>
-         Halfs a r m l -> FilePath ->
+fstat :: (HalfsCapable b t r l m) =>
+         Halfs b r m l -> FilePath ->
          HalfsM m (FileStat t)
 fstat = undefined
 
-readSymLink :: (HalfsCapable a t r l m) =>
-               Halfs a r m l -> FilePath ->
+readSymLink :: (HalfsCapable b t r l m) =>
+               Halfs b r m l -> FilePath ->
                HalfsM m FilePath
 readSymLink = undefined
 
-mkdir :: (HalfsCapable a t r l m) =>
-         Halfs a r m l -> FilePath -> FileMode ->
+mkdir :: (HalfsCapable b t r l m) =>
+         Halfs b r m l -> FilePath -> FileMode ->
          HalfsM m ()
 mkdir = undefined
 
-rmlink :: (HalfsCapable a t r l m) =>
-          Halfs a r m l -> FilePath ->
+rmlink :: (HalfsCapable b t r l m) =>
+          Halfs b r m l -> FilePath ->
           HalfsM m ()
 rmlink = undefined
 
-rmdir :: (HalfsCapable a t r l m) =>
-         Halfs a r m l -> FilePath ->
+rmdir :: (HalfsCapable b t r l m) =>
+         Halfs b r m l -> FilePath ->
          HalfsM m ()
 rmdir = undefined
 
-createSymLink :: (HalfsCapable a t r l m) =>
-                 Halfs a r m l -> FilePath -> FilePath ->
+createSymLink :: (HalfsCapable b t r l m) =>
+                 Halfs b r m l -> FilePath -> FilePath ->
                  HalfsM m ()
 createSymLink = undefined
 
-rename :: (HalfsCapable a t r l m) =>
-          Halfs a r m l -> FilePath -> FilePath ->
+rename :: (HalfsCapable b t r l m) =>
+          Halfs b r m l -> FilePath -> FilePath ->
           HalfsM m ()
 rename = undefined
 
-mklink :: (HalfsCapable a t r l m) =>
-          Halfs a r m l -> FilePath -> FilePath ->
+mklink :: (HalfsCapable b t r l m) =>
+          Halfs b r m l -> FilePath -> FilePath ->
           HalfsM m ()
 mklink = undefined
 
-setFileMode :: (HalfsCapable a t r l m) =>
-               Halfs a r m l -> FilePath -> FileMode ->
+setFileMode :: (HalfsCapable b t r l m) =>
+               Halfs b r m l -> FilePath -> FileMode ->
                HalfsM m ()
 setFileMode = undefined
 
-chown :: (HalfsCapable a t r l m) =>
-         Halfs a r m l -> FilePath -> UserID -> GroupID ->
+chown :: (HalfsCapable b t r l m) =>
+         Halfs b r m l -> FilePath -> UserID -> GroupID ->
          HalfsM m ()
 chown = undefined
 
-setFileSize :: (HalfsCapable a t r l m) =>
-               Halfs a r m l -> FilePath -> Word64 ->
+setFileSize :: (HalfsCapable b t r l m) =>
+               Halfs b r m l -> FilePath -> Word64 ->
                HalfsM m ()
 setFileSize = undefined
 
-setFileTimes :: (HalfsCapable a t r l m) =>
-                Halfs a r m l -> FilePath -> t -> t ->
+setFileTimes :: (HalfsCapable b t r l m) =>
+                Halfs b r m l -> FilePath -> t -> t ->
                 HalfsM m ()
 setFileTimes = undefined
 
-openFile :: (HalfsCapable a t r l m) =>
-            Halfs a r m l -> FilePath ->
+openFile :: (HalfsCapable b t r l m) =>
+            Halfs b r m l -> FilePath ->
             HalfsM m FileHandle
 openFile = undefined
 
-read :: (HalfsCapable a t r l m) =>
-        Halfs a r m l -> FileHandle -> Word64 -> Word64 ->
+read :: (HalfsCapable b t r l m) =>
+        Halfs b r m l -> FileHandle -> Word64 -> Word64 ->
         HalfsM m ByteString
 read = undefined
 
-write :: (HalfsCapable a t r l m) =>
-         Halfs a r m l -> FileHandle -> Word64 -> Word64 -> ByteString ->
+write :: (HalfsCapable b t r l m) =>
+         Halfs b r m l -> FileHandle -> Word64 -> Word64 -> ByteString ->
          HalfsM m ()
 write = undefined
 
-fsstat :: (HalfsCapable a t r l m) =>
-          Halfs a r m l ->
+fsstat :: (HalfsCapable b t r l m) =>
+          Halfs b r m l ->
           HalfsM m FileSystemStats
 fsstat = undefined
 
-flush :: (HalfsCapable a t r l m) =>
-         Halfs a r m l -> FilePath ->
+flush :: (HalfsCapable b t r l m) =>
+         Halfs b r m l -> FilePath ->
          HalfsM m ()
 flush = undefined
 
-closeFile :: (HalfsCapable a t r l m) =>
-             Halfs a r m l -> FilePath ->
+closeFile :: (HalfsCapable b t r l m) =>
+             Halfs b r m l -> FilePath ->
              HalfsM m ()
 closeFile = undefined
 
-syncFile :: (HalfsCapable a t r l m) =>
-            Halfs a r m l -> FilePath -> SyncType ->
+syncFile :: (HalfsCapable b t r l m) =>
+            Halfs b r m l -> FilePath -> SyncType ->
             HalfsM m ()
 syncFile = undefined
 
-openDir :: (HalfsCapable a t r l m) =>
-           Halfs a r m l -> FilePath ->
+openDir :: (HalfsCapable b t r l m) =>
+           Halfs b r m l -> FilePath ->
            HalfsM m (DirHandle r)
 openDir = undefined
 
-readDir :: (HalfsCapable a t r l m) =>
-           Halfs a r m l -> (DirHandle r) ->
+readDir :: (HalfsCapable b t r l m) =>
+           Halfs b r m l -> (DirHandle r) ->
            HalfsM m [(FilePath, FileStat t)]
 readDir = undefined
 
-closeDir :: (HalfsCapable a t r l m) =>
-            Halfs a r m l -> (DirHandle r) ->
+closeDir :: (HalfsCapable b t r l m) =>
+            Halfs b r m l -> (DirHandle r) ->
             HalfsM m ()
 closeDir = undefined
 
 -- |Synchronize the given directory to disk.
-syncDir :: (HalfsCapable a t r l m) =>
-           Halfs a r m l -> FilePath -> SyncType ->
+syncDir :: (HalfsCapable b t r l m) =>
+           Halfs b r m l -> FilePath -> SyncType ->
            HalfsM m ()
 syncDir = undefined
 
-access :: (MArray a bool m, Timed t m) =>
-          Halfs a r m l -> FilePath -> [AccessRight] ->
+access :: (HalfsCapable b t r l m) =>
+          Halfs b r m l -> FilePath -> [AccessRight] ->
           HalfsM m ()
 access = undefined
 
