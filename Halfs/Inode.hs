@@ -17,7 +17,6 @@ import Data.Char
 import Data.Serialize
 import Data.Serialize.Get
 import Data.Serialize.Put
-import Data.Time.Clock
 import Data.Word
 
 import Halfs.Classes
@@ -122,23 +121,23 @@ instance (Eq t, Ord t, Serialize t) => Serialize (Inode t) where
              unless (mtm > ctm) $
                fail "Incoherent modified / creation times."
              checkMagic magic2
-             user <- get
+             u    <- get
              grp  <- get
              na   <- getWord64be
              sby  <- getWord64be
              sbl  <- getWord64be
              lsb  <- getWord64be
              checkMagic magic3
-             remaining <- remaining
-             let numBlockBytes      = remaining - 8
+             remb <- remaining
+             let numBlockBytes      = remb - 8
                  (numBlocks, check) = numBlockBytes `divMod` inodeRefSize
              unless (check == 0) $ 
                fail "Incorrect number of bytes left for block list."
              unless (numBlocks > minimumNumberOfBlocks) $
                fail "Not enough space left for minimum number of blocks."
-             blocks <- replicateM numBlocks get
+             blks <- replicateM numBlocks get
              checkMagic magic4
-             return $ Inode addr par cont ctm mtm user grp na sby sbl lsb blocks
+             return $ Inode addr par cont ctm mtm u grp na sby sbl lsb blks
    where
     checkMagic x = do magic <- getBytes 8
                       unless (magic == x) $ fail "Invalid superblock."
@@ -180,20 +179,20 @@ buildEmptyInode :: (Serialize t, Timed t m) =>
                    BlockDevice m ->
                    InodeRef -> InodeRef -> UserID -> GroupID ->
                    m ByteString
-buildEmptyInode bd me mommy user group = do
+buildEmptyInode bd me mommy usr grp = do
   now <- getTime
-  numAddrs <- computeNumAddrs (bdBlockSize bd)
-  return $ encode $ emptyInode now numAddrs
+  nAddrs <- computeNumAddrs (bdBlockSize bd)
+  return $ encode $ emptyInode now nAddrs
  where
-  emptyInode now numAddrs = Inode {
+  emptyInode now nAddrs = Inode {
     address       = me
   , parent        = mommy
   , continuation  = Nothing
   , createTime    = now
   , modifyTime    = now
-  , user          = user
-  , group         = group
-  , numAddrs      = numAddrs
+  , user          = usr
+  , group         = grp
+  , numAddrs      = nAddrs
   , sizeBytes     = 0
   , sizeBlocks    = 0
   , liveSizeBytes = 0

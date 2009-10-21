@@ -1,6 +1,7 @@
 {-# LANGUAGE MultiParamTypeClasses, GeneralizedNewtypeDeriving,
              FunctionalDependencies, FlexibleContexts,
              FlexibleInstances #-}
+{-# OPTIONS_GHC -fno-warn-orphans #-}
 module Halfs.Classes(
          Lockable(..)
        , Reffable(..)
@@ -15,7 +16,6 @@ import Control.Concurrent.MVar
 import Control.Monad.Reader
 import Control.Monad.ST
 import Data.Array.IO
-import Data.Array.MArray
 import Data.Array.ST
 import Data.IORef
 import Data.Serialize

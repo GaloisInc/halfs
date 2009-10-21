@@ -1,6 +1,6 @@
 {-# LANGUAGE MultiParamTypeClasses, FlexibleContexts, FlexibleInstances, FunctionalDependencies #-}
 module Halfs.Monad(
-         Halfs
+         Halfs(..)
        , HalfsM
        , HalfsCapable
        )
@@ -21,7 +21,7 @@ import Halfs.Errors
 import System.Device.BlockDevice
 
 -- Any monad used in Halfs must implement the following interface:
-class (Bitmapped b m, Timed t m, Reffable r m, Lockable l m, Serialize t) =>
+class (Bitmapped b m, Timed t m, Reffable r m, Lockable l m, Serialize t, Functor m) =>
    HalfsCapable b t r l m | m -> b t r l
 
 instance HalfsCapable (IOUArray Word64 Bool)   UTCTime IORef     IOLock IO
@@ -34,13 +34,10 @@ instance (MArray a Bool m, Timed t m, Reffable r m, Lockable l m, Serialize t) =
 
 type HalfsM m a = m (Either HalfsError a)
 
-data HalfsState a m = HS (a Word64 Bool) (BlockDevice m)
-
-data Halfs b r m l =
-  HalfsState {
-    blockDev   :: BlockDevice m
-  , blockMap   :: BlockMap b r
-  , numFiles   :: r Word64
-  , lock       :: l
+data Halfs b r m l = HalfsState {
+    hsBlockDev   :: BlockDevice m
+  , hsBlockMap   :: BlockMap b r
+  , hsNumFiles   :: r Word64
+  , hsLock       :: l
   }
 

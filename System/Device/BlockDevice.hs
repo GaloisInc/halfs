@@ -12,7 +12,6 @@ import Data.ByteString(ByteString)
 import qualified Data.ByteString as BS
 import Data.Map(Map)
 import qualified Data.Map as Map
-import Data.Time.Clock
 import Data.Word
 
 -- |The data type that describes the interface to a BlockDevice. If you can 
@@ -69,8 +68,8 @@ newRescaledBlockDevice bsize dev
   blocks         = bdNumBlocks dev `div` ratio
   readBlock  i   = do let start = i * ratio
                           end   = (start + ratio) - 1
-                      blocks <- forM [start..end] $ bdReadBlock dev
-                      return $ BS.concat blocks
+                      blks <- forM [start..end] $ bdReadBlock dev
+                      return $ BS.concat blks
   writeBlock i b = write i b
   --
   write i b | BS.null b = return ()
@@ -89,8 +88,8 @@ type BCM m      = StateT CacheState m
 type BlockMap   = Map Word64 (ByteString, Bool, Word64)
 
 data CacheState = BCS {
-    cache     :: BlockMap
-  , timestamp :: Word64
+    _cache     :: BlockMap
+  , _timestamp :: Word64
   }
 
 -- |Given an existing block device, creates a new block device that will cache
@@ -123,7 +122,7 @@ newCachedBlockDevice size dev = dev {
                                      else return cache
                          return (Map.insert i (b, True, ts) cache', ())
   flush          = do BCS cache _ <- get
-                      forM_ (Map.toList cache) $ \ (i, (block, dirty, ts)) ->
+                      forM_ (Map.toList cache) $ \ (i, (block, dirty, _)) ->
                         when dirty $ do
                           lift $ bdWriteBlock dev i block
   --
@@ -138,9 +137,9 @@ runCacheOp :: Monad m =>
               (BlockMap -> Word64 -> BCM m (BlockMap, a)) ->
               BCM m a
 runCacheOp f = do
-  BCS map ts <- get
-  (map', res) <- f map ts
-  put (BCS map' (ts + 1))
+  BCS mp ts <- get
+  (mp', res) <- f mp ts
+  put (BCS mp' (ts + 1))
   return res
 
 -- Evict the oldest entry from the Cache
@@ -152,7 +151,7 @@ evictEntry m d
   | otherwise               = return $! Map.delete oldestEntry m
  where
   (oldestEntry, (block, dirty, _)) =
-    Map.foldWithKey (\ i igrp@(_, _, its) old@(j, (_, _, jts)) ->
+    Map.foldWithKey (\ i igrp@(_, _, its) old@(_, (_, _, jts)) ->
                       if its < jts then (i, igrp) else old)
                     (maxBound, (undefined, undefined, maxBound))
                     m

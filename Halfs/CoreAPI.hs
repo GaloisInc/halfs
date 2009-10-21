@@ -1,16 +1,15 @@
-{-# LANGUAGE FlexibleContexts, ExistentialQuantification #-}
+{-# LANGUAGE FlexibleContexts, ScopedTypeVariables #-}
 module Halfs.CoreAPI where
 
 import Control.Monad.Reader
 import Data.ByteString(ByteString)
 import qualified Data.ByteString as BS
+import Data.Serialize
 import Data.Word
 import System.FilePath
 
 import Halfs.BlockMap
-import Halfs.Classes(Timed(..))
 import Halfs.Directory
-import Halfs.Errors
 import Halfs.File
 import Halfs.Inode
 import Halfs.Monad
@@ -41,33 +40,30 @@ data FileSystemStats = FSS {
 -- small files and directories.
 newfs :: (HalfsCapable b t r l m) => BlockDevice m -> m ()
 newfs dev = do
-  when (fromIntegral (BS.length superBlockBstr) > bdBlockSize dev) $
+  when (superBlockSize > bdBlockSize dev) $
     fail "The device's block size is insufficiently large!"
-  forM_ [1..bitmapNumBlocks] $ \ i -> do
-    bdWriteBlock dev i $ BS.replicate blockSizeI 0
-  blockMap <- readBlockMap dev
-  markBlocksUsed blockMap 0 rootDirAddr
-  writeBlockMap dev blockMap
-  makeDirectory dev rootDirAddr rootDirInode rootUser rootGroup
-  bdWriteBlock  dev 0 superBlockBstr
+  blockMap <- newBlockMap $ bdNumBlocks dev
+  res <- getBlocks blockMap 1
+  case res of
+    Just [rootDirAddr] -> do
+      let rootDirInode :: InodeRef = blockAddrToInodeRef rootDirAddr
+      writeBlockMap dev blockMap
+      makeDirectory dev rootDirAddr rootDirInode rootUser rootGroup
+      bdWriteBlock  dev 0 (superBlockBstr rootDirInode)
+    _                  -> do
+      fail "Could not generate root directory!"
  where
-  blockSize       = bdBlockSize dev
-  blockSizeI      = fromIntegral blockSize
-  bitmapNumBlocks = blockMapSizeBlocks $ bdNumBlocks dev
-  rootDirAddr     = bitmapNumBlocks + 1
-  rootDirInode    = blockAddrToInodeRef rootDirAddr
-  --
-  superBlockBstr  = undefined {- encode superBlock -}
-  superBlock      = SuperBlock {
-    version       = 1
-  , blockSize     = blockSize
-  , blockCount    = bdNumBlocks dev
-  , unmountClean  = True
-  , freeBlocks    = bdNumBlocks dev - 1
-  , usedBlocks    = 1
-  , fileCount     = 0
-  , rootDir       = fromIntegral $! bitmapNumBlocks + 1
-  , blockList     = fromIntegral 1
+  superBlockBstr r = encode $ superBlock r
+  superBlock rdir  = SuperBlock {
+    version        = 1
+  , blockSize      = bdBlockSize dev
+  , blockCount     = bdNumBlocks dev
+  , unmountClean   = True
+  , freeBlocks     = bdNumBlocks dev - 1
+  , usedBlocks     = 1
+  , fileCount      = 0
+  , rootDir        = rdir
+  , blockList      = blockAddrToInodeRef 1
   }
 
 mount :: (HalfsCapable b t r l m) => BlockDevice m -> Halfs b r m l

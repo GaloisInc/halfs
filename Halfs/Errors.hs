@@ -1,3 +1,3 @@
-module Halfs.Errors(HalfsError) where
+module Halfs.Errors(HalfsError(..)) where
 
 data HalfsError = HalfsFileNotFound

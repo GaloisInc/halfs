@@ -5,6 +5,9 @@ module Halfs.Directory (
        , AccessRight(..)
        , FileType(..)
        , makeDirectory
+       --
+       , DirectoryEntry(..) -- FIXME! (don't export)
+       , DirectoryState(..) -- FIXME! (don't export)
        )
  where
 
@@ -75,7 +78,6 @@ makeDirectory :: (Serialize t, Timed t m) =>
                  BlockDevice m -> Word64 -> InodeRef -> UserID -> GroupID ->
                  m InodeRef
 makeDirectory bd addr mommy user group = do
-  now <- getTime
   bstr <- buildEmptyInode bd (blockAddrToInodeRef addr) mommy user group
   -- sanity check
   let bsize = fromIntegral $ bdBlockSize bd
