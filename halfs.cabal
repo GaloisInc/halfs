@@ -1,5 +1,5 @@
 name:           halfs
-version:        0.2
+version:        2.0
 license:        LGPL
 license-file:   LGPL
 author:         Isaac Jones <ijones@galois.com>,
@@ -17,8 +17,24 @@ cabal-version:  >= 1.2
 tested-with:    GHC ==6.8.0
 
 library
-  build-depends:    base >=4, binary
+  build-depends:    base >=4,
+                    array > 0.2 && < 0.4,
+                    bytestring > 0.9 && < 1.0,
+                    containers > 0.2 && < 0.3,
+                    filepath > 1.0 && < 1.2,
+                    fingertree < 0.2,
+                    cereal < 1.0,
+                    mtl > 1.0 && < 1.2,
+                    time > 1.0 && < 1.2
 
-  Exposed-Modules:  Halfs
+  Exposed-Modules:  Halfs.CoreAPI,
+                    System.Device.BlockDevice,
+                    System.Device.File,
+                    System.Device.Memory,
+                    System.Device.ST
   GHC-Options:      -O2 -Wall -fno-ignore-asserts
-
+  extensions:       FlexibleContexts, FlexibleInstances,
+                    ScopedTypeVariables,
+                    GeneralizedNewtypeDeriving,
+                    MultiParamTypeClasses, FunctionalDependencies,
+                    BangPatterns
