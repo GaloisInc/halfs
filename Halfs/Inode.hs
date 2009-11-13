@@ -53,12 +53,17 @@ inodeRefToBlockAddr (IR x) = x
 inodeRefSize :: Int
 inodeRefSize = 8
 
+-- The nil Inode reference.  With the current Word64 representation and the
+-- block layout assumptions, block 0 is the superblock, and thus an invalid
+-- inode reference.
+nilInodeRef :: InodeRef
+nilInodeRef = IR 0
+
 -- ----------------------------------------------------------------------------
 
 -- The structure of an Inode. Pretty standard, except that we use the
--- continuation field to allow multiple runs of block addresses within
--- the file. We serialize Nothing as block 0, since this should be the
--- superblock and thus invalid as a continuation address.
+-- continuation field to allow multiple runs of block addresses within the
+-- file. We serialize Nothing as nilInodeRef, an invalid continuation.
 --
 -- We semi-arbitrarily state that an Inode must be capable of maintaining
 -- a minimum of 47 block addresses, which gives us a minimum inode size of
@@ -87,7 +92,7 @@ instance (Eq t, Ord t, Serialize t) => Serialize (Inode t) where
              put $ address n
              put $ parent n
              let contVal = case continuation n of
-                             Nothing -> blockAddrToInodeRef 0
+                             Nothing -> nilInodeRef
                              Just x  -> x
              put contVal
              put $ createTime n
@@ -107,7 +112,7 @@ instance (Eq t, Ord t, Serialize t) => Serialize (Inode t) where
              unless (numBlocks <= numAddrs') $
                fail $ "Corrupted Inode structure: too many blocks"
              forM_ blocks' put
-             replicateM_ fillBlocks $ put (IR 0)
+             replicateM_ fillBlocks $ put nilInodeRef
              putByteString magic4
   get   = do checkMagic magic1
              addr <- get
@@ -129,7 +134,7 @@ instance (Eq t, Ord t, Serialize t) => Serialize (Inode t) where
              lsb  <- getWord64be
              checkMagic magic3
              remb <- remaining
-             let numBlockBytes      = remb - 8
+             let numBlockBytes      = remb - 8 -- account for trailing magic4
                  (numBlocks, check) = numBlockBytes `divMod` inodeRefSize
              unless (check == 0) $ 
                fail "Incorrect number of bytes left for block list."
@@ -148,9 +153,9 @@ minimalInodeSize = do
   return $ fromIntegral $ BS.length $ encode $ emptyInode now
  where
   emptyInode now = Inode {
-    address       = IR 0
-  , parent        = IR 0
-  , continuation  = Just (IR 0)
+    address       = nilInodeRef
+  , parent        = nilInodeRef
+  , continuation  = Nothing
   , createTime    = now
   , modifyTime    = now
   , user          = rootUser
@@ -159,7 +164,7 @@ minimalInodeSize = do
   , sizeBytes     = 0
   , sizeBlocks    = 0
   , liveSizeBytes = 0
-  , blocks        = replicate minimumNumberOfBlocks (IR 0)
+  , blocks        = replicate minimumNumberOfBlocks nilInodeRef
   }
 
 computeNumAddrs :: (Serialize t, Timed t m) =>
