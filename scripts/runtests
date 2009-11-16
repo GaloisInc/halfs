@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -e
+
+HERE=$(dirname $0)
+REPO_ROOT="$HERE/.."
+
+TEST="$REPO_ROOT/test"
+BUILDDIR="$TEST/dist"
+EXE_NAME=halfs-tests
+
+cd $REPO_ROOT
+
+COV_FLAG="$BUILDDIR/coverage-build"
+if [ ! -z "$COVERAGE" ]
+then
+    if [ -d "$BUILDDIR" ] && [ ! -e "$COV_FLAG" ]
+    then
+        echo "Re-building everything so we get coverage info"
+        rm -r .hpc "$BUILDDIR"
+        mkdir -p "$BUILDDIR"
+        touch "$COV_FLAG"
+    fi
+    BUILDOPTS="--ghc-option=-fhpc"
+    rm -f "$EXE_NAME.tix"
+else
+    rm -f "$COV_FLAG"
+fi
+        
+cabal configure --builddir="$BUILDDIR" -fbuild-tests
+cabal build --builddir="$BUILDDIR" $BUILDOPTS
+
+$BUILDDIR/build/$EXE_NAME/$EXE_NAME 2> /dev/null
+
+if [ ! -z "$COVERAGE" ]
+then
+    HPCDIR="$TEST/coverage"
+    echo "Generating coverage HTML in $HPCDIR"
+    hpc markup --destdir="$HPCDIR" --srcdir="$TEST/src" --srcdir=. $EXE_NAME
+fi
