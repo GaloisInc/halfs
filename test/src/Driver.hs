@@ -1,17 +1,17 @@
 module Main where
 
-import Test.QuickCheck (quickCheckResult, Property)
+import Test.QuickCheck (Args, Property, quickCheckWithResult)
 import Test.QuickCheck.Test (isSuccess)
 import System.Exit (ExitCode(..), exitFailure, exitWith)
 
 import qualified Tests.BlockDevice as BD
 
-qcProps :: [Property]
+qcProps :: [(Args, Property)]
 qcProps = BD.qcProps
 
 main :: IO ()
 main = do
-  results <- mapM quickCheckResult qcProps
+  results <- mapM (\(args,p) -> quickCheckWithResult args p) qcProps
   if all isSuccess results
     then do
       putStrLn "All tests successful."

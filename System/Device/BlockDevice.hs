@@ -17,7 +17,7 @@ import Data.Word
 -- |The data type that describes the interface to a BlockDevice. If you can 
 -- fill this out reasonably, you can be a file system backend.
 data Monad m => BlockDevice m = BlockDevice {
-    -- |The size of the smallest read/write block for the device.
+    -- |The size of the smallest read/write block for the device, in bytes.
     bdBlockSize  :: Word64
     -- |The number of blocks in the device.
   , bdNumBlocks  :: Word64

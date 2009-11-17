@@ -28,7 +28,7 @@ newSTBlockDevice numSectors sectorSize
                         let v' = BS.take secSize64 $ v `BS.append` empty
                         writeArray arr i v'
       , bdFlush      = return ()
-      , bdShutdown   = undefined
+      , bdShutdown   = return () -- JS: was 'undefined' for a reason?
       }
  where
   most :: Int = maxBound

@@ -47,8 +47,9 @@ executable halfs-tests
   if !flag(build-tests)
     buildable: False
 
-  build-depends: QuickCheck == 2.1.0.2
+  build-depends:    QuickCheck == 2.1.0.2,
+                    directory  >= 1.0.0.3
 
-  hs-source-dirs: test/src
+  hs-source-dirs: test/src . 
   main-is: Driver.hs
   ghc-options: -O2 -Wall -fno-ignore-asserts
