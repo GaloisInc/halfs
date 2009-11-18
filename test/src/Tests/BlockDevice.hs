@@ -6,8 +6,11 @@ module Tests.BlockDevice
   )
 where
   
+import Control.Monad (forM_)
 import Control.Monad.ST
+import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
+import Data.Word
 import Test.QuickCheck hiding (numTests)
 import Test.QuickCheck.Monadic
 import System.Directory
@@ -20,81 +23,102 @@ import System.Device.ST
 
 import Tests.Instances
 
-numTests :: Int -> Args
-numTests n = stdArgs{maxSuccess = n}
-
 --------------------------------------------------------------------------------
 -- BlockDevice properties to check
 
 qcProps :: [(Args, Property)]
 qcProps =
-  [
-    ( numTests 10
-    , label "File-Backed Block Device Geometry"
-      $ ioBDGeomProp propM_fileBackedGeom
-    )
-  ,
-    ( stdArgs
-    , label "Memory-Backed Block Device Geometry"
-      $ ioBDGeomProp propM_memBackedGeom
-    )
-  ,
-    ( stdArgs
-    , label "STArray-Backed Block Device Geometry"
-      $ ioBDGeomProp propM_stArrayBackedGeom
-    )
+  [-- File-backed tests 
+    ( numTests 10, geomProp "File" fileBackedProp)
+  , ( numTests 10, wrProp   "File" fileBackedProp)
+   -- Memory-backed tests 
+  , ( numTests 50, geomProp "Memory" memBackedProp)
+  , ( numTests 50, wrProp   "Memory" memBackedProp)
+   -- STArray-backed tests 
+  , ( numTests 50, geomProp "STArray" staBackedProp)
+  , ( numTests 50, wrProp   "STArray" staBackedProp)
   ]
+  where
+    numTests n   = stdArgs{maxSuccess = n}
+    geomProp s f = labeledIOProp (s ++ "-Backed Block Device Geometry")
+                   $ forAllM arbBDGeom (f propM_geom)
+    wrProp s f   = labeledIOProp (s ++ "-Backed Block Device Write/Read")
+                   $ forAllBlocksM (f . propM_writeRead)
 
 --------------------------------------------------------------------------------
 -- Property implementations
 
--- | Checks that the geometry reported by the file-backed BlockDevice
--- corresponds to its creation parameters
-propM_fileBackedGeom :: BDGeom -> PropertyM IO ()
-propM_fileBackedGeom g = do
-  mdev <- run $ withFileStore g $ flip newFileBlockDevice $ bdgSecSz g
-  propM_geom g mdev
-
--- | Checks that the geometry reported by the memory-backed BlockDevice
--- corresponds to its creation parameters
-propM_memBackedGeom :: BDGeom -> PropertyM IO ()
-propM_memBackedGeom g = do
-  mdev <- run $ newMemoryBlockDevice (bdgSecCnt g) (bdgSecSz g)
-  propM_geom g mdev
-
--- | Checks that the geometry reported by the STArray-backed BlockDevice
--- corresponds to its creation parameters (looks like an IO property due
--- to use of stToIO)
-propM_stArrayBackedGeom :: BDGeom -> PropertyM IO ()
-propM_stArrayBackedGeom g = do
-  -- JS: If there's a way to use propM_geom here, I couldn't figure it
-  -- out.  stToIO leaves you with a BlockDevice (ST RealWorld) which
-  -- isn't the same type as BlockDevice IO, even though it really is the
-  -- same thing.
-  let run' = run . stToIO
-  mdev <- run' $ newSTBlockDevice (bdgSecCnt g) (bdgSecSz g)
-  case mdev of
-    Nothing  -> fail "Invalid BlockDevice"
-    Just dev -> run' (bdShutdown dev) >> assert (geomConsistent g dev)
-
 -- | Checks that the geometry reported by the given BlockDevice (if any)
 -- corresponds to its creation parameters
-propM_geom :: Monad m =>
-              BDGeom
-           -> Maybe (BlockDevice m)
-           -> PropertyM m ()
-propM_geom _ Nothing    = fail "Invalid BlockDevice"
-propM_geom g (Just dev) = run (bdShutdown dev) >> assert (geomConsistent g dev)
+propM_geom :: Monad m => BDGeom -> BlockDevice m -> PropertyM m ()
+propM_geom g dev =
+  assert $ bdBlockSize dev == bdgSecSz g &&
+           bdNumBlocks dev == bdgSecCnt g   
 
-geomConsistent :: Monad m => BDGeom -> BlockDevice m -> Bool
-geomConsistent g dev = bdBlockSize dev == bdgSecSz g &&
-                       bdNumBlocks dev == bdgSecCnt g
+-- | Checks that a group of block written to the Block Device can be read back
+-- intact
+propM_writeRead :: Monad m =>
+                   [(Word64, ByteString)]
+                -> BDGeom
+                -> BlockDevice m
+                -> PropertyM m ()
+propM_writeRead fsData _ dev = do
+  forM_ fsData $ \(blkAddr, blkData) -> do 
+    run $ bdWriteBlock dev blkAddr blkData
+    bs <- run $ bdReadBlock dev blkAddr
+    assert $ blkData == bs
 
 --------------------------------------------------------------------------------
 -- Utility functions
 
-ioBDGeomProp :: (BDGeom -> PropertyM IO ()) -> Property
-ioBDGeomProp = monadicIO . forAllM arbBDGeom
+type PropExec = (BDGeom -> BlockDevice IO -> PropertyM IO ())
+             -> BDGeom
+             -> PropertyM IO ()
+           
+-- | Runs the given property on the file-backed block device
+fileBackedProp :: PropExec
+fileBackedProp f g =
+  f g `usingBD` withFileStore g (flip newFileBlockDevice $ bdgSecSz g)
+
+-- | Runs the given property on a memory-backed block device
+memBackedProp :: PropExec
+memBackedProp f g =
+  f g `usingBD` newMemoryBlockDevice (bdgSecCnt g) (bdgSecSz g)
+
+-- | Runs the given property on the STArray-backed block device.  This
+-- function transforms the underlying ST-based block device an IO block
+-- device for interface consistency to top-level properties.
+staBackedProp :: PropExec
+staBackedProp f g =
+  f g `usingBD` stBDToIOBD (newSTBlockDevice (bdgSecCnt g) (bdgSecSz g))
+
+stBDToIOBD :: ST RealWorld (Maybe (BlockDevice (ST RealWorld)))
+           -> IO (Maybe (BlockDevice IO))
+stBDToIOBD stbd = do
+  mdev <- stToIO stbd
+  case mdev of
+    Nothing     -> return Nothing
+    Just oldDev -> return $! Just BlockDevice {
+        bdBlockSize  = bdBlockSize oldDev
+      , bdNumBlocks  = bdNumBlocks oldDev
+      , bdReadBlock  = \i -> stToIO $ bdReadBlock oldDev i
+      , bdWriteBlock = \i v -> stToIO $ bdWriteBlock oldDev i v
+      , bdFlush      = stToIO $ bdFlush oldDev
+      , bdShutdown   = stToIO $ bdShutdown oldDev
+      }
+
+usingBD :: Monad m =>
+          (BlockDevice m -> PropertyM m ())
+       -> m (Maybe (BlockDevice m))
+       -> PropertyM m ()
+usingBD f act = do
+  mdev <- run act
+  case mdev of
+    Nothing  -> fail "Invalid BlockDevice"
+    Just dev -> f dev >> run (bdShutdown dev)
+
+labeledIOProp :: String -> PropertyM IO a -> Property
+labeledIOProp s p = label s (monadicIO p)
 
 withFileStore :: BDGeom -> (FilePath -> IO a) -> IO a
 withFileStore geom act = do
@@ -105,13 +129,3 @@ withFileStore geom act = do
   rslt <- act fname
   removeFile fname
   return rslt
-
-{-
-sizeMsg :: String -> BDGeom -> PropertyM IO ()
-sizeMsg s g = run $ putStrLn
-  $ "Checking geometry on " ++ s ++ "-backed block device ("
-  ++ show (bdgSecCnt g) ++ " sectors, "
-  ++ show (bdgSecSz g) ++ " bytes/sector, "
-  ++ show (bdgSecSz g * bdgSecCnt g)
-    ++ " bytes)"
--}
