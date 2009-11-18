@@ -55,8 +55,8 @@ propM_geom g dev =
   assert $ bdBlockSize dev == bdgSecSz g &&
            bdNumBlocks dev == bdgSecCnt g   
 
--- | Checks that a group of block written to the Block Device can be read back
--- intact
+-- | Checks that blocks written to the Block Device can be read back
+-- immediately after write.
 propM_writeRead :: Monad m =>
                    [(Word64, ByteString)]
                 -> BDGeom
@@ -78,7 +78,7 @@ type PropExec = (BDGeom -> BlockDevice IO -> PropertyM IO ())
 -- | Runs the given property on the file-backed block device
 fileBackedProp :: PropExec
 fileBackedProp f g =
-  f g `usingBD` withFileStore g (flip newFileBlockDevice $ bdgSecSz g)
+  f g `usingBD` withFileStore g (`newFileBlockDevice` (bdgSecSz g))
 
 -- | Runs the given property on a memory-backed block device
 memBackedProp :: PropExec
