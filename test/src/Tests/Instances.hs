@@ -32,8 +32,16 @@ instance Arbitrary BDGeom where
 forAllBlocksM :: Monad m =>
                  ([(Word64, ByteString)] -> BDGeom -> PropertyM m b)
               -> PropertyM m b
-forAllBlocksM prop =
-  forAllM arbBDGeom $ \g -> forAllM (arbFSData g) (flip prop g)
+forAllBlocksM prop = forAllBlocksM' prop id
+
+forAllBlocksM' :: Monad m =>
+                 ([(Word64, ByteString)] -> BDGeom -> PropertyM m b)
+               -> (BDGeom -> BDGeom)
+               -> PropertyM m b
+forAllBlocksM' prop f =
+  forAllM arbBDGeom $ \g ->
+    let g' = f g in
+      forAllM (arbFSData g') (flip prop g')
 
 arbBDGeom :: Gen BDGeom
 arbBDGeom = arbitrary

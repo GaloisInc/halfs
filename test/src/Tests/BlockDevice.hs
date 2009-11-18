@@ -23,27 +23,56 @@ import System.Device.ST
 
 import Tests.Instances
 
+import Debug.Trace
+
+--------------------------------------------------------------------------------
+
+type BDProp   = Monad m => BDGeom -> BlockDevice m -> PropertyM m ()
+type PropExec = (BDGeom -> BlockDevice IO -> PropertyM IO ())
+             -> BDGeom
+             -> PropertyM IO ()
+
 --------------------------------------------------------------------------------
 -- BlockDevice properties to check
 
 qcProps :: [(Args, Property)]
 qcProps =
-  [-- File-backed tests 
-    ( numTests 10, geomProp "File" fileBackedProp)
-  , ( numTests 10, wrProp   "File" fileBackedProp)
-   -- Memory-backed tests 
-  , ( numTests 50, geomProp "Memory" memBackedProp)
-  , ( numTests 50, wrProp   "Memory" memBackedProp)
-   -- STArray-backed tests 
-  , ( numTests 50, geomProp "STArray" staBackedProp)
-  , ( numTests 50, wrProp   "STArray" staBackedProp)
+  [
+--   -- Geometry tests
+--     (numTests 10, geomProp "File"             fileBackedPropExec propM_geom)
+--   , (numTests 50, geomProp "Memory"           memBackedPropExec  propM_geom)
+--   , (numTests 50, geomProp "STArray"          staBackedPropExec  propM_geom)
+
+--   , (numTests 10, geomProp "2x Rescaled-File"
+--                     (rescaledExec 2 fileDev) (propM_rescaledGeom 2))
+--   , (numTests 50, geomProp "4x Rescaled-STArray"
+--                     (rescaledExec 4 staDev) (propM_rescaledGeom 4))
+--   , (numTests 50, geomProp "8x Rescaled-Mem"
+--                     (rescaledExec 8 staDev) (propM_rescaledGeom 8))
+
+--   -- Write/read tests
+--   , (numTests 10, wrProp "File"    fileBackedPropExec)
+--   , (numTests 50, wrProp "Memory"  memBackedPropExec)
+--   , (numTests 50, wrProp "STArray" staBackedPropExec)
+
+--   ,
+    (numTests 10, wrProp "2x Rescaled-File" $ rescaledExec 2 fileDev)
+  , (numTests 50, wrProp "4x Rescaled-ST"   $ rescaledExec 4 staDev)
+  , (numTests 50, wrProp "8x Rescaled-Mem"  $ rescaledExec 8 memDev)
   ]
   where
-    numTests n   = stdArgs{maxSuccess = n}
-    geomProp s f = labeledIOProp (s ++ "-Backed Block Device Geometry")
-                   $ forAllM arbBDGeom (f propM_geom)
-    wrProp s f   = labeledIOProp (s ++ "-Backed Block Device Write/Read")
-                   $ forAllBlocksM (f . propM_writeRead)
+    numTests n = stdArgs{maxSuccess = n}
+
+    geomProp :: String -> PropExec -> BDProp -> Property
+    geomProp s exec pr = labeledIOProp (s ++ "-Backed Block Device Geometry")
+                         $ forAllM arbBDGeom (exec pr)
+
+    wrProp :: String -> PropExec -> Property
+    wrProp s exec = labeledIOProp (s ++ "-Backed Block Device Write/Read")
+                    $ forAllBlocksM (exec . propM_writeRead)
+
+    rescaledExec :: Word64 -> DevCtor -> PropExec
+    rescaledExec k d f g = f g `usingBD` rescaledDev g k d
 
 --------------------------------------------------------------------------------
 -- Property implementations
@@ -55,6 +84,20 @@ propM_geom g dev =
   assert $ bdBlockSize dev == bdgSecSz g &&
            bdNumBlocks dev == bdgSecCnt g   
 
+-- | Checks that the geometry reported by the given (rescaled) BlockDevice
+-- corresponds correctly to the creation parameters of the underlying device and
+-- the linear scale factor used to rescale it
+propM_rescaledGeom :: Monad m =>
+                      Word64
+                   -> BDGeom
+                   -> BlockDevice m
+                   -> PropertyM m ()
+propM_rescaledGeom k origGeom dev =
+  propM_geom newGeom dev
+  where
+    newGeom = BDGeom (bdgSecCnt origGeom `div` k) (bdgSecSz origGeom * k)
+
+
 -- | Checks that blocks written to the Block Device can be read back
 -- immediately after each is written.
 propM_writeRead :: Monad m =>
@@ -65,32 +108,46 @@ propM_writeRead :: Monad m =>
 propM_writeRead fsData _ dev = do
   forM_ fsData $ \(blkAddr, blkData) -> do 
     run $ bdWriteBlock dev blkAddr blkData
+    run $ bdFlush dev
     bs <- run $ bdReadBlock dev blkAddr
     assert $ blkData == bs
 
 --------------------------------------------------------------------------------
 -- Utility functions
 
-type PropExec = (BDGeom -> BlockDevice IO -> PropertyM IO ())
-             -> BDGeom
-             -> PropertyM IO ()
+type DevCtor = BDGeom -> IO (Maybe (BlockDevice IO))
            
 -- | Runs the given property on the file-backed block device
-fileBackedProp :: PropExec
-fileBackedProp f g =
-  f g `usingBD` withFileStore g (`newFileBlockDevice` (bdgSecSz g))
+fileBackedPropExec :: PropExec
+fileBackedPropExec f g = f g `usingBD` fileDev g
 
 -- | Runs the given property on a memory-backed block device
-memBackedProp :: PropExec
-memBackedProp f g =
-  f g `usingBD` newMemoryBlockDevice (bdgSecCnt g) (bdgSecSz g)
+memBackedPropExec :: PropExec
+memBackedPropExec f g = f g `usingBD` memDev g
 
--- | Runs the given property on the STArray-backed block device.  This
--- function transforms the underlying ST-based block device an IO block
--- device for interface consistency to top-level properties.
-staBackedProp :: PropExec
-staBackedProp f g =
-  f g `usingBD` stBDToIOBD (newSTBlockDevice (bdgSecCnt g) (bdgSecSz g))
+-- | Runs the given property on an STArray-backed block device
+staBackedPropExec :: PropExec
+staBackedPropExec f g = f g `usingBD` staDev g
+
+fileDev :: DevCtor
+fileDev g = withFileStore g (`newFileBlockDevice` (bdgSecSz g))
+
+memDev :: DevCtor
+memDev g = newMemoryBlockDevice (bdgSecCnt g) (bdgSecSz g)
+
+-- | Create an STArray-backed block device.  This function transforms
+-- the underlying ST-based block device an IO block device for interface
+-- consistency within this module.
+staDev :: DevCtor
+staDev g = stBDToIOBD $ newSTBlockDevice (bdgSecCnt g) (bdgSecSz g)
+
+rescaledDev :: BDGeom  -- ^ geometry for underlying device
+            -> Word64  -- ^ block size scale factor
+            -> DevCtor -- ^ ctor for underlying device
+            -> IO (Maybe (BlockDevice IO))
+rescaledDev g k ctor = 
+  maybe (fail "Invalid BlockDevice") (newRescaledBlockDevice (k * bdgSecSz g))
+    `fmap` ctor g
 
 stBDToIOBD :: ST RealWorld (Maybe (BlockDevice (ST RealWorld)))
            -> IO (Maybe (BlockDevice IO))
