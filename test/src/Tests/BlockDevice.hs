@@ -56,7 +56,7 @@ propM_geom g dev =
            bdNumBlocks dev == bdgSecCnt g   
 
 -- | Checks that blocks written to the Block Device can be read back
--- immediately after write.
+-- immediately after each is written.
 propM_writeRead :: Monad m =>
                    [(Word64, ByteString)]
                 -> BDGeom
