@@ -68,10 +68,7 @@ newRescaledBlockDevice bsize dev
   oldbs          = fromIntegral $! bdBlockSize dev
   ratio          = bsize `div` bdBlockSize dev
   blocks         = bdNumBlocks dev `div` ratio
-  readBlock  i   = do let start = i * ratio
-                          end   = (start + ratio) - 1
-                      blks <- forM [start..end] $ bdReadBlock dev
-                      return $ BS.concat blks
+  readBlock  i   = liftM BS.concat $ forM [i..i + ratio - 1] (bdReadBlock dev)
   writeBlock i b = write i b
   --
   write i b | BS.null b = return ()

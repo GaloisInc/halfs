@@ -38,38 +38,37 @@ type PropExec = (BDGeom -> BlockDevice IO -> PropertyM IO ())
 qcProps :: [(Args, Property)]
 qcProps =
   [
---   -- Geometry tests
---     (numTests 10, geomProp "File"             fileBackedPropExec propM_geom)
---   , (numTests 50, geomProp "Memory"           memBackedPropExec  propM_geom)
---   , (numTests 50, geomProp "STArray"          staBackedPropExec  propM_geom)
+  -- Geometry tests
+    (numTests 10, geomProp "File"             fileBackedPropExec propM_geom)
+  , (numTests 50, geomProp "Memory"           memBackedPropExec  propM_geom)
+  , (numTests 50, geomProp "STArray"          staBackedPropExec  propM_geom)
 
---   , (numTests 10, geomProp "2x Rescaled-File"
---                     (rescaledExec 2 fileDev) (propM_rescaledGeom 2))
---   , (numTests 50, geomProp "4x Rescaled-STArray"
---                     (rescaledExec 4 staDev) (propM_rescaledGeom 4))
---   , (numTests 50, geomProp "8x Rescaled-Mem"
---                     (rescaledExec 8 staDev) (propM_rescaledGeom 8))
+  , (numTests 10, geomProp "2x Rescaled-File"
+                    (rescaledExec 2 fileDev) (propM_rescaledGeom 2))
+  , (numTests 50, geomProp "4x Rescaled-STArray"
+                    (rescaledExec 4 staDev) (propM_rescaledGeom 4))
+  , (numTests 50, geomProp "8x Rescaled-Mem"
+                    (rescaledExec 8 staDev) (propM_rescaledGeom 8))
 
---   -- Write/read tests
---   , (numTests 10, wrProp "File"    fileBackedPropExec)
---   , (numTests 50, wrProp "Memory"  memBackedPropExec)
---   , (numTests 50, wrProp "STArray" staBackedPropExec)
+  -- Write/read tests
+  , (numTests 10, wrProp "File"    id fileBackedPropExec)
+  , (numTests 50, wrProp "Memory"  id memBackedPropExec)
+  , (numTests 50, wrProp "STArray" id staBackedPropExec)
 
---   ,
-    (numTests 10, wrProp "2x Rescaled-File" $ rescaledExec 2 fileDev)
-  , (numTests 50, wrProp "4x Rescaled-ST"   $ rescaledExec 4 staDev)
-  , (numTests 50, wrProp "8x Rescaled-Mem"  $ rescaledExec 8 memDev)
+  , (numTests 10, wrProp "2x Rescaled-File" (scale 2) $ rescaledExec 2 fileDev)
+  , (numTests 50, wrProp "4x Rescaled-ST"   (scale 4) $ rescaledExec 4 staDev)
+  , (numTests 50, wrProp "8x Rescaled-Mem"  (scale 8) $ rescaledExec 8 memDev)
   ]
   where
     numTests n = stdArgs{maxSuccess = n}
+    scale k g  = g{bdgScale = Just k}
 
     geomProp :: String -> PropExec -> BDProp -> Property
     geomProp s exec pr = labeledIOProp (s ++ "-Backed Block Device Geometry")
                          $ forAllM arbBDGeom (exec pr)
 
-    wrProp :: String -> PropExec -> Property
-    wrProp s exec = labeledIOProp (s ++ "-Backed Block Device Write/Read")
-                    $ forAllBlocksM (exec . propM_writeRead)
+    wrProp s f exec = labeledIOProp (s ++ "-Backed Block Device Write/Read")
+                      $ forAllBlocksM' f (exec . propM_writeRead)
 
     rescaledExec :: Word64 -> DevCtor -> PropExec
     rescaledExec k d f g = f g `usingBD` rescaledDev g k d
@@ -95,8 +94,9 @@ propM_rescaledGeom :: Monad m =>
 propM_rescaledGeom k origGeom dev =
   propM_geom newGeom dev
   where
-    newGeom = BDGeom (bdgSecCnt origGeom `div` k) (bdgSecSz origGeom * k)
-
+    newGeom = BDGeom (bdgSecCnt origGeom `div` k)
+                     (bdgSecSz origGeom * k)
+                     (Just k)
 
 -- | Checks that blocks written to the Block Device can be read back
 -- immediately after each is written.
@@ -105,12 +105,12 @@ propM_writeRead :: Monad m =>
                 -> BDGeom
                 -> BlockDevice m
                 -> PropertyM m ()
-propM_writeRead fsData _ dev = do
-  forM_ fsData $ \(blkAddr, blkData) -> do 
-    run $ bdWriteBlock dev blkAddr blkData
-    run $ bdFlush dev
-    bs <- run $ bdReadBlock dev blkAddr
-    assert $ blkData == bs
+propM_writeRead fsData _g dev = do
+    forM_ fsData $ \(blkAddr, blkData) -> do
+      run $ bdWriteBlock dev blkAddr blkData
+      run $ bdFlush dev
+      bs <- run $ bdReadBlock dev blkAddr
+      assert $ blkData == bs
 
 --------------------------------------------------------------------------------
 -- Utility functions
