@@ -14,8 +14,6 @@ import Data.Map(Map)
 import qualified Data.Map as Map
 import Data.Word
 
-import Debug.Trace
-
 -- |The data type that describes the interface to a BlockDevice. If you can 
 -- fill this out reasonably, you can be a file system backend.
 data Monad m => BlockDevice m = BlockDevice {
@@ -56,7 +54,7 @@ newRescaledBlockDevice :: Monad m =>
                           Word64 -> BlockDevice m ->
                           Maybe (BlockDevice m)
 newRescaledBlockDevice bsize dev
-  | bsize `mod` bdBlockSize dev /= 0 = trace ("bsize=" ++ show bsize ++ ", bdBlockSize dev = " ++ show (bdBlockSize dev)) Nothing
+  | bsize `mod` bdBlockSize dev /= 0 = Nothing
   | otherwise                        = Just res
  where
   res = dev {

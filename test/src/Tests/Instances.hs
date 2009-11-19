@@ -16,7 +16,6 @@ import Test.QuickCheck.Monadic hiding (assert)
 data BDGeom = BDGeom
   { bdgSecCnt :: Word64       -- ^ number of sectors
   , bdgSecSz  :: Word64       -- ^ sector size, in bytes
-  , bdgScale  :: Maybe Word64 -- ^ implicit scale factor
   } deriving Show
 
 -- | Generate a power of 2 given an exponent range in [0, 63]
@@ -27,9 +26,7 @@ instance Arbitrary BDGeom where
   arbitrary = BDGeom
               <$> powTwo 10 13   -- 1024..8192 sectors
               <*> powTwo  8 12   -- 256b..4K sector size
-              <*> return Nothing -- unscaled
               -- => 256K .. 32M filesystem size
-
 
 forAllBlocksM :: Monad m =>
                  ([(Word64, ByteString)] -> BDGeom -> PropertyM m b)
@@ -52,15 +49,13 @@ arbFSData :: BDGeom -> Gen [(Word64, ByteString)]
 arbFSData g = listOf1 $ (,) <$> arbBlockAddr g <*> arbBlockData g
 
 arbBlockAddr :: BDGeom -> Gen Word64
-arbBlockAddr (BDGeom cnt _sz mscale) =
+arbBlockAddr (BDGeom cnt _sz) =
   fromIntegral `fmap` choose (0 :: Integer, ub)
-    where ub   = fromIntegral $ cnt' - 1
-          cnt' = maybe cnt (div cnt) mscale
+    where ub = fromIntegral $ cnt - 1
 
 arbBlockData :: BDGeom -> Gen ByteString
-arbBlockData (BDGeom _cnt sz mscale) =
-  BS.pack `fmap` replicateM (fromIntegral sz') byte
-    where sz' = maybe sz (* sz) mscale
+arbBlockData (BDGeom _cnt sz) =
+  BS.pack `fmap` replicateM (fromIntegral sz) byte
 
 byte :: Gen Word8
 byte = fromIntegral `fmap` choose (0 :: Int, 255)

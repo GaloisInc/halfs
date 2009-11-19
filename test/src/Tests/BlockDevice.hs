@@ -23,94 +23,92 @@ import System.Device.ST
 
 import Tests.Instances
 
-import Debug.Trace
+-- import Debug.Trace
 
 --------------------------------------------------------------------------------
 
-type BDProp   = Monad m => BDGeom -> BlockDevice m -> PropertyM m ()
-type PropExec = (BDGeom -> BlockDevice IO -> PropertyM IO ())
-             -> BDGeom
-             -> PropertyM IO ()
+type BDProp m   = BDGeom -> BlockDevice m -> PropertyM m ()
+type PropExec m = BDProp m -> BDGeom -> PropertyM m ()
 
 --------------------------------------------------------------------------------
--- BlockDevice properties to check
+-- BlockDevice properties
 
 qcProps :: [(Args, Property)]
 qcProps =
   [
   -- Geometry tests
-    (numTests 10, geomProp "File"             fileBackedPropExec propM_geom)
-  , (numTests 50, geomProp "Memory"           memBackedPropExec  propM_geom)
-  , (numTests 50, geomProp "STArray"          staBackedPropExec  propM_geom)
 
-  , (numTests 10, geomProp "2x Rescaled-File"
-                    (rescaledExec 2 fileDev) (propM_rescaledGeom 2))
-  , (numTests 50, geomProp "4x Rescaled-STArray"
-                    (rescaledExec 4 staDev) (propM_rescaledGeom 4))
-  , (numTests 50, geomProp "8x Rescaled-Mem"
-                    (rescaledExec 8 staDev) (propM_rescaledGeom 8))
+    (numTests 10, geomProp propM_geomOK
+                    (geoLabel "File")   id fileBackedPropExec)
+  , (numTests 50, geomProp propM_geomOK
+                    (geoLabel "Memory") id memBackedPropExec)
+  , (numTests 50, geomProp propM_geomOK
+                   (geoLabel "STArray") id staBackedPropExec)
+
+  , (numTests 10, scaledProp (geomProp propM_geomOK)
+                    (geoLabel "2x Rescaled-File")    2 fileDev)
+  , (numTests 50, scaledProp (geomProp propM_geomOK)
+                    (geoLabel "4x Rescaled-STArray") 4 staDev)
+  , (numTests 50, scaledProp (geomProp propM_geomOK)
+                    (geoLabel "8x Rescaled-Mem")     8 memDev)
 
   -- Write/read tests
-  , (numTests 10, wrProp "File"    id fileBackedPropExec)
-  , (numTests 50, wrProp "Memory"  id memBackedPropExec)
-  , (numTests 50, wrProp "STArray" id staBackedPropExec)
 
-  , (numTests 10, wrProp "2x Rescaled-File" (scale 2) $ rescaledExec 2 fileDev)
-  , (numTests 50, wrProp "4x Rescaled-ST"   (scale 4) $ rescaledExec 4 staDev)
-  , (numTests 50, wrProp "8x Rescaled-Mem"  (scale 8) $ rescaledExec 8 memDev)
+  , (numTests 10, fsDataProp propM_writeRead
+                    (wrLabel "File")    id fileBackedPropExec)
+  , (numTests 50, fsDataProp propM_writeRead
+                    (wrLabel "Memory")  id memBackedPropExec)
+  , (numTests 50, fsDataProp propM_writeRead
+                    (wrLabel "STArray") id staBackedPropExec)
+
+  , (numTests 10, scaledProp (fsDataProp propM_writeRead)
+                    (wrLabel "2x Rescaled-File") 2 fileDev)
+  , (numTests 50, scaledProp (fsDataProp propM_writeRead)
+                    (wrLabel "4x Rescaled-ST")   4 staDev)
+  , (numTests 50, scaledProp (fsDataProp propM_writeRead)
+                    (wrLabel "8x Rescaled-Mem")  8 memDev)
   ]
   where
-    numTests n = stdArgs{maxSuccess = n}
-    scale k g  = g{bdgScale = Just k}
-
-    geomProp :: String -> PropExec -> BDProp -> Property
-    geomProp s exec pr = labeledIOProp (s ++ "-Backed Block Device Geometry")
-                         $ forAllM arbBDGeom (exec pr)
-
-    wrProp s f exec = labeledIOProp (s ++ "-Backed Block Device Write/Read")
-                      $ forAllBlocksM' f (exec . propM_writeRead)
-
-    rescaledExec :: Word64 -> DevCtor -> PropExec
-    rescaledExec k d f g = f g `usingBD` rescaledDev g k d
+    numTests n           = stdArgs{maxSuccess = n}
+    scale k g            = BDGeom (bdgSecCnt g `div` k) (bdgSecSz g * k)
+    unscale k g          = BDGeom (bdgSecCnt g * k)     (bdgSecSz g `div` k)
+    scaledProp p s k d   = p s (scale k) (rescaledExec k d)
+    rescaledExec k d f g = f g `usingBD` rescaledDev (unscale k g) g d
+    wrLabel s            = s ++ "-Backed Block Device Write/Read"
+    geoLabel s           = s ++ "-Backed Block Device Geometry"
 
 --------------------------------------------------------------------------------
 -- Property implementations
 
+-- | Provides the given property with an arbitrary geometry
+geomProp :: BDProp IO -> String -> (BDGeom -> BDGeom) -> PropExec IO -> Property
+geomProp pr s f exec = labeledIOProp s $ forAllM arbBDGeom (exec pr . f)
+
+-- | Provides the given property with an arbitrary device population and
+-- geometry
+fsDataProp :: ([(Word64, ByteString)] -> BDProp IO)
+           -> String
+           -> (BDGeom -> BDGeom)
+           -> PropExec IO
+           -> Property
+fsDataProp pr s f exec = labeledIOProp s $ forAllBlocksM' f (exec . pr)
+
 -- | Checks that the geometry reported by the given BlockDevice (if any)
 -- corresponds to its creation parameters
-propM_geom :: Monad m => BDGeom -> BlockDevice m -> PropertyM m ()
-propM_geom g dev =
+propM_geomOK :: Monad m => BDProp m
+propM_geomOK g dev =
   assert $ bdBlockSize dev == bdgSecSz g &&
            bdNumBlocks dev == bdgSecCnt g   
 
--- | Checks that the geometry reported by the given (rescaled) BlockDevice
--- corresponds correctly to the creation parameters of the underlying device and
--- the linear scale factor used to rescale it
-propM_rescaledGeom :: Monad m =>
-                      Word64
-                   -> BDGeom
-                   -> BlockDevice m
-                   -> PropertyM m ()
-propM_rescaledGeom k origGeom dev =
-  propM_geom newGeom dev
-  where
-    newGeom = BDGeom (bdgSecCnt origGeom `div` k)
-                     (bdgSecSz origGeom * k)
-                     (Just k)
-
 -- | Checks that blocks written to the Block Device can be read back
 -- immediately after each is written.
-propM_writeRead :: Monad m =>
-                   [(Word64, ByteString)]
-                -> BDGeom
-                -> BlockDevice m
-                -> PropertyM m ()
+propM_writeRead :: Monad m => [(Word64, ByteString)] -> BDProp m
 propM_writeRead fsData _g dev = do
-    forM_ fsData $ \(blkAddr, blkData) -> do
-      run $ bdWriteBlock dev blkAddr blkData
-      run $ bdFlush dev
-      bs <- run $ bdReadBlock dev blkAddr
-      assert $ blkData == bs
+  forM_ fsData $ \(blkAddr, blkData) -> do
+    run $ bdWriteBlock dev blkAddr blkData
+    run $ bdFlush dev
+    bs <- run $ bdReadBlock dev blkAddr
+    assert $ blkData == bs
 
 --------------------------------------------------------------------------------
 -- Utility functions
@@ -118,15 +116,15 @@ propM_writeRead fsData _g dev = do
 type DevCtor = BDGeom -> IO (Maybe (BlockDevice IO))
            
 -- | Runs the given property on the file-backed block device
-fileBackedPropExec :: PropExec
+fileBackedPropExec :: PropExec IO
 fileBackedPropExec f g = f g `usingBD` fileDev g
 
 -- | Runs the given property on a memory-backed block device
-memBackedPropExec :: PropExec
+memBackedPropExec :: PropExec IO
 memBackedPropExec f g = f g `usingBD` memDev g
 
 -- | Runs the given property on an STArray-backed block device
-staBackedPropExec :: PropExec
+staBackedPropExec :: PropExec IO
 staBackedPropExec f g = f g `usingBD` staDev g
 
 fileDev :: DevCtor
@@ -142,12 +140,12 @@ staDev :: DevCtor
 staDev g = stBDToIOBD $ newSTBlockDevice (bdgSecCnt g) (bdgSecSz g)
 
 rescaledDev :: BDGeom  -- ^ geometry for underlying device
-            -> Word64  -- ^ block size scale factor
+            -> BDGeom  -- ^ new device geometry 
             -> DevCtor -- ^ ctor for underlying device
             -> IO (Maybe (BlockDevice IO))
-rescaledDev g k ctor = 
-  maybe (fail "Invalid BlockDevice") (newRescaledBlockDevice (k * bdgSecSz g))
-    `fmap` ctor g
+rescaledDev oldG newG ctor = 
+  maybe (fail "Invalid BlockDevice") (newRescaledBlockDevice (bdgSecSz newG))
+    `fmap` ctor oldG
 
 stBDToIOBD :: ST RealWorld (Maybe (BlockDevice (ST RealWorld)))
            -> IO (Maybe (BlockDevice IO))
