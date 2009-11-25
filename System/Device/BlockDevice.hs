@@ -68,7 +68,7 @@ newRescaledBlockDevice bsize dev
   blocks         = bdNumBlocks dev `div` ratio
   readBlock  i   = liftM BS.concat $ forM [start..end] (bdReadBlock dev)
                    where start = i * ratio; end = (i+1) * ratio - 1
-  writeBlock i b = write (i {- * ratio-}) b
+  writeBlock i b = write (i * ratio) b 
   --
   write i b | BS.null b = return ()
             | otherwise = do let (start, rest) = BS.splitAt oldbs b

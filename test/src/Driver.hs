@@ -7,7 +7,7 @@ import System.Exit (ExitCode(..), exitFailure, exitWith)
 import qualified Tests.BlockDevice as BD
 
 qcProps :: [(Args, Property)]
-qcProps = BD.qcProps
+qcProps = BD.qcProps True -- "quick" mode for Block Devices
 
 main :: IO ()
 main = do

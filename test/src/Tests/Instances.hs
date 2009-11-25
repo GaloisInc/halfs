@@ -13,6 +13,8 @@ import Data.Word
 import Test.QuickCheck
 import Test.QuickCheck.Monadic hiding (assert)
 
+import Debug.Trace
+
 data BDGeom = BDGeom
   { bdgSecCnt :: Word64       -- ^ number of sectors
   , bdgSecSz  :: Word64       -- ^ sector size, in bytes
@@ -23,10 +25,11 @@ powTwo :: Int -> Int -> Gen Word64
 powTwo l h = assert (l >= 0 && h <= 63) $ shiftL 1 <$> choose (l, h)
 
 instance Arbitrary BDGeom where
-  arbitrary = BDGeom
-              <$> powTwo 10 13   -- 1024..8192 sectors
-              <*> powTwo  8 12   -- 256b..4K sector size
-              -- => 256K .. 32M filesystem size
+  arbitrary = 
+    BDGeom
+    <$> powTwo 10 13   -- 1024..8192 sectors
+    <*> powTwo  8 12   -- 256b..4K sector size
+                       -- => 256K .. 32M filesystem size
 
 forAllBlocksM :: Monad m =>
                  (BDGeom -> BDGeom)
@@ -54,11 +57,14 @@ arbFSData g = listOf1 $ (,) <$> arbBlockAddr g <*> arbBlockData g
 
 arbContiguousData :: BDGeom -> Gen [(Word64, ByteString)]
 arbContiguousData g = do
-  let numBlks = let x = fromIntegral $ bdgSecCnt g
-                in assert (x >= 1024) x
-  numContig <- choose (2 :: Integer, numBlks `div` 16)
+  let numBlks = fromIntegral $ bdgSecCnt g
+      limit   = 64 -- artificial limit on number of contiguous blocks
+                   -- generated; keeps generated data on the small side
+  numContig <- if numBlks > 1 -- maybe we can't create continguous blocks
+               then choose (2 :: Integer, max 2 (min limit (numBlks `div` 2)))
+               else return 1
   baseAddrs <- (\x -> map fromIntegral [x .. x + numContig])
-               `fmap` choose (0 :: Integer, numBlks - numContig + 1)
+               `fmap` choose (0 :: Integer, numBlks - numContig)
   zip baseAddrs `fmap` vectorOf (fromIntegral numContig) (arbBlockData g)
 
 arbBlockAddr :: BDGeom -> Gen Word64
