@@ -29,24 +29,37 @@ instance Arbitrary BDGeom where
               -- => 256K .. 32M filesystem size
 
 forAllBlocksM :: Monad m =>
-                 ([(Word64, ByteString)] -> BDGeom -> PropertyM m b)
+                 (BDGeom -> BDGeom)
+              -> ([(Word64, ByteString)] -> BDGeom -> PropertyM m b)
               -> PropertyM m b
-forAllBlocksM prop = forAllBlocksM' id prop
-
-forAllBlocksM' :: Monad m =>
-                  (BDGeom -> BDGeom)
-               -> ([(Word64, ByteString)] -> BDGeom -> PropertyM m b)
-               -> PropertyM m b
-forAllBlocksM' f prop =
+forAllBlocksM f prop =
   forAllM arbBDGeom $ \g ->
     let g' = f g in
       forAllM (arbFSData g') (flip prop g')
+
+forAllBlocksM' :: Monad m =>
+                  (BDGeom -> BDGeom)
+               -> (BDGeom -> Gen [(Word64, ByteString)])
+               -> ([(Word64, ByteString)] -> BDGeom -> PropertyM m b)
+               -> PropertyM m b
+forAllBlocksM' f gen prop =
+  forAllM arbBDGeom $ \g ->
+    let g' = f g in forAllM (gen g') (flip prop g')
 
 arbBDGeom :: Gen BDGeom
 arbBDGeom = arbitrary
 
 arbFSData :: BDGeom -> Gen [(Word64, ByteString)]
 arbFSData g = listOf1 $ (,) <$> arbBlockAddr g <*> arbBlockData g
+
+arbContiguousData :: BDGeom -> Gen [(Word64, ByteString)]
+arbContiguousData g = do
+  let numBlks = let x = fromIntegral $ bdgSecCnt g
+                in assert (x >= 1024) x
+  numContig <- choose (2 :: Integer, numBlks `div` 16)
+  baseAddrs <- (\x -> map fromIntegral [x .. x + numContig])
+               `fmap` choose (0 :: Integer, numBlks - numContig + 1)
+  zip baseAddrs `fmap` vectorOf (fromIntegral numContig) (arbBlockData g)
 
 arbBlockAddr :: BDGeom -> Gen Word64
 arbBlockAddr (BDGeom cnt _sz) =
@@ -59,3 +72,4 @@ arbBlockData (BDGeom _cnt sz) =
 
 byte :: Gen Word8
 byte = fromIntegral `fmap` choose (0 :: Int, 255)
+

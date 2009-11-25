@@ -66,20 +66,9 @@ newRescaledBlockDevice bsize dev
   oldbs          = fromIntegral $! bdBlockSize dev
   ratio          = bsize `div` bdBlockSize dev
   blocks         = bdNumBlocks dev `div` ratio
-  -- TODO: hipri: look @ write addresses & revisit previous fix to read
-  -- addrs, as this smells wrong.  I think -write- was actually broken
-  -- before, and that read was correct, not the other way around.  There
-  -- should be (scale factor) * base addr type operations going on
-  -- somewhere, and they're not here =).  In particular, I bet it's
-  -- possible to use a degenerate input to writeBlock and demonstrate
-  -- that it's possible to over-write something.  If this is possible in
-  -- the existing implementation, fix it but -first- capture the flaw in
-  -- a unit test (e.g., two subsequent rescaled writes don't overlap ===
-  -- two consecutive rescaled writes to contiguous addrs yields the
-  -- concat of the data when read back.  HERE / XXX
   readBlock  i   = liftM BS.concat $ forM [start..end] (bdReadBlock dev)
                    where start = i * ratio; end = (i+1) * ratio - 1
-  writeBlock i b = write (i * ratio) b
+  writeBlock i b = write (i {- * ratio-}) b
   --
   write i b | BS.null b = return ()
             | otherwise = do let (start, rest) = BS.splitAt oldbs b

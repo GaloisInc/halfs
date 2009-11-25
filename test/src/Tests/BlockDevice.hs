@@ -6,7 +6,7 @@ module Tests.BlockDevice
   )
 where
   
-import Control.Monad (ap, forM_, liftM)
+import Control.Monad (foldM, forM, forM_)
 import Control.Monad.ST
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
@@ -77,6 +77,10 @@ qcProps =
          assert $ d1 `BS.append` d2 == bs1 `BS.append` bs2
     )
 
+  ,
+    (numTests 10, fsContigDataProp propM_contigWriteRead
+                   (wrCLabel "File") id fileBackedPropExec)
+
 --   , (numTests 10, fsDataProp propM_writeRead
 --                     (wrLabel "File")    id fileBackedPropExec)
 --   , (numTests 50, fsDataProp propM_writeRead
@@ -99,6 +103,7 @@ qcProps =
     scaledProp p s k d   = p s (scale k) (rescaledExec k d)
     rescaledExec k d f g = f g `usingBD` rescaledDev (unscale k g) g d
     wrLabel s            = s ++ "-Backed Block Device Write/Read"
+    wrCLabel s           = s ++ "-Backed Contiguous Block Device Write/Read"
     geoLabel s           = s ++ "-Backed Block Device Geometry"
 
 --------------------------------------------------------------------------------
@@ -106,16 +111,26 @@ qcProps =
 
 -- | Provides the given property with an arbitrary geometry
 geomProp :: BDProp IO -> String -> (BDGeom -> BDGeom) -> PropExec IO -> Property
-geomProp pr s f exec = labeledIOProp s $ forAllM arbBDGeom (exec pr . f)
+geomProp pr s f exec =
+  labeledIOProp s $ forAllM arbBDGeom (exec pr . f)
 
--- | Provides the given property with an arbitrary device population and
--- geometry
+-- | Provides the given property with arbitrary geometry and FS data
 fsDataProp :: ([(Word64, ByteString)] -> BDProp IO)
            -> String
            -> (BDGeom -> BDGeom)
            -> PropExec IO
            -> Property
-fsDataProp pr s f exec = labeledIOProp s $ forAllBlocksM' f (exec . pr)
+fsDataProp pr s f exec =
+  labeledIOProp s $ forAllBlocksM' f arbFSData (exec . pr)
+
+-- | Provides the given property with arbitrary geometry and contiguous FS data
+fsContigDataProp :: ([(Word64, ByteString)] -> BDProp IO)
+                 -> String
+                 -> (BDGeom -> BDGeom)
+                 -> PropExec IO
+                 -> Property
+fsContigDataProp pr s f exec =
+  labeledIOProp s $ forAllBlocksM' f arbContiguousData (exec . pr)
 
 -- | Checks that the geometry reported by the given BlockDevice (if any)
 -- corresponds to its creation parameters
@@ -129,10 +144,15 @@ propM_geomOK g dev =
 propM_writeRead :: Monad m => [(Word64, ByteString)] -> BDProp m
 propM_writeRead fsData _g dev = do
   forM_ fsData $ \(blkAddr, blkData) -> do
-    run $ bdWriteBlock dev blkAddr blkData
-    run $ bdFlush dev
-    bs <- run $ bdReadBlock dev blkAddr
-    assert $ blkData == bs
+    run $ bdWriteBlock dev blkAddr blkData >> bdFlush dev
+    assert . (==) blkData =<< run (bdReadBlock dev blkAddr)
+
+-- | Checks that contiguous blocks written to the Block Device can be read back
+propM_contigWriteRead :: Monad m => [(Word64, ByteString)] -> BDProp m
+propM_contigWriteRead contigData _g dev = do
+  run $ forM_ contigData (uncurry $ bdWriteBlock dev) >> bdFlush dev
+  assert . (==) origData =<< run (forM addrs $ bdReadBlock dev)
+    where (addrs, origData) = unzip contigData
 
 --------------------------------------------------------------------------------
 -- Utility functions
