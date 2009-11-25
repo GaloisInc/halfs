@@ -6,7 +6,7 @@ module Tests.BlockDevice
   )
 where
   
-import Control.Monad (forM_)
+import Control.Monad (ap, forM_, liftM)
 import Control.Monad.ST
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
@@ -23,7 +23,7 @@ import System.Device.ST
 
 import Tests.Instances
 
--- import Debug.Trace
+import Debug.Trace
 
 --------------------------------------------------------------------------------
 
@@ -38,35 +38,59 @@ qcProps =
   [
   -- Geometry tests
 
-    (numTests 10, geomProp propM_geomOK
-                    (geoLabel "File")   id fileBackedPropExec)
-  , (numTests 50, geomProp propM_geomOK
-                    (geoLabel "Memory") id memBackedPropExec)
-  , (numTests 50, geomProp propM_geomOK
-                   (geoLabel "STArray") id staBackedPropExec)
+--     (numTests 10, geomProp propM_geomOK
+--                     (geoLabel "File")   id fileBackedPropExec)
+--   , (numTests 50, geomProp propM_geomOK
+--                     (geoLabel "Memory") id memBackedPropExec)
+--   , (numTests 50, geomProp propM_geomOK
+--                    (geoLabel "STArray") id staBackedPropExec)
 
-  , (numTests 10, scaledProp (geomProp propM_geomOK)
-                    (geoLabel "2x Rescaled-File")    2 fileDev)
-  , (numTests 50, scaledProp (geomProp propM_geomOK)
-                    (geoLabel "4x Rescaled-STArray") 4 staDev)
-  , (numTests 50, scaledProp (geomProp propM_geomOK)
-                    (geoLabel "8x Rescaled-Mem")     8 memDev)
+--   , (numTests 10, scaledProp (geomProp propM_geomOK)
+--                     (geoLabel "2x Rescaled-File")    2 fileDev)
+--   , (numTests 50, scaledProp (geomProp propM_geomOK)
+--                     (geoLabel "4x Rescaled-STArray") 4 staDev)
+--   , (numTests 50, scaledProp (geomProp propM_geomOK)
+--                     (geoLabel "8x Rescaled-Mem")     8 memDev)
 
   -- Write/read tests
 
-  , (numTests 10, fsDataProp propM_writeRead
-                    (wrLabel "File")    id fileBackedPropExec)
-  , (numTests 50, fsDataProp propM_writeRead
-                    (wrLabel "Memory")  id memBackedPropExec)
-  , (numTests 50, fsDataProp propM_writeRead
-                    (wrLabel "STArray") id staBackedPropExec)
+-- ,
+   (numTests 1, labeledIOProp "Rescaled Contiguous Write/Read Sanity Check"
+     -- Check that address arithmetic used by the rescaled device
+     -- doesn't overlap contiguous blocks; this behavior isn't checked
+     -- by single-block checks performed by the propM_writeRead tests
+     -- above.
 
-  , (numTests 10, scaledProp (fsDataProp propM_writeRead)
-                    (wrLabel "2x Rescaled-File") 2 fileDev)
-  , (numTests 50, scaledProp (fsDataProp propM_writeRead)
-                    (wrLabel "4x Rescaled-ST")   4 staDev)
-  , (numTests 50, scaledProp (fsDataProp propM_writeRead)
-                    (wrLabel "8x Rescaled-Mem")  8 memDev)
+     -- TODO: devise contiguous-block write/read test?
+     $ let g = BDGeom 32 256 in 
+     (`usingBD` rescaledDev g (scale 2 g) memDev)
+     $ \dev -> do
+         let d1   = BS.replicate (fromIntegral $ bdBlockSize dev) 0xD1
+             d2   = BS.replicate (fromIntegral $ bdBlockSize dev) 0xD2
+             blk1 = 7
+             blk2 = 8
+         run $ bdWriteBlock dev blk1 d1
+         run $ bdWriteBlock dev blk2 d2
+         run $ bdFlush dev
+         bs1 <- run $ bdReadBlock dev blk1
+         bs2 <- run $ bdReadBlock dev blk2
+         assert $ d1 `BS.append` d2 == bs1 `BS.append` bs2
+    )
+
+--   , (numTests 10, fsDataProp propM_writeRead
+--                     (wrLabel "File")    id fileBackedPropExec)
+--   , (numTests 50, fsDataProp propM_writeRead
+--                     (wrLabel "Memory")  id memBackedPropExec)
+--   , (numTests 50, fsDataProp propM_writeRead
+--                     (wrLabel "STArray") id staBackedPropExec)
+
+--   , (numTests 10, scaledProp (fsDataProp propM_writeRead)
+--                     (wrLabel "2x Rescaled-File") 2 fileDev)
+--   , (numTests 50, scaledProp (fsDataProp propM_writeRead)
+--                     (wrLabel "4x Rescaled-ST")   4 staDev)
+--   , (numTests 50, scaledProp (fsDataProp propM_writeRead)
+--                     (wrLabel "8x Rescaled-Mem")  8 memDev)
+
   ]
   where
     numTests n           = stdArgs{maxSuccess = n}

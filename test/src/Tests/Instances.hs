@@ -3,13 +3,13 @@
 module Tests.Instances
 where
 
+import Control.Applicative       ((<$>), (<*>))
 import Control.Exception         (assert)
 import Control.Monad             (replicateM)
 import Data.Bits                 (shiftL)
 import Data.ByteString           (ByteString)
 import qualified Data.ByteString as BS
 import Data.Word
-import Control.Applicative       ((<$>), (<*>))
 import Test.QuickCheck
 import Test.QuickCheck.Monadic hiding (assert)
 
