@@ -13,8 +13,6 @@ import Data.Word
 import Test.QuickCheck
 import Test.QuickCheck.Monadic hiding (assert)
 
-import Debug.Trace
-
 data BDGeom = BDGeom
   { bdgSecCnt :: Word64       -- ^ number of sectors
   , bdgSecSz  :: Word64       -- ^ sector size, in bytes
@@ -32,22 +30,12 @@ instance Arbitrary BDGeom where
                        -- => 256K .. 32M filesystem size
 
 forAllBlocksM :: Monad m =>
-                 (BDGeom -> BDGeom)
-              -> ([(Word64, ByteString)] -> BDGeom -> PropertyM m b)
-              -> PropertyM m b
-forAllBlocksM f prop =
-  forAllM arbBDGeom $ \g ->
-    let g' = f g in
-      forAllM (arbFSData g') (flip prop g')
-
-forAllBlocksM' :: Monad m =>
                   (BDGeom -> BDGeom)
                -> (BDGeom -> Gen [(Word64, ByteString)])
                -> ([(Word64, ByteString)] -> BDGeom -> PropertyM m b)
                -> PropertyM m b
-forAllBlocksM' f gen prop =
-  forAllM arbBDGeom $ \g ->
-    let g' = f g in forAllM (gen g') (flip prop g')
+forAllBlocksM f gen prop =
+  forAllM arbBDGeom $ \g -> let g' = f g in forAllM (gen g') (flip prop g')
 
 arbBDGeom :: Gen BDGeom
 arbBDGeom = arbitrary

@@ -1,12 +1,14 @@
 {-# LANGUAGE Rank2Types #-}
-{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE FlexibleContexts #-}
+
 module Tests.BlockDevice
   (
    qcProps
   )
 where
   
-import Control.Monad (foldM, forM, forM_)
+import Control.Monad (forM, forM_)
+import Control.Monad.Trans
 import Control.Monad.ST
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
@@ -15,6 +17,7 @@ import Test.QuickCheck hiding (numTests)
 import Test.QuickCheck.Monadic
 import System.Directory
 import System.IO
+import System.IO.Unsafe (unsafePerformIO)
   
 import System.Device.BlockDevice
 import System.Device.File
@@ -23,12 +26,11 @@ import System.Device.ST
 
 import Tests.Instances
 
-import Debug.Trace
-
 --------------------------------------------------------------------------------
+-- Property types
 
-type BDProp m   = BDGeom -> BlockDevice m -> PropertyM m ()
-type PropExec m = BDProp m -> BDGeom -> PropertyM m ()
+type GeomProp m = Monad m => BDGeom -> BlockDevice m -> PropertyM m ()
+type FSDProp m  = Monad m => [(Word64, ByteString)] -> GeomProp m
 
 --------------------------------------------------------------------------------
 -- BlockDevice properties
@@ -36,94 +38,106 @@ type PropExec m = BDProp m -> BDGeom -> PropertyM m ()
 qcProps :: Bool -> [(Args, Property)]
 qcProps quickMode =
   [
-  -- Geometry tests: basic devices
-    numTests 10 $ gp  "File"    fileBackedPropExec   
-  , numTests 25 $ gp  "Memory"  memBackedPropExec
-  , numTests 25 $ gp  "STArray" staBackedPropExec
-  -- Geometry tests: rescaled devices
-  , numTests 10 $ sgp "2x Rescaled-File"    2 fileDev
-  , numTests 25 $ sgp "4x Rescaled-STArray" 4 staDev
-  , numTests 25 $ sgp "8x Rescaled-Mem"     8 memDev
-  -- Filesystem data single-block write/read tests: basic devices
-  , numTests 10 $ fdp "File"    fileBackedPropExec
-  , numTests 25 $ fdp "Memory"  memBackedPropExec
-  , numTests 25 $ fdp "STArray" staBackedPropExec
-  -- Filesystem data single-block write/read tests: rescaled devices
-  , numTests 10 $ sfdp "2x Rescaled-File" 2 fileDev
-  , numTests 25 $ sfdp "4x Rescaled-ST"   4 staDev
-  , numTests 25 $ sfdp "8x Rescaled-Mem"  8 memDev
-  -- Filesystem data contiguous-block write/read tests: basic devices
-  , numTests 10 $ cfdp "File" fileBackedPropExec
-  , numTests 25 $ cfdp "Memory" memBackedPropExec
-  , numTests 25 $ cfdp "STArray" staBackedPropExec
-  -- Filesystem data contiguous-block write/read tests: rescaled devices
-  , numTests 10 $ scfdp "2x Rescaled-File" 2 fileDev
-  , numTests 25 $ scfdp "4x Rescaled-ST"   4 staDev
-  , numTests 25 $ scfdp "8x Rescaled-Mem"  8 memDev
+   -- Geometry properties: basic devices
+    numTests 10 $ geomProp "File-Backed"    fileDev propM_geomOK
+  , numTests 10 $ geomProp "Memory-Backed"  memDev  propM_geomOK
+  , numTests 10 $ geomProp "STArray-Backed" staDev  propM_geomOK
+
+   -- Geometry properties: rescaled devices (underlying device is always memDev)
+  , numTests 10 $ sgeomProp "2x Rescaled" 2 propM_geomOK
+  , numTests 10 $ sgeomProp "4x Rescaled" 4 propM_geomOK
+  , numTests 10 $ sgeomProp "8x Rescaled" 8 propM_geomOK
+
+   -- Geometry properties: cached device
+  , numTests 10 $ label (geoLabel "Cached") $ monadicBCMIOProp $
+    forAllM arbBDGeom $ \g -> (run $ lift $ memDev g) >>=
+      whenDev (propM_geomOK g . newCachedBlockDevice 512)
+
+   -- Single-block write/read properties: basic devices
+  , numTests 10 $ wrProp (wrLabel "File-Backed") arbFSData
+                    fileDev propM_writeRead 
+  , numTests 25 $ wrProp (wrLabel "Memory-Backed") arbFSData
+                    memDev  propM_writeRead
+  , numTests 25 $ wrProp (wrLabel "STArray-Backed") arbFSData
+                    staDev  propM_writeRead
+
+   -- Contiguous-block write/read properties: basic devices
+  , numTests 10 $ wrProp (wrCLabel "File-Backed") arbContiguousData
+                    fileDev propM_contigWriteRead
+  , numTests 25 $ wrProp (wrCLabel "Memory-Backed") arbContiguousData
+                    memDev propM_contigWriteRead
+  , numTests 25 $ wrProp (wrCLabel "STArray-Backed") arbContiguousData
+                    staDev propM_contigWriteRead
+
+   -- Single-block write/read properties: rescaled
+  , numTests 25 $ swrProp (wrLabel "2x Rescaled") 2 arbFSData propM_writeRead
+  , numTests 25 $ swrProp (wrLabel "4x Rescaled") 4 arbFSData propM_writeRead
+  , numTests 25 $ swrProp (wrLabel "8x Rescaled") 8 arbFSData propM_writeRead
+
+   -- Contiguous-block write/read properties: rescaled
+  , numTests 25 $ swrProp (wrCLabel "2x Rescaled") 2 arbContiguousData
+                    propM_contigWriteRead
+  , numTests 25 $ swrProp (wrCLabel "4x Rescaled") 4 arbContiguousData
+                    propM_contigWriteRead
+  , numTests 25 $ swrProp (wrCLabel "8x Rescaled") 8 arbContiguousData
+                    propM_contigWriteRead
+
+  -- Single-block write/read properties: cached
+  , numTests 25 $ label (wrLabel "Cached") $ monadicBCMIOProp 
+    $ forAllBlocksM id arbFSData $ \fsd g -> (run $ lift $ memDev g) >>= 
+        whenDev (propM_writeRead fsd g . newCachedBlockDevice 512)
+
+  -- Contiguous-block write/read properties: cached
+  -- We use a minimal cache size here to trigger frequent eviction
+  , numTests 25 $ label (wrCLabel "Cached") $ monadicBCMIOProp
+    $ forAllBlocksM id arbContiguousData $ \fsd g -> (run $ lift $ memDev g) >>=
+        whenDev (propM_contigWriteRead fsd g . newCachedBlockDevice 2)
   ]
   where
-    numTests n           = (,) $ if quickMode
-                                 then stdArgs{maxSuccess = n}
-                                 else stdArgs
-    scale k g            = BDGeom (bdgSecCnt g `div` k) (bdgSecSz g * k)
-    unscale k g          = BDGeom (bdgSecCnt g * k)     (bdgSecSz g `div` k)
-    scaledProp p s k d   = p s (scale k) (rescaledExec k d)
-    rescaledExec k d f g = f g `usingBD` rescaledDev (unscale k g) g d
-    wrLabel s            = s ++ "-Backed Block Device Write/Read"
-    wrCLabel s           = s ++ "-Backed Contiguous Block Device Write/Read"
-    geoLabel s           = s ++ "-Backed Block Device Geometry"
+    numTests n  = (,) $ if quickMode then stdArgs{maxSuccess = n} else stdArgs
+    scale k g   = BDGeom (bdgSecCnt g `div` k) (bdgSecSz g * k)
+    unscale k g = BDGeom (bdgSecCnt g * k)     (bdgSecSz g `div` k)
+    geoLabel s  = s ++ " Block Device Geometry"
+    wrLabel s   = s ++ " Single Block Write/Read"
+    wrCLabel s  = s ++ " Contiguous Block Write/Read"
 
-    -- clutter reduction
-    gp s    = geomProp propM_geomOK (geoLabel s) id 
-    sgp s   = scaledProp (geomProp propM_geomOK) (geoLabel s)
-    fdp s   = fsDataProp propM_writeRead (wrLabel s) id 
-    sfdp s  = scaledProp (fsDataProp propM_writeRead) (wrLabel s)
-    cfdp s  = fsContigDataProp propM_contigWriteRead (wrCLabel s) id
-    scfdp s = scaledProp (fsContigDataProp propM_contigWriteRead) (wrCLabel s)
+    geomProp s dev prop = 
+      label (geoLabel s) $ monadicIO $
+      forAllM arbBDGeom $ \g -> run (dev g) >>= whenDev (prop g)
+
+    sgeomProp s k prop = -- scaled variant: always uses memDev
+      label (geoLabel s) $ monadicIO $
+      forAllM arbBDGeom $ \g ->
+        run (rescaledDev (unscale k g) g memDev) >>= whenDev (prop g)
+
+    wrProp s gen dev prop =
+      label s $ monadicIO $ forAllBlocksM id gen $ \fsd g ->
+        run (dev g) >>= whenDev (prop fsd g)
+
+    swrProp s k gen prop = -- scaled variant: always uses memdev
+      label s $ monadicIO $ forAllBlocksM (scale k) gen $ \fsd g ->
+        run (rescaledDev (unscale k g) g memDev) >>= whenDev (prop fsd g)    
 
 --------------------------------------------------------------------------------
 -- Property implementations
 
--- | Provides the given property with an arbitrary geometry
-geomProp :: BDProp IO -> String -> (BDGeom -> BDGeom) -> PropExec IO -> Property
-geomProp pr s f exec =
-  labeledIOProp s $ forAllM arbBDGeom (exec pr . f)
-
--- | Provides the given property with arbitrary geometry and FS data
-fsDataProp :: ([(Word64, ByteString)] -> BDProp IO)
-           -> String
-           -> (BDGeom -> BDGeom)
-           -> PropExec IO
-           -> Property
-fsDataProp pr s f exec =
-  labeledIOProp s $ forAllBlocksM' f arbFSData (exec . pr)
-
--- | Provides the given property with arbitrary geometry and contiguous FS data
-fsContigDataProp :: ([(Word64, ByteString)] -> BDProp IO)
-                 -> String
-                 -> (BDGeom -> BDGeom)
-                 -> PropExec IO
-                 -> Property
-fsContigDataProp pr s f exec =
-  labeledIOProp s $ forAllBlocksM' f arbContiguousData (exec . pr)
-
 -- | Checks that the geometry reported by the given BlockDevice (if any)
 -- corresponds to its creation parameters
-propM_geomOK :: Monad m => BDProp m
+propM_geomOK :: GeomProp m
 propM_geomOK g dev =
   assert $ bdBlockSize dev == bdgSecSz g &&
            bdNumBlocks dev == bdgSecCnt g   
 
 -- | Checks that blocks written to the Block Device can be read back
 -- immediately after each is written.
-propM_writeRead :: Monad m => [(Word64, ByteString)] -> BDProp m
+propM_writeRead :: FSDProp m
 propM_writeRead fsData _g dev = do
   forM_ fsData $ \(blkAddr, blkData) -> do
     run $ bdWriteBlock dev blkAddr blkData >> bdFlush dev
     assert . (==) blkData =<< run (bdReadBlock dev blkAddr)
 
 -- | Checks that contiguous blocks written to the Block Device can be read back
-propM_contigWriteRead :: Monad m => [(Word64, ByteString)] -> BDProp m
+propM_contigWriteRead :: FSDProp m
 propM_contigWriteRead contigData _g dev = do
   run $ forM_ contigData (uncurry $ bdWriteBlock dev) >> bdFlush dev
   assert . (==) origData =<< run (forM addrs $ bdReadBlock dev)
@@ -134,18 +148,6 @@ propM_contigWriteRead contigData _g dev = do
 
 type DevCtor = BDGeom -> IO (Maybe (BlockDevice IO))
            
--- | Runs the given property on the file-backed block device
-fileBackedPropExec :: PropExec IO
-fileBackedPropExec f g = f g `usingBD` fileDev g
-
--- | Runs the given property on a memory-backed block device
-memBackedPropExec :: PropExec IO
-memBackedPropExec f g = f g `usingBD` memDev g
-
--- | Runs the given property on an STArray-backed block device
-staBackedPropExec :: PropExec IO
-staBackedPropExec f g = f g `usingBD` staDev g
-
 fileDev :: DevCtor
 fileDev g = withFileStore g (`newFileBlockDevice` (bdgSecSz g))
 
@@ -153,10 +155,20 @@ memDev :: DevCtor
 memDev g = newMemoryBlockDevice (bdgSecCnt g) (bdgSecSz g)
 
 -- | Create an STArray-backed block device.  This function transforms
--- the underlying ST-based block device an IO block device for interface
+-- the ST-based block device to an IO block device for interface
 -- consistency within this module.
 staDev :: DevCtor
-staDev g = stBDToIOBD $ newSTBlockDevice (bdgSecCnt g) (bdgSecSz g)
+staDev g =
+  stToIO (newSTBlockDevice (bdgSecCnt g) (bdgSecSz g)) >>= 
+  return . maybe Nothing (\dev ->
+    Just BlockDevice {
+        bdBlockSize = bdBlockSize dev
+      , bdNumBlocks = bdNumBlocks dev
+      , bdReadBlock  = \i   -> stToIO $ bdReadBlock dev i
+      , bdWriteBlock = \i v -> stToIO $ bdWriteBlock dev i v
+      , bdFlush      = stToIO $ bdFlush dev
+      , bdShutdown   = stToIO $ bdShutdown dev
+    })
 
 rescaledDev :: BDGeom  -- ^ geometry for underlying device
             -> BDGeom  -- ^ new device geometry 
@@ -166,33 +178,8 @@ rescaledDev oldG newG ctor =
   maybe (fail "Invalid BlockDevice") (newRescaledBlockDevice (bdgSecSz newG))
     `fmap` ctor oldG
 
-stBDToIOBD :: ST RealWorld (Maybe (BlockDevice (ST RealWorld)))
-           -> IO (Maybe (BlockDevice IO))
-stBDToIOBD stbd = do
-  mdev <- stToIO stbd
-  case mdev of
-    Nothing     -> return Nothing
-    Just oldDev -> return $! Just BlockDevice {
-        bdBlockSize  = bdBlockSize oldDev
-      , bdNumBlocks  = bdNumBlocks oldDev
-      , bdReadBlock  = \i -> stToIO $ bdReadBlock oldDev i
-      , bdWriteBlock = \i v -> stToIO $ bdWriteBlock oldDev i v
-      , bdFlush      = stToIO $ bdFlush oldDev
-      , bdShutdown   = stToIO $ bdShutdown oldDev
-      }
-
-usingBD :: Monad m =>
-          (BlockDevice m -> PropertyM m ())
-       -> m (Maybe (BlockDevice m))
-       -> PropertyM m ()
-usingBD f act = do
-  mdev <- run act
-  case mdev of
-    Nothing  -> fail "Invalid BlockDevice"
-    Just dev -> f dev >> run (bdShutdown dev)
-
-labeledIOProp :: String -> PropertyM IO a -> Property
-labeledIOProp s p = label s (monadicIO p)
+monadicBCMIOProp :: PropertyM (BCM IO) a -> Property
+monadicBCMIOProp = monadic (unsafePerformIO . runBCM)
 
 withFileStore :: BDGeom -> (FilePath -> IO a) -> IO a
 withFileStore geom act = do
@@ -203,3 +190,6 @@ withFileStore geom act = do
   rslt <- act fname
   removeFile fname
   return rslt
+
+whenDev :: (Monad m) => (a -> m b) -> Maybe a -> m b
+whenDev = maybe (fail "Invalid BlockDevice")

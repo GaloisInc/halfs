@@ -1,6 +1,7 @@
 {-# LANGUAGE MultiParamTypeClasses, FlexibleInstances #-}
 module System.Device.BlockDevice(
          BlockDevice(..)
+       , BCM
        , newCachedBlockDevice
        , newRescaledBlockDevice
        , runBCM
@@ -112,7 +113,7 @@ newCachedBlockDevice size dev = dev {
                          return (Map.insert i (b,False,ts) cache', b)
   writeBlock i b = runCacheOp $ \ cache ts ->
                      case Map.lookup i cache of
-                       Just _  -> 
+                       Just _  ->
                          return (Map.insert i (b, True, ts) cache, ())
                        Nothing -> do
                          cache' <- if cacheFull cache

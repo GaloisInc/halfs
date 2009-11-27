@@ -11,7 +11,7 @@ qcProps = BD.qcProps True -- "quick" mode for Block Devices
 
 main :: IO ()
 main = do
-  results <- mapM (\(args,p) -> quickCheckWithResult args p) qcProps
+  results <- mapM (uncurry quickCheckWithResult) qcProps
   if all isSuccess results
     then do
       putStrLn "All tests successful."
