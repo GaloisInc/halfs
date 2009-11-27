@@ -64,11 +64,11 @@ qcProps quickMode =
 
    -- Contiguous-block write/read properties: basic devices
   , numTests 10 $ wrProp (wrCLabel "File-Backed") arbContiguousData
-                    fileDev propM_contigWriteRead
+                    fileDev (propM_contigWriteRead True)
   , numTests 25 $ wrProp (wrCLabel "Memory-Backed") arbContiguousData
-                    memDev propM_contigWriteRead
+                    memDev (propM_contigWriteRead True)
   , numTests 25 $ wrProp (wrCLabel "STArray-Backed") arbContiguousData
-                    staDev propM_contigWriteRead
+                    staDev (propM_contigWriteRead True)
 
    -- Single-block write/read properties: rescaled
   , numTests 25 $ swrProp (wrLabel "2x Rescaled") 2 arbFSData propM_writeRead
@@ -77,24 +77,30 @@ qcProps quickMode =
 
    -- Contiguous-block write/read properties: rescaled
   , numTests 25 $ swrProp (wrCLabel "2x Rescaled") 2 arbContiguousData
-                    propM_contigWriteRead
+                    (propM_contigWriteRead True)
   , numTests 25 $ swrProp (wrCLabel "4x Rescaled") 4 arbContiguousData
-                    propM_contigWriteRead
+                    (propM_contigWriteRead True)
   , numTests 25 $ swrProp (wrCLabel "8x Rescaled") 8 arbContiguousData
-                    propM_contigWriteRead
+                    (propM_contigWriteRead True)
 
   -- Single-block write/read properties: cached
-  , numTests 25 $ label (wrLabel "Cached") $ monadicBCMIOProp 
+  , numTests 50 $ label (wrLabel "Cached") $ monadicBCMIOProp 
     $ forAllBlocksM id arbFSData $ \fsd g ->
       (run $ lift $ memDev g) >>= 
         doProp' (propM_writeRead fsd g . newCachedBlockDevice 512)
 
   -- Contiguous-block write/read properties: cached
-  -- We use a minimal cache size here to trigger frequent eviction
-  , numTests 25 $ label (wrCLabel "Cached") $ monadicBCMIOProp
-    $ forAllBlocksM id arbContiguousData $ \fsd g ->
-      (run $ lift $ memDev g) >>=
-        doProp' (propM_contigWriteRead fsd g . newCachedBlockDevice 2)
+  -- We vary the cache size to trigger eviction at different intervals,
+  -- and randomly decide whether or not to flush the cache after writing
+  -- a sequence of contiguous blocks.
+  , numTests 50 $ label (wrCLabel "Cached") $ monadicBCMIOProp
+    $ forAllM (powTwo 1 10)              $ \sz -> 
+      forAllM (arbitrary :: Gen Bool)    $ \flush -> 
+      forAllBlocksM id arbContiguousData $ \fsd g ->
+        (run $ lift $ memDev g) >>=
+          doProp' (propM_contigWriteRead flush fsd g
+                   . newCachedBlockDevice (fromIntegral sz)
+                  )
   ]
   where
     numTests n  = (,) $ if quickMode then stdArgs{maxSuccess = n} else stdArgs
@@ -142,10 +148,13 @@ propM_writeRead fsData _g dev = do
     run $ bdWriteBlock dev blkAddr blkData >> bdFlush dev
     assert . (==) blkData =<< run (bdReadBlock dev blkAddr)
 
--- | Checks that contiguous blocks written to the Block Device can be read back
-propM_contigWriteRead :: FSDProp m
-propM_contigWriteRead contigData _g dev = do
-  run $ forM_ contigData (uncurry $ bdWriteBlock dev) >> bdFlush dev
+-- | Checks that contiguous blocks written to the Block Device can be
+-- read back; when boolean parameter is true, the device is flushed after
+-- the write of contiguous blocks.
+propM_contigWriteRead :: Bool -> FSDProp m
+propM_contigWriteRead flush contigData _g dev = do
+  run $ forM_ contigData (uncurry $ bdWriteBlock dev) 
+  if flush then run (bdFlush dev) else return ()
   assert . (==) origData =<< run (forM addrs $ bdReadBlock dev)
     where (addrs, origData) = unzip contigData
 
