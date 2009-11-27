@@ -50,8 +50,9 @@ qcProps quickMode =
 
    -- Geometry properties: cached device
   , numTests 10 $ label (geoLabel "Cached") $ monadicBCMIOProp $
-    forAllM arbBDGeom $ \g -> (run $ lift $ memDev g) >>=
-      whenDev (propM_geomOK g . newCachedBlockDevice 512)
+    forAllM arbBDGeom $ \g ->
+      (run $ lift $ memDev g) >>=
+        doProp' (propM_geomOK g . newCachedBlockDevice 512)
 
    -- Single-block write/read properties: basic devices
   , numTests 10 $ wrProp (wrLabel "File-Backed") arbFSData
@@ -84,14 +85,16 @@ qcProps quickMode =
 
   -- Single-block write/read properties: cached
   , numTests 25 $ label (wrLabel "Cached") $ monadicBCMIOProp 
-    $ forAllBlocksM id arbFSData $ \fsd g -> (run $ lift $ memDev g) >>= 
-        whenDev (propM_writeRead fsd g . newCachedBlockDevice 512)
+    $ forAllBlocksM id arbFSData $ \fsd g ->
+      (run $ lift $ memDev g) >>= 
+        doProp' (propM_writeRead fsd g . newCachedBlockDevice 512)
 
   -- Contiguous-block write/read properties: cached
   -- We use a minimal cache size here to trigger frequent eviction
   , numTests 25 $ label (wrCLabel "Cached") $ monadicBCMIOProp
-    $ forAllBlocksM id arbContiguousData $ \fsd g -> (run $ lift $ memDev g) >>=
-        whenDev (propM_contigWriteRead fsd g . newCachedBlockDevice 2)
+    $ forAllBlocksM id arbContiguousData $ \fsd g ->
+      (run $ lift $ memDev g) >>=
+        doProp' (propM_contigWriteRead fsd g . newCachedBlockDevice 2)
   ]
   where
     numTests n  = (,) $ if quickMode then stdArgs{maxSuccess = n} else stdArgs
@@ -100,23 +103,26 @@ qcProps quickMode =
     geoLabel s  = s ++ " Block Device Geometry"
     wrLabel s   = s ++ " Single Block Write/Read"
     wrCLabel s  = s ++ " Contiguous Block Write/Read"
+    doProp      = (`whenDev` run . bdShutdown)
+    doProp'     = (`whenDev` run . lift . bdShutdown)
 
     geomProp s dev prop = 
       label (geoLabel s) $ monadicIO $
-      forAllM arbBDGeom $ \g -> run (dev g) >>= whenDev (prop g)
+      forAllM arbBDGeom $ \g ->
+        run (dev g) >>= doProp (prop g)
 
     sgeomProp s k prop = -- scaled variant: always uses memDev
       label (geoLabel s) $ monadicIO $
       forAllM arbBDGeom $ \g ->
-        run (rescaledDev (unscale k g) g memDev) >>= whenDev (prop g)
+        run (rescaledDev (unscale k g) g memDev) >>= doProp (prop g)
 
     wrProp s gen dev prop =
       label s $ monadicIO $ forAllBlocksM id gen $ \fsd g ->
-        run (dev g) >>= whenDev (prop fsd g)
+        run (dev g) >>= doProp (prop fsd g) 
 
     swrProp s k gen prop = -- scaled variant: always uses memdev
       label s $ monadicIO $ forAllBlocksM (scale k) gen $ \fsd g ->
-        run (rescaledDev (unscale k g) g memDev) >>= whenDev (prop fsd g)    
+        run (rescaledDev (unscale k g) g memDev) >>= doProp (prop fsd g)
 
 --------------------------------------------------------------------------------
 -- Property implementations
@@ -191,5 +197,9 @@ withFileStore geom act = do
   removeFile fname
   return rslt
 
-whenDev :: (Monad m) => (a -> m b) -> Maybe a -> m b
-whenDev = maybe (fail "Invalid BlockDevice")
+whenDev :: (Monad m) => (a -> m b) -> (a -> m ()) -> Maybe a -> m b
+whenDev act cleanup =
+  maybe (fail "Invalid BlockDevice") $ \x -> do
+    y <- act x
+    cleanup x
+    return y
