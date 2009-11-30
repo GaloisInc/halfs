@@ -11,6 +11,8 @@ import Test.QuickCheck hiding (numTests)
 import Test.QuickCheck.Monadic
   
 import System.Device.BlockDevice
+import Halfs.BlockMap
+import Halfs.Classes
 
 import Tests.Instances
 import Tests.Utils
@@ -36,5 +38,10 @@ qcProps quickMode =
 --------------------------------------------------------------------------------
 -- Property implementations
 
-propM_blockMapWR :: GeomProp m
-propM_blockMapWR g dev = assert False
+propM_blockMapWR :: (Reffable r m, Bitmapped b m) =>
+                    BDGeom
+                 -> BlockDevice m
+                 -> PropertyM m ()
+propM_blockMapWR g dev = do
+  bmap <- run $ newBlockMap (bdNumBlocks dev) (bdBlockSize dev)
+  assert False

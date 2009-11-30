@@ -5,8 +5,6 @@ where
 
 import Control.Monad.ST
 import qualified Data.ByteString as BS
-import Data.ByteString (ByteString)
-import Data.Word
 import System.IO
 import System.IO.Unsafe (unsafePerformIO)
 import System.Directory
@@ -20,12 +18,7 @@ import System.Device.ST
 
 import Tests.Instances
 
---------------------------------------------------------------------------------
--- Property types
-
-type GeomProp m = Monad m => BDGeom -> BlockDevice m -> PropertyM m ()
-type FSDProp m  = Monad m => [(Word64, ByteString)] -> GeomProp m
-type DevCtor    = BDGeom -> IO (Maybe (BlockDevice IO))
+type DevCtor = BDGeom -> IO (Maybe (BlockDevice IO))
 
 --------------------------------------------------------------------------------
 -- Utility functions

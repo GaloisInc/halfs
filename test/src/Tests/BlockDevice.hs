@@ -1,4 +1,4 @@
-{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE Rank2Types, FlexibleContexts #-}
 module Tests.BlockDevice
   (
     qcProps
@@ -7,6 +7,8 @@ where
   
 import Control.Monad (forM, forM_)
 import Control.Monad.Trans
+import Data.ByteString (ByteString)
+import Data.Word
 import Test.QuickCheck hiding (numTests)
 import Test.QuickCheck.Monadic
   
@@ -14,6 +16,12 @@ import System.Device.BlockDevice
 
 import Tests.Instances
 import Tests.Utils
+
+--------------------------------------------------------------------------------
+-- Property types
+
+type GeomProp m = Monad m => BDGeom -> BlockDevice m -> PropertyM m ()
+type FSDProp m  = Monad m => [(Word64, ByteString)] -> GeomProp m
 
 --------------------------------------------------------------------------------
 -- BlockDevice properties
