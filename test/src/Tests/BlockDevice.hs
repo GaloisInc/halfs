@@ -1,36 +1,19 @@
-{-# LANGUAGE Rank2Types #-}
 {-# LANGUAGE FlexibleContexts #-}
-
 module Tests.BlockDevice
   (
-   qcProps
+    qcProps
   )
 where
   
 import Control.Monad (forM, forM_)
 import Control.Monad.Trans
-import Control.Monad.ST
-import Data.ByteString (ByteString)
-import qualified Data.ByteString as BS
-import Data.Word
 import Test.QuickCheck hiding (numTests)
 import Test.QuickCheck.Monadic
-import System.Directory
-import System.IO
-import System.IO.Unsafe (unsafePerformIO)
   
 import System.Device.BlockDevice
-import System.Device.File
-import System.Device.Memory
-import System.Device.ST
 
 import Tests.Instances
-
---------------------------------------------------------------------------------
--- Property types
-
-type GeomProp m = Monad m => BDGeom -> BlockDevice m -> PropertyM m ()
-type FSDProp m  = Monad m => [(Word64, ByteString)] -> GeomProp m
+import Tests.Utils
 
 --------------------------------------------------------------------------------
 -- BlockDevice properties
@@ -157,58 +140,3 @@ propM_contigWriteRead flush contigData _g dev = do
   if flush then run (bdFlush dev) else return ()
   assert . (==) origData =<< run (forM addrs $ bdReadBlock dev)
     where (addrs, origData) = unzip contigData
-
---------------------------------------------------------------------------------
--- Utility functions
-
-type DevCtor = BDGeom -> IO (Maybe (BlockDevice IO))
-           
-fileDev :: DevCtor
-fileDev g = withFileStore g (`newFileBlockDevice` (bdgSecSz g))
-
-memDev :: DevCtor
-memDev g = newMemoryBlockDevice (bdgSecCnt g) (bdgSecSz g)
-
--- | Create an STArray-backed block device.  This function transforms
--- the ST-based block device to an IO block device for interface
--- consistency within this module.
-staDev :: DevCtor
-staDev g =
-  stToIO (newSTBlockDevice (bdgSecCnt g) (bdgSecSz g)) >>= 
-  return . maybe Nothing (\dev ->
-    Just BlockDevice {
-        bdBlockSize = bdBlockSize dev
-      , bdNumBlocks = bdNumBlocks dev
-      , bdReadBlock  = \i   -> stToIO $ bdReadBlock dev i
-      , bdWriteBlock = \i v -> stToIO $ bdWriteBlock dev i v
-      , bdFlush      = stToIO $ bdFlush dev
-      , bdShutdown   = stToIO $ bdShutdown dev
-    })
-
-rescaledDev :: BDGeom  -- ^ geometry for underlying device
-            -> BDGeom  -- ^ new device geometry 
-            -> DevCtor -- ^ ctor for underlying device
-            -> IO (Maybe (BlockDevice IO))
-rescaledDev oldG newG ctor = 
-  maybe (fail "Invalid BlockDevice") (newRescaledBlockDevice (bdgSecSz newG))
-    `fmap` ctor oldG
-
-monadicBCMIOProp :: PropertyM (BCM IO) a -> Property
-monadicBCMIOProp = monadic (unsafePerformIO . runBCM)
-
-withFileStore :: BDGeom -> (FilePath -> IO a) -> IO a
-withFileStore geom act = do
-  let numBytes = fromIntegral (bdgSecSz geom * bdgSecCnt geom)
-  (fname, h) <- openTempFile "." "pseudo.dsk"
-  BS.hPut h $ BS.replicate numBytes 0
-  hClose h
-  rslt <- act fname
-  removeFile fname
-  return rslt
-
-whenDev :: (Monad m) => (a -> m b) -> (a -> m ()) -> Maybe a -> m b
-whenDev act cleanup =
-  maybe (fail "Invalid BlockDevice") $ \x -> do
-    y <- act x
-    cleanup x
-    return y
