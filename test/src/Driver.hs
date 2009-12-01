@@ -8,8 +8,8 @@ import qualified Tests.BlockDevice as BD
 import qualified Tests.BlockMap as BM
 
 qcProps :: [(Args, Property)]
-qcProps = -- BD.qcProps True -- "quick" mode for Block Devices
-          -- ++
+qcProps = BD.qcProps True -- "quick" mode for Block Devices
+          ++
           BM.qcProps True -- "quick" mode for Block Map
 
 main :: IO ()

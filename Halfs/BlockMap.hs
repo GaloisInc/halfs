@@ -74,12 +74,12 @@ data BlockMap b r = BM {
 -- | Calculate the number of bytes required to store a block map for the
 -- given number of blocks
 blockMapSizeBytes :: Word64 -> Word64
-blockMapSizeBytes numBlks = numBlks `divRoundUp` 8
+blockMapSizeBytes numBlks = numBlks `divCeil` 8
 
 -- | Calculate the number of blocks required to store a block map for
 -- the given number of blocks.
 blockMapSizeBlks :: Word64 -> Word64 -> Word64
-blockMapSizeBlks numBlks blkSzBytes = bytes `divRoundUp` blkSzBytes
+blockMapSizeBlks numBlks blkSzBytes = bytes `divCeil` blkSzBytes
   where bytes = blockMapSizeBytes numBlks
 
 -- | Create a new block map for the given device geometry
@@ -89,15 +89,9 @@ newBlockMap :: (Monad m, Reffable r m, Bitmapped b m) =>
 newBlockMap dev = do
   when (numBlks < 3) $ fail "Block device is too small for block map creation"
 
-  -- temp
---   trace ("newBlockMap: totalBits = " ++ show totalBits) $ do
---   trace ("newBlockMap: blockMapSzBlks = " ++ show blockMapSzBlks) $ do
---   trace ("newBlockMap: baseFreeIdx = " ++ show baseFreeIdx) $ do
---   trace ("newBlockMap: freeBlocks = " ++ show freeBlocks) $ do                    
-  -- temp
-
-  -- We overallocate the bitmap up to the nearest byte boundary for
-  -- straightforward de/serialization in the {read,write}BlockMap functions
+  -- We overallocate the bitmap up to the entire size of the block(s)
+  -- needed for the block map region so that de/serialization in the
+  -- {read,write}BlockMap functions is straightforward
   bArr <- newBitmap totalBits False
   let markUsed (l,h) = forM_ [l..h] (setBit bArr)
   mapM_ markUsed
@@ -114,7 +108,7 @@ newBlockMap dev = do
   totalBits      = blockMapSzBlks * bdBlockSize dev * 8
   blockMapSzBlks = blockMapSizeBlks numBlks (bdBlockSize dev)
   baseFreeIdx    = blockMapSzBlks + 1
-  freeBlocks     = numBlks - blockMapSzBlks - 1 -- NB: superblock is reserved
+  freeBlocks     = numBlks - blockMapSzBlks - 1 {- -1 for superblock -}
   initialTree    = singleton $ Extent baseFreeIdx freeBlocks
 
 -- | Read in the block map from the disk
@@ -125,27 +119,28 @@ readBlockMap dev = do
   bArr <- newBitmap totalBits False
   free <- newRef 0
 
+  -- Unpack the block map's block region into the empty bitmap
   forM_ [0..blockMapSzBlks - 1] $ \blkIdx -> do
-    blockBS <- bdReadBlock dev (blkIdx + 1 {- superblock -})
+    blockBS <- bdReadBlock dev (blkIdx + 1 {- +1 for superblock -})
     forM_ [0..bdBlockSize dev - 1] $ \byteIdx -> do
       let byte = BS.index blockBS (fromIntegral byteIdx)
       forM_ [0..7] $ \bitIdx -> do
         if (testBit byte bitIdx)
-          then do
-            let base = blkIdx * bdBlockSize dev
-            setBit bArr $ (base + byteIdx) * 8 + fromIntegral bitIdx
-          else do cur <- readRef free
-                  writeRef free $! cur + 1
-
+         then do let baseByte = blkIdx * bdBlockSize dev
+                     idx      = (baseByte + byteIdx) * 8 + fromIntegral bitIdx 
+                 setBit bArr idx
+         else do cur <- readRef free
+                 writeRef free $! cur + 1
+  
   baseTree <- newRef empty
-  -- getFreeBlocks bArr baseTree Nothing 0
+  getFreeBlocks bArr baseTree Nothing 0
   return $ BM baseTree bArr free
  where
   numBlks        = bdNumBlocks dev
   totalBits      = blockMapSzBlks * bdBlockSize dev * 8
   blockMapSzBlks = blockMapSizeBlks numBlks (bdBlockSize dev)
+  totalBlks      = blockMapSzBlks
   --
-{-
   getFreeBlocks    _       _ Nothing   cur | cur == totalBlks =
     return ()
   getFreeBlocks    _ treeRef (Just s)  cur | cur == totalBlks = do
@@ -163,7 +158,6 @@ readBlockMap dev = do
               writeRef treeRef $! insert (Extent s $ cur - s) curTree
               getFreeBlocks bmap treeRef Nothing (cur + 1)
       else getFreeBlocks bmap treeRef (Just s) (cur + 1)
--}
 
 -- | Write the block map to the disk
 writeBlockMap :: (Monad m, Reffable r m, Bitmapped b m, Functor m) =>
@@ -171,10 +165,10 @@ writeBlockMap :: (Monad m, Reffable r m, Bitmapped b m, Functor m) =>
               -> BlockMap b r
               -> m ()
 writeBlockMap dev bmap = do
+  -- Pack the used bitmap into the block map's block region
   forM_ [0..blockMapSzBlks - 1] $ \blkIdx -> do
     blockBS <- BS.pack `fmap` forM [0..bdBlockSize dev - 1] (getBytes blkIdx)
---    trace ("writeBlockMap: writing block data = " ++ show blockBS) $ do
-    bdWriteBlock dev (blkIdx + 1 {- superblock -}) blockBS
+    bdWriteBlock dev (blkIdx + 1 {- +1 for superblock -}) blockBS
   where
     numBlks        = bdNumBlocks dev
     blockMapSzBlks = blockMapSizeBlks numBlks (bdBlockSize dev)
@@ -183,13 +177,11 @@ writeBlockMap dev bmap = do
       bs <- forM [0..7] $ \bitIdx -> do
         let base = blkIdx * bdBlockSize dev
             idx  = (base + byteIdx) * 8 + bitIdx
---        trace ("blkIdx = " ++ show blkIdx ++ ", byteIdx = " ++ show byteIdx
---              ++ ", idx = " ++ show idx) $ do
         checkBit (usedMap bmap) idx
       return $ foldr (\(b,i) r -> if b then B.setBit r i else r)
                (0::Word8) (bs `zip` [0..7])
             
--- |Mark a given set of blocks as unused
+-- | Mark a given set of blocks as unused
 markBlocksUnused :: (Monad m, Reffable r m, Bitmapped b m) =>
                     BlockMap b r -- ^ the block map
                  -> Word64       -- ^ start block address
@@ -227,6 +219,5 @@ getBlocks bm s = do
 --------------------------------------------------------------------------------
 -- Utility functions
 
--- | divRoundUp x k divides x by k, rounding up to next multiple of k
-divRoundUp :: Integral a => a -> a -> a
-divRoundUp a b = (a + (b - 1)) `div` b
+divCeil :: Integral a => a -> a -> a
+divCeil a b = (a + (b - 1)) `div` b
