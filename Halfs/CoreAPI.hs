@@ -43,7 +43,7 @@ newfs dev = do
   when (superBlockSize > bdBlockSize dev) $
     fail "The device's block size is insufficiently large!"
   blockMap <- newBlockMap dev
-  res <- getBlocks blockMap 1
+  res <- allocBlocks blockMap 1
   case res of
     Just [rootDirAddr] -> do
       let rootDirInode :: InodeRef = blockAddrToInodeRef rootDirAddr

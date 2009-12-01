@@ -5,9 +5,9 @@ module Halfs.BlockMap(
        , newBlockMap
        , readBlockMap
        , writeBlockMap
-       , markBlocksUnused
+       , allocBlocks
+       , unallocBlocks
        , numFreeBlocks
-       , getBlocks
        )
  where
 
@@ -43,9 +43,11 @@ import Debug.Trace
 --
 --
 
-data Extent = Extent { _extBase :: Word64, _extSz :: Word64 } deriving Show
+data Extent = Extent { _extBase :: Word64, _extSz :: Word64 }
+  deriving (Show, Eq)
 
 newtype ExtentSize = ES Word64
+type    FreeTree   = FingerTree ExtentSize Extent
 
 instance Monoid ExtentSize where
   mempty                = ES minBound
@@ -54,21 +56,19 @@ instance Monoid ExtentSize where
 instance Measured ExtentSize Extent where
   measure (Extent _ s)  = ES s
 
-findBlock :: Word64 -> ExtentSize -> Bool
-findBlock x (ES y) = y > x
+splitBlockSz :: Word64 -> FreeTree -> (FreeTree, FreeTree)
+splitBlockSz sz = split $ \(ES y) -> y >= sz
 
-insert :: Extent
-       -> FingerTree ExtentSize Extent
-       -> FingerTree ExtentSize Extent
-insert a@(Extent _ s) tr = treeL >< (a <| treeR)
- where (treeL, treeR) = split (findBlock s) tr
+insert :: Extent -> FreeTree -> FreeTree
+insert a@(Extent _ sz) tr = treeL >< (a <| treeR)
+ where (treeL, treeR) = splitBlockSz sz tr
 
 -- ----------------------------------------------------------------------------
 
 data BlockMap b r = BM {
-    freeTree :: r (FingerTree ExtentSize Extent)
-  , usedMap  :: b -- ^ Is the given block free?
-  , numFree  :: r Word64
+    bmFreeTree :: r FreeTree
+  , bmUsedMap  :: b -- ^ Is the given block free?
+  , bmNumFree  :: r Word64
   }
 
 -- | Calculate the number of bytes required to store a block map for the
@@ -89,11 +89,11 @@ newBlockMap :: (Monad m, Reffable r m, Bitmapped b m) =>
 newBlockMap dev = do
   when (numBlks < 3) $ fail "Block device is too small for block map creation"
 
-  trace ("newBlockMap: numBlks = " ++ show numBlks) $ do
-  trace ("newBlockMap: totalBits = " ++ show totalBits) $ do
-  trace ("newBlockMap: blockMapSzBlks = " ++ show blockMapSzBlks) $ do
-  trace ("newBlockMap: baseFreeIdx = " ++ show baseFreeIdx) $ do
-  trace ("newBlockMap: freeBlocks = " ++ show freeBlocks) $ do
+--   trace ("newBlockMap: numBlks = " ++ show numBlks) $ do
+--   trace ("newBlockMap: totalBits = " ++ show totalBits) $ do
+--   trace ("newBlockMap: blockMapSzBlks = " ++ show blockMapSzBlks) $ do
+--   trace ("newBlockMap: baseFreeIdx = " ++ show baseFreeIdx) $ do
+--   trace ("newBlockMap: numFreeBlks = " ++ show numFreeBlks) $ do
 
   -- We overallocate the bitmap up to the entire size of the block(s)
   -- needed for the block map region so that de/serialization in the
@@ -105,25 +105,24 @@ newBlockMap dev = do
     , (1, blockMapSzBlks)      -- blocks for storing the block map
     , (numBlks, totalBits - 1) -- overallocated region
     ] 
-  tree <- newRef initialTree
-  free <- newRef freeBlocks
-  return $ assert (baseFreeIdx + freeBlocks == numBlks) $
-    BM tree bArr free
+  treeR    <- newRef $ singleton $ Extent baseFreeIdx numFree
+  numFreeR <- newRef numFree
+  return $ assert (baseFreeIdx + numFree == numBlks) $
+    BM treeR bArr numFreeR
  where
   numBlks        = bdNumBlocks dev
   totalBits      = blockMapSzBlks * bdBlockSize dev * 8
   blockMapSzBlks = blockMapSizeBlks numBlks (bdBlockSize dev)
   baseFreeIdx    = blockMapSzBlks + 1
-  freeBlocks     = numBlks - blockMapSzBlks - 1 {- -1 for superblock -}
-  initialTree    = singleton $ Extent baseFreeIdx freeBlocks
+  numFree        = numBlks - blockMapSzBlks - 1 {- -1 for superblock -}
 
 -- | Read in the block map from the disk
 readBlockMap :: (Monad m, Reffable r m, Bitmapped b m) =>
-                BlockDevice m ->
-                m (BlockMap b r)
+                BlockDevice m
+             -> m (BlockMap b r)
 readBlockMap dev = do
-  bArr <- newBitmap totalBits False
-  free <- newRef 0
+  bArr  <- newBitmap totalBits False
+  freeR <- newRef 0
 
   -- Unpack the block map's block region into the empty bitmap
   forM_ [0..blockMapSzBlks - 1] $ \blkIdx -> do
@@ -135,38 +134,41 @@ readBlockMap dev = do
          then do let baseByte = blkIdx * bdBlockSize dev
                      idx      = (baseByte + byteIdx) * 8 + fromIntegral bitIdx 
                  setBit bArr idx
-         else do cur <- readRef free
-                 writeRef free $! cur + 1
+         else do cur <- readRef freeR
+                 writeRef freeR $! cur + 1
   
-  baseTree <- newRef empty
-  getFreeBlocks bArr baseTree Nothing 0
-  trace ("-- readBlockMap complete (totalBits = " ++ show totalBits
-         ++ ", totalBlks = " ++ show totalBlks ++ ") --") $ do
-  return $ BM baseTree bArr free
+  baseTreeR <- newRef empty
+  getFreeBlocks bArr baseTreeR Nothing 0
+  return $ BM baseTreeR bArr freeR
  where
   numBlks        = bdNumBlocks dev
   totalBits      = blockMapSzBlks * bdBlockSize dev * 8
   blockMapSzBlks = blockMapSizeBlks numBlks (bdBlockSize dev)
-  totalBlks      = blockMapSzBlks
   -- 
-  writeExtent treeRef ext@(Extent b s) = do
-    trace ("writing extent " ++ show (b,s)) $ do
-    t <- readRef treeRef
-    writeRef treeRef $! insert ext t
+  writeExtent treeR ext@(Extent _b _s) = do
+--    trace ("writing extent " ++ show (b,s)) $ do
+    t <- readRef treeR
+    writeRef treeR $! insert ext t
   -- 
-  getFreeBlocks _bmap treeRef mbase cur | cur == totalBits =
+  -- getFreeBlocks recurses over each used bit in the used bitmap and
+  -- finds runs of free block regions, inserting representative Extents
+  -- into the "free tree" as it does so.  The third parameter tracks the
+  -- block address of start of the current free region.
+  getFreeBlocks _bmap treeR mbase cur | cur == totalBits =
     maybe (return ())
-          (\base -> writeExtent treeRef (Extent base $ cur - base))
+          (\base -> writeExtent treeR (Extent base $ cur - base))
           mbase
-  getFreeBlocks bmap treeRef Nothing cur = do
+
+  getFreeBlocks bmap treeR Nothing cur = do
     used <- checkBit bmap cur
-    trace ("HERE 1: cur = " ++ show cur ++ ", used = " ++ show used) $ do
-    getFreeBlocks bmap treeRef (if used then Nothing else Just cur) (cur + 1)
-  getFreeBlocks bmap treeRef b@(Just base) cur = do
+--    trace ("HERE 1: cur = " ++ show cur ++ ", used = " ++ show used) $ do
+    getFreeBlocks bmap treeR (if used then Nothing else Just cur) (cur + 1)
+
+  getFreeBlocks bmap treeR b@(Just base) cur = do
     used <- checkBit bmap cur
-    trace ("HERE 2: cur = " ++ show cur ++ ", used = " ++ show used) $ do
-    when used $ writeExtent treeRef (Extent base $ cur - base)
-    getFreeBlocks bmap treeRef (if used then Nothing else b) (cur + 1)
+--    trace ("HERE 2: cur = " ++ show cur ++ ", used = " ++ show used) $ do
+    when used $ writeExtent treeR (Extent base $ cur - base)
+    getFreeBlocks bmap treeR (if used then Nothing else b) (cur + 1)
 
 -- | Write the block map to the disk
 writeBlockMap :: (Monad m, Reffable r m, Bitmapped b m, Functor m) =>
@@ -186,44 +188,71 @@ writeBlockMap dev bmap = do
       bs <- forM [0..7] $ \bitIdx -> do
         let base = blkIdx * bdBlockSize dev
             idx  = (base + byteIdx) * 8 + bitIdx
-        checkBit (usedMap bmap) idx
+        checkBit (bmUsedMap bmap) idx
       return $ foldr (\(b,i) r -> if b then B.setBit r i else r)
                (0::Word8) (bs `zip` [0..7])
             
--- | Mark a given set of blocks as unused
-markBlocksUnused :: (Monad m, Reffable r m, Bitmapped b m) =>
-                    BlockMap b r -- ^ the block map
-                 -> Word64       -- ^ start block address
-                 -> Word64       -- ^ end block address
-                 -> m ()
-markBlocksUnused = undefined
+-- | Allocate a set of blocks from the disk. This routine will attempt
+-- to fetch a contiguous set of blocks, but isn't guaranteed to do
+-- so. If there aren't enough blocks available, this function yields
+-- Nothing.
+allocBlocks :: (Monad m, Reffable r m, Bitmapped b m) =>
+               BlockMap b r       -- ^ the block map 
+            -> Word64             -- ^ requested number of blocks to allocate
+            -> m (Maybe [Word64]) -- ^ set of allocated blocks, if available
+allocBlocks bm numBlocks = do
+  available <- readRef $! bmNumFree bm
+  if available < numBlocks
+    then return Nothing
+    else do freeTree <- readRef $! bmFreeTree bm
+            let (blocks, freeTree') = findSpace numBlocks freeTree
+            forM_ blocks $ setBit (bmUsedMap bm) -- TODO/FIXME: this
+                                                 -- modification won't escape
+                                                 -- this function...
+            writeRef (bmFreeTree bm) freeTree'
+            writeRef (bmNumFree bm) (available - numBlocks)
+            return (Just blocks)
+
+-- Precondition: There is sufficient free space in the free tree to accomodate
+-- the given goal size (although that space may not be contiguous).
+findSpace :: Word64 -> FreeTree -> ([Word64], FreeTree)
+findSpace goalSz freeTree =
+  case viewl treeR of
+    EmptyL                       ->
+      error ("viewl treeR == empty: unhandled case")
+    (ext@(Extent b _) :< treeR') -> 
+      -- contiguous blocks found
+      ([b..b + goalSz - 1], treeL >< remTree ext >< treeR')
+  where
+    (treeL, treeR) = splitBlockSz goalSz freeTree
+    -- 
+    remTree (Extent b sz)
+      | sz > goalSz = singleton $ Extent (b + goalSz) (sz - goalSz)
+      | otherwise   = empty
+    --
+    gatherL EmptyR _ = error "Precondition violated: insufficent space"
+    gatherL (treeL' :> ext@(Extent b sz)) (accSz, exts)
+      | accSz + sz < goalSz  = gatherL (viewr treeL') (accSz + sz, ext : exts) 
+      | accSz + sz == goalSz = (ext : exts, treeL')
+      | otherwise = -- accSz + sz > goalSz
+          let diff = accSz + sz - goalSz
+          in ( Extent (b + diff) (sz - diff) : exts
+             , treeL' >< singleton (Extent b undefined) -- HERE
+             )
+
+-- | Mark a given set of contiguous blocks as unused
+unallocBlocks :: (Monad m, Reffable r m, Bitmapped b m) =>
+              BlockMap b r -- ^ the block map
+           -> Word64       -- ^ start block address
+           -> Word64       -- ^ end block address
+           -> m ()
+unallocBlocks = undefined
 
 -- |Return the number of blocks currently left
 numFreeBlocks :: (Monad m, Reffable r m, Bitmapped b m) =>
-                 BlockMap b r ->
-                 m Word64
-numFreeBlocks bm = readRef (numFree bm)
-
--- |Get a set of blocks from the disk. This routine will attempt to fetch
--- a contiguous set of blocks, but isn't guaranteed to do so. If there aren't
--- enough blocks, returns Nothing.
-getBlocks :: (Monad m, Reffable r m, Bitmapped b m) =>
-             BlockMap b r -> Word64 ->
-             m (Maybe [Word64])
-getBlocks bm s = do
-  available <- readRef $! numFree bm
-  if available < s
-    then return Nothing
-    else do fMap <- readRef $! freeTree bm
-            let (blocks, fMap') = findSpace fMap s
-            forM_ blocks $ setBit (usedMap bm)
-            writeRef (freeTree bm) fMap'
-            writeRef (numFree bm) (available - s)
-            return (Just blocks)
- where
-  findSpace :: FingerTree ExtentSize Extent -> Word64 ->
-               ([Word64], FingerTree ExtentSize Extent)
-  findSpace = undefined
+                 BlockMap b r
+              -> m Word64
+numFreeBlocks = readRef . bmNumFree
 
 --------------------------------------------------------------------------------
 -- Utility functions
