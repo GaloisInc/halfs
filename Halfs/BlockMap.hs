@@ -89,6 +89,12 @@ newBlockMap :: (Monad m, Reffable r m, Bitmapped b m) =>
 newBlockMap dev = do
   when (numBlks < 3) $ fail "Block device is too small for block map creation"
 
+  trace ("newBlockMap: numBlks = " ++ show numBlks) $ do
+  trace ("newBlockMap: totalBits = " ++ show totalBits) $ do
+  trace ("newBlockMap: blockMapSzBlks = " ++ show blockMapSzBlks) $ do
+  trace ("newBlockMap: baseFreeIdx = " ++ show baseFreeIdx) $ do
+  trace ("newBlockMap: freeBlocks = " ++ show freeBlocks) $ do
+
   -- We overallocate the bitmap up to the entire size of the block(s)
   -- needed for the block map region so that de/serialization in the
   -- {read,write}BlockMap functions is straightforward
@@ -134,30 +140,33 @@ readBlockMap dev = do
   
   baseTree <- newRef empty
   getFreeBlocks bArr baseTree Nothing 0
+  trace ("-- readBlockMap complete (totalBits = " ++ show totalBits
+         ++ ", totalBlks = " ++ show totalBlks ++ ") --") $ do
   return $ BM baseTree bArr free
  where
   numBlks        = bdNumBlocks dev
   totalBits      = blockMapSzBlks * bdBlockSize dev * 8
   blockMapSzBlks = blockMapSizeBlks numBlks (bdBlockSize dev)
   totalBlks      = blockMapSzBlks
-  --
-  getFreeBlocks    _       _ Nothing   cur | cur == totalBlks =
-    return ()
-  getFreeBlocks    _ treeRef (Just s)  cur | cur == totalBlks = do
-    curTree <- readRef treeRef
-    writeRef treeRef $! insert (Extent s $ cur - s) curTree
-  getFreeBlocks bmap treeRef Nothing   cur = do
-    val <- checkBit bmap cur
-    if val
-      then getFreeBlocks bmap treeRef Nothing (cur + 1)
-      else getFreeBlocks bmap treeRef (Just cur) (cur + 1)
-  getFreeBlocks bmap treeRef (Just s) cur  = do
-    val <- checkBit bmap cur
-    if val
-      then do curTree <- readRef treeRef
-              writeRef treeRef $! insert (Extent s $ cur - s) curTree
-              getFreeBlocks bmap treeRef Nothing (cur + 1)
-      else getFreeBlocks bmap treeRef (Just s) (cur + 1)
+  -- 
+  writeExtent treeRef ext@(Extent b s) = do
+    trace ("writing extent " ++ show (b,s)) $ do
+    t <- readRef treeRef
+    writeRef treeRef $! insert ext t
+  -- 
+  getFreeBlocks _bmap treeRef mbase cur | cur == totalBits =
+    maybe (return ())
+          (\base -> writeExtent treeRef (Extent base $ cur - base))
+          mbase
+  getFreeBlocks bmap treeRef Nothing cur = do
+    used <- checkBit bmap cur
+    trace ("HERE 1: cur = " ++ show cur ++ ", used = " ++ show used) $ do
+    getFreeBlocks bmap treeRef (if used then Nothing else Just cur) (cur + 1)
+  getFreeBlocks bmap treeRef b@(Just base) cur = do
+    used <- checkBit bmap cur
+    trace ("HERE 2: cur = " ++ show cur ++ ", used = " ++ show used) $ do
+    when used $ writeExtent treeRef (Extent base $ cur - base)
+    getFreeBlocks bmap treeRef (if used then Nothing else b) (cur + 1)
 
 -- | Write the block map to the disk
 writeBlockMap :: (Monad m, Reffable r m, Bitmapped b m, Functor m) =>
