@@ -110,16 +110,19 @@ class Monad m => Bitmapped b m | m -> b where
   clearBit  :: b -> Word64 -> m ()
   setBit    :: b -> Word64 -> m ()
   checkBit  :: b -> Word64 -> m Bool
+  getBounds :: b -> m (Word64, Word64)
 
 instance Bitmapped (IOUArray Word64 Bool) IO where
   newBitmap s e = newArray (0, s - 1) e
   clearBit b i  = writeArray b i False
   setBit b i    = writeArray b i True
   checkBit b i  = readArray b i
+  getBounds     = Data.Array.IO.getBounds
 
 instance Bitmapped (STUArray s Word64 Bool) (ST s) where
   newBitmap s e = newArray (0, s - 1) e
   clearBit b i  = writeArray b i False
   setBit b i    = writeArray b i True
   checkBit b i  = readArray b i
+  getBounds     = Data.Array.ST.getBounds
 

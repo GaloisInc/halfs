@@ -29,6 +29,9 @@ instance Arbitrary BDGeom where
     <*> powTwo  8 12   -- 256b..4K sector size
                        -- => 256K .. 32M filesystem size
 
+--instance Arbitrary BDGeom where
+--  arbitrary = return $ BDGeom 65 4
+
 forAllBlocksM :: Monad m =>
                   (BDGeom -> BDGeom)
                -> (BDGeom -> Gen [(Word64, ByteString)])

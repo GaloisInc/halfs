@@ -42,7 +42,7 @@ newfs :: (HalfsCapable b t r l m) => BlockDevice m -> m ()
 newfs dev = do
   when (superBlockSize > bdBlockSize dev) $
     fail "The device's block size is insufficiently large!"
-  blockMap <- newBlockMap $ bdNumBlocks dev
+  blockMap <- newBlockMap dev
   res <- getBlocks blockMap 1
   case res of
     Just [rootDirAddr] -> do
