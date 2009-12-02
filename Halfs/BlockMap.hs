@@ -46,7 +46,27 @@ import Debug.Trace
 --
 --
 
--- data BlockGroup a = Contig a | Discontig a
+{-
+
+TODO: 
+
+ * Fix TODOs scattered around regarding usedMap modifications (not)
+   escaping alloc/unalloc functions
+
+ * The distinction between unallocBlocksContig and unallocBlocks is
+   gross, as is the mixed representation between start/end and groups of
+   blocks.  Since allocations are coming from the free tree anyway, we
+   might as well just use Extents, and have the allocator yield
+   something like (e.g.):
+
+   data BlockGroup = Contig Extent | Discontig [Extent]
+
+   together with a simple toplevel function to expand an extent into
+   block addresses.
+
+   This'll make life a lot easier when we want to unalloc block groups.
+
+-}
 
 data Extent = Extent { _extBase :: Word64, _extSz :: Word64 }
   deriving (Show, Eq)
@@ -198,22 +218,25 @@ writeBlockMap dev bmap = do
                (0::Word8) (bs `zip` [0..7])
             
 -- | Allocate a set of blocks from the disk. This routine will attempt
--- to fetch a contiguous set of blocks, but isn't guaranteed to do
--- so. If there aren't enough blocks available, this function yields
--- Nothing.
+-- to fetch a contiguous set of blocks, but isn't guaranteed to do so.
+-- Contiguous blocks are represented via the Contig constructor of the
+-- BlockGroup datatype; discontiguous blocks via Discontig.  If there
+-- aren't enough blocks available, this function yields Nothing.
 allocBlocks :: (Monad m, Reffable r m, Bitmapped b m) =>
-               BlockMap b r       -- ^ the block map 
-            -> Word64             -- ^ requested number of blocks to allocate
-            -> m (Maybe [Word64]) -- ^ set of allocated blocks, if available
+               BlockMap b r
+            -- ^ the block map 
+            -> Word64
+            -- ^ requested number of blocks to allocate
+            -> m (Maybe [Word64])
 allocBlocks bm numBlocks = do
   available <- readRef $! bmNumFree bm
   if available < numBlocks
     then return Nothing
     else do freeTree <- readRef $! bmFreeTree bm
             let (blocks, freeTree') = findSpace numBlocks freeTree
-            forM_ blocks $ setBit (bmUsedMap bm) -- TODO/FIXME: this
-                                                 -- modification won't escape
-                                                 -- this function...
+            forM_ blocks $ setBit (bmUsedMap bm)
+            -- ^^^ TODO/FIXME: this modification won't escape this
+            -- function...
             writeRef (bmFreeTree bm) freeTree'
             writeRef (bmNumFree bm) (available - numBlocks)
             return (Just blocks)
@@ -315,3 +338,4 @@ adjGroupBy p (x:xs) = (x:ys) : adjGroupBy p zs
 
 contigGroups :: Num a => [a] -> [[a]]
 contigGroups = adjGroupBy $ \x y -> y - x == 1
+
