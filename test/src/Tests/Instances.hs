@@ -23,15 +23,15 @@ powTwo :: Int -> Int -> Gen Word64
 powTwo l h = assert (l >= 0 && h <= 63) $ shiftL 1 <$> choose (l, h)
 
 
--- instance Arbitrary BDGeom where
---   arbitrary = 
---     BDGeom
---     <$> powTwo 10 13   -- 1024..8192 sectors
---     <*> powTwo  8 12   -- 256b..4K sector size
---                        -- => 256K .. 32M filesystem siz
-
 instance Arbitrary BDGeom where
- arbitrary = return $ BDGeom 64 4
+  arbitrary = 
+    BDGeom
+    <$> powTwo 10 13   -- 1024..8192 sectors
+    <*> powTwo  8 12   -- 256b..4K sector size
+                       -- => 256K .. 32M filesystem siz
+
+-- instance Arbitrary BDGeom where
+--  arbitrary = return $ BDGeom 64 4
 
 forAllBlocksM :: Monad m =>
                   (BDGeom -> BDGeom)

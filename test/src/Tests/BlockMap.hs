@@ -27,7 +27,7 @@ qcProps :: Bool -> [(Args, Property)]
 qcProps quickMode =
   [
    -- Geometry properties: basic devices
-    numTests 1 $ geomProp "BlockMap de/serialization" memDev propM_blockMapWR
+    numTests 25 $ geomProp "BlockMap de/serialization" memDev propM_blockMapWR
   ]
   where
     numTests n  = (,) $ if quickMode then stdArgs{maxSuccess = n} else stdArgs
@@ -62,6 +62,7 @@ propM_blockMapWR g dev = do
   assertEq (toList . bmUsedMap)   read1 read2
   assertEq (readRef . bmFreeTree) read1 read2
 
+{-
   -- temp
   t1 <- run $ readRef $ bmFreeTree orig
   trace ("t1 = " ++ show t1) $ do
@@ -97,6 +98,6 @@ propM_blockMapWR g dev = do
 
   assert True
   -- temp
-
+-}
   where
     assertEq f x y = assert =<< liftM2 (==) (run . f $ x) (run . f $ y) 
