@@ -292,7 +292,8 @@ unallocBlocksContig :: (Monad m, Reffable r m, Bitmapped b m) =>
                     -> Word64       -- ^ end block address
                     -> m ()
 unallocBlocksContig bm s e = do
-  -- TODO: modify usedMap here as well; has same non-escape problem as in allocBlocks
+  -- TODO/FIXME: modify usedMap here as well; has same non-escape
+  -- problem as in allocBlocks
   assert (e >= s) $ do
   available <- readRef $! bmNumFree bm
   freeTree  <- readRef $! bmFreeTree bm
