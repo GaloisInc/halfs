@@ -50,9 +50,6 @@ import Debug.Trace
 
 TODO: 
 
- * Fix TODOs scattered around regarding usedMap modifications (not)
-   escaping alloc/unalloc functions
-
  * The distinction between unallocBlocksContig and unallocBlocks is
    gross, as is the mixed representation between start/end and groups of
    blocks.  Since allocations are coming from the free tree anyway, we
