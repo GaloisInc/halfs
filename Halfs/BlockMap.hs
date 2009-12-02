@@ -1,15 +1,22 @@
 {-# LANGUAGE MultiParamTypeClasses, FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances, BangPatterns #-}
 module Halfs.BlockMap
-  ( BlockMap(..)
+  (
+  -- * Types
+    BlockMap(..)
   , Extent(..)
+  -- * Block Map creation, de/serialization, and query functions
   , newBlockMap
   , readBlockMap
   , writeBlockMap
+  , numFreeBlocks
+  -- * Block Map allocation/unallocation functions
   , allocBlocks
   , unallocBlocks
   , unallocBlocksContig
-  , numFreeBlocks
+  -- * Utility functions
+  , blkRange
+  , blkRangeExt
   )
  where
 
@@ -83,8 +90,8 @@ splitBlockSz :: Word64 -> FreeTree -> (FreeTree, FreeTree)
 splitBlockSz sz = split $ \(ES y) -> y >= sz
 
 insert :: Extent -> FreeTree -> FreeTree
-insert a@(Extent _ sz) tr = treeL >< (a <| treeR)
- where (treeL, treeR) = splitBlockSz sz tr
+insert ext tr = treeL >< (ext <| treeR)
+ where (treeL, treeR) = splitBlockSz (extSz ext) tr
 
 -- ----------------------------------------------------------------------------
 
@@ -112,11 +119,11 @@ newBlockMap :: (Monad m, Reffable r m, Bitmapped b m) =>
 newBlockMap dev = do
   when (numFree == 0) $ fail "Block device is too small for block map creation"
 
-  trace ("newBlockMap: numBlks = " ++ show numBlks) $ do
-  trace ("newBlockMap: totalBits = " ++ show totalBits) $ do
-  trace ("newBlockMap: blockMapSzBlks = " ++ show blockMapSzBlks) $ do
-  trace ("newBlockMap: baseFreeIdx = " ++ show baseFreeIdx) $ do
-  trace ("newBlockMap: numFree = " ++ show numFree) $ do
+--   trace ("newBlockMap: numBlks = " ++ show numBlks) $ do
+--   trace ("newBlockMap: totalBits = " ++ show totalBits) $ do
+--   trace ("newBlockMap: blockMapSzBlks = " ++ show blockMapSzBlks) $ do
+--   trace ("newBlockMap: baseFreeIdx = " ++ show baseFreeIdx) $ do
+--   trace ("newBlockMap: numFree = " ++ show numFree) $ do
 
   -- We overallocate the bitmap up to the entire size of the block(s)
   -- needed for the block map region so that de/serialization in the
@@ -168,8 +175,8 @@ readBlockMap dev = do
   totalBits      = blockMapSzBlks * bdBlockSize dev * 8
   blockMapSzBlks = blockMapSizeBlks numBlks (bdBlockSize dev)
   -- 
-  writeExtent treeR ext@(Extent _b _s) = do
---    trace ("writing extent " ++ show (b,s)) $ do
+  writeExtent treeR ext = do
+--    trace ("writing extent " ++ show ext) $ do
     t <- readRef treeR
     writeRef treeR $! insert ext t
   -- 
@@ -287,7 +294,7 @@ findSpace goalSz freeTree =
 
     Extent b sz :< treeR' -> 
       -- Found an extent with size >= the goal size
-      ( blockRange b goalSz
+      ( blkRange b goalSz
       , treeL
         ><
         -- Split the extent when it exceeds the goal size
@@ -298,9 +305,8 @@ findSpace goalSz freeTree =
         treeR'
       )
   where
-    preCond         = goalSz <= DF.foldr (\(Extent _ s1) -> (s1 +)) 0 freeTree
+    preCond         = goalSz <= DF.foldr (\e -> (extSz e +)) 0 freeTree
     (treeL, treeR)  = splitBlockSz goalSz freeTree
-    blockRange b sz = [b .. b + sz - 1]
     -- 
     gatherL :: ViewR (FingerTree ExtentSize) Extent
             -> Word64
@@ -310,16 +316,22 @@ findSpace goalSz freeTree =
     gatherL (treeL' :> Extent b sz) accSz accRngs
       | accSz + sz < goalSz = gatherL (viewr treeL')
                                       (accSz + sz)
-                                      (blockRange b sz : accRngs) 
-      | accSz + sz == goalSz = (blockRange b sz : accRngs, treeL')
+                                      (blkRange b sz : accRngs) 
+      | accSz + sz == goalSz = (blkRange b sz : accRngs, treeL')
       | otherwise =
           -- We've exceeded the goal, so split the extent we just encountered
-          (blockRange (b + diff) (sz - diff) : accRngs, treeL' >< extra)
+          (blkRange (b + diff) (sz - diff) : accRngs, treeL' >< extra)
           where diff  = accSz + sz - goalSz
                 extra = singleton $ Extent b diff
 
 --------------------------------------------------------------------------------
 -- Utility functions
+
+blkRange :: Word64 -> Word64 -> [Word64]
+blkRange b sz = [b .. b + sz - 1]
+
+blkRangeExt :: Extent -> [Word64]
+blkRangeExt (Extent b sz) = blkRange b sz
 
 divCeil :: Integral a => a -> a -> a
 divCeil a b = (a + (b - 1)) `div` b
