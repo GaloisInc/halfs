@@ -114,11 +114,11 @@ newBlockMap :: (Monad m, Reffable r m, Bitmapped b m) =>
 newBlockMap dev = do
   when (numBlks < 3) $ fail "Block device is too small for block map creation"
 
---   trace ("newBlockMap: numBlks = " ++ show numBlks) $ do
---   trace ("newBlockMap: totalBits = " ++ show totalBits) $ do
---   trace ("newBlockMap: blockMapSzBlks = " ++ show blockMapSzBlks) $ do
---   trace ("newBlockMap: baseFreeIdx = " ++ show baseFreeIdx) $ do
---   trace ("newBlockMap: numFreeBlks = " ++ show numFreeBlks) $ do
+  trace ("newBlockMap: numBlks = " ++ show numBlks) $ do
+  trace ("newBlockMap: totalBits = " ++ show totalBits) $ do
+  trace ("newBlockMap: blockMapSzBlks = " ++ show blockMapSzBlks) $ do
+  trace ("newBlockMap: baseFreeIdx = " ++ show baseFreeIdx) $ do
+  trace ("newBlockMap: numFree = " ++ show numFree) $ do
 
   -- We overallocate the bitmap up to the entire size of the block(s)
   -- needed for the block map region so that de/serialization in the
@@ -235,8 +235,6 @@ allocBlocks bm numBlocks = do
     else do freeTree <- readRef $! bmFreeTree bm
             let (blocks, freeTree') = findSpace numBlocks freeTree
             forM_ blocks $ setBit (bmUsedMap bm)
-            -- ^^^ TODO/FIXME: this modification won't escape this
-            -- function...
             writeRef (bmFreeTree bm) freeTree'
             writeRef (bmNumFree bm) (available - numBlocks)
             return (Just blocks)
@@ -292,8 +290,7 @@ unallocBlocksContig :: (Monad m, Reffable r m, Bitmapped b m) =>
                     -> Word64       -- ^ end block address
                     -> m ()
 unallocBlocksContig bm s e = do
-  -- TODO/FIXME: modify usedMap here as well; has same non-escape
-  -- problem as in allocBlocks
+  -- TODO/FIXME: modify usedMap here 
   assert (e >= s) $ do
   available <- readRef $! bmNumFree bm
   freeTree  <- readRef $! bmFreeTree bm

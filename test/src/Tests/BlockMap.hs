@@ -66,10 +66,12 @@ propM_blockMapWR g dev = do
   -- temp
   t1 <- run $ readRef $ bmFreeTree orig
   trace ("t1 = " ++ show t1) $ do
-  blks <- run $ allocBlocks orig 50
+  Just blks <- run $ allocBlocks orig 50
   trace ("blks = " ++ show blks) $ do  
   t2 <- run $ readRef $ bmFreeTree orig
   trace ("t2 = " ++ show t2) $ do
+  usedMap <- run $ toList $ bmUsedMap orig
+  trace ("usedMap = " ++ show usedMap) $ do
 
   trace ("unallocing [3,4]") $ do
   run $ unallocBlocksContig orig 3 4
@@ -81,7 +83,7 @@ propM_blockMapWR g dev = do
   t4 <- run $ readRef $ bmFreeTree orig
   trace ("t4 = " ++ show t4) $ do
 
-  blks2 <- run $ allocBlocks orig 11
+  Just blks2 <- run $ allocBlocks orig 11
   trace ("blks2 = " ++ show blks2) $ do  
   t5 <- run $ readRef $ bmFreeTree orig
   trace ("t5 = " ++ show t5) $ do
@@ -99,5 +101,6 @@ propM_blockMapWR g dev = do
   assert True
   -- temp
 -}
+
   where
     assertEq f x y = assert =<< liftM2 (==) (run . f $ x) (run . f $ y) 
