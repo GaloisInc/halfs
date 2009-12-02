@@ -14,8 +14,8 @@ module Halfs.BlockMap(
 
 import Control.Exception (assert)
 import Control.Monad
-import Data.Bits hiding (setBit)
-import qualified Data.Bits as B
+import Data.Bits hiding (setBit, clearBit)
+import qualified Data.Bits as B 
 import qualified Data.ByteString as BS
 import Data.FingerTree
 import qualified Data.Foldable as DF
@@ -228,13 +228,51 @@ allocBlocks :: (Monad m, Reffable r m, Bitmapped b m) =>
 allocBlocks bm numBlocks = do
   available <- readRef $! bmNumFree bm
   if available < numBlocks
-    then return Nothing
-    else do freeTree <- readRef $! bmFreeTree bm
-            let (blocks, freeTree') = findSpace numBlocks freeTree
-            forM_ blocks $ setBit (bmUsedMap bm)
-            writeRef (bmFreeTree bm) freeTree'
-            writeRef (bmNumFree bm) (available - numBlocks)
-            return (Just blocks)
+    then do
+      return Nothing
+    else do
+      freeTree <- readRef $! bmFreeTree bm
+      let (blocks, freeTree') = findSpace numBlocks freeTree
+      forM_ blocks $ setBit $ bmUsedMap bm
+      writeRef (bmFreeTree bm) freeTree'
+      writeRef (bmNumFree bm) (available - numBlocks)
+      return (Just blocks)
+
+-- | Mark a given set of contiguous blocks as unused
+unallocBlocksContig :: (Monad m, Reffable r m, Bitmapped b m) =>
+                       BlockMap b r -- ^ the block map
+                    -> Word64       -- ^ start block address
+                    -> Word64       -- ^ end block address
+                    -> m ()
+unallocBlocksContig bm s e = do
+  assert (e >= s) $ do
+  available <- readRef $! bmNumFree bm
+  freeTree  <- readRef $! bmFreeTree bm
+  forM_ [s .. e] $ clearBit $ bmUsedMap bm
+  writeRef (bmFreeTree bm) $ insert (Extent s numBlocks) freeTree
+  writeRef (bmNumFree bm)  $ available + numBlocks
+  where
+    numBlocks = e - s + 1
+
+-- | Unallocate the given set of blocks; note that if the set of blocks
+-- is known to be contiguous, unallocBlocksContig is preferred
+unallocBlocks :: (Monad m, Reffable r m, Bitmapped b m) =>
+                 BlockMap b r -- ^ the block map
+              -> [Word64]     -- ^ the blocks to unalloc
+              -> m ()
+unallocBlocks _ []  = return ()
+unallocBlocks bm bs = mapM_ (uncurry $ unallocBlocksContig bm) (contigExts bs)
+  where
+    contigExts     = map toExt . contigGroups . sort
+    toExt []       = error "Empty contiguous group: should not happen"
+    toExt xs@(x:_) = (x, x + fromIntegral (length xs) - 1)
+
+-- |Return the number of blocks currently left
+numFreeBlocks
+  :: (Monad m, Reffable r m, Bitmapped b m) =>
+     BlockMap b r
+  -> m Word64
+numFreeBlocks = readRef . bmNumFree
 
 findSpace :: Word64 -> FreeTree -> ([Word64], FreeTree)
 findSpace goalSz freeTree =
@@ -244,8 +282,7 @@ findSpace goalSz freeTree =
   case viewl treeR of
     EmptyL -> 
       -- Cannot find an extent large enough, so gather smaller extents
-      trace ("rngs = " ++ show rngs ++ "\n, treeL' = " ++ show treeL') $
-      (concat rngs, treeL') where (rngs, treeL') = gatherL (viewr treeL) 0 []
+      mapFst concat $ gatherL (viewr treeL) 0 []
 
     Extent b sz :< treeR' -> 
       -- Found an extent with size >= the goal size
@@ -280,42 +317,6 @@ findSpace goalSz freeTree =
           where diff  = accSz + sz - goalSz
                 extra = singleton $ Extent b diff
 
--- | Mark a given set of contiguous blocks as unused
-unallocBlocksContig :: (Monad m, Reffable r m, Bitmapped b m) =>
-                       BlockMap b r -- ^ the block map
-                    -> Word64       -- ^ start block address
-                    -> Word64       -- ^ end block address
-                    -> m ()
-unallocBlocksContig bm s e = do
-  -- TODO/FIXME: modify usedMap here 
-  assert (e >= s) $ do
-  available <- readRef $! bmNumFree bm
-  freeTree  <- readRef $! bmFreeTree bm
-  writeRef (bmFreeTree bm) $ insert (Extent s numBlocks) freeTree
-  writeRef (bmNumFree bm)  $ available + numBlocks
-  where
-    numBlocks = e - s + 1
-
--- | Unallocate the given set of blocks; note that if the set of blocks
--- is known to be contiguous, unallocBlocksContig is preferred
-unallocBlocks :: (Monad m, Reffable r m, Bitmapped b m) =>
-                 BlockMap b r -- ^ the block map
-              -> [Word64]     -- ^ the blocks to unalloc
-              -> m ()
-unallocBlocks _ []  = return ()
-unallocBlocks bm bs = mapM_ (uncurry $ unallocBlocksContig bm) (contigExts bs)
-  where
-    contigExts     = map toExt . contigGroups . sort
-    toExt []       = error "Empty contiguous group: should not happen"
-    toExt xs@(x:_) = (x, x + fromIntegral (length xs) - 1)
-
--- |Return the number of blocks currently left
-numFreeBlocks
-  :: (Monad m, Reffable r m, Bitmapped b m) =>
-     BlockMap b r
-  -> m Word64
-numFreeBlocks = readRef . bmNumFree
-
 --------------------------------------------------------------------------------
 -- Utility functions
 
@@ -334,3 +335,5 @@ adjGroupBy p (x:xs) = (x:ys) : adjGroupBy p zs
 contigGroups :: Num a => [a] -> [[a]]
 contigGroups = adjGroupBy $ \x y -> y - x == 1
 
+mapFst :: (a -> b) -> (a, c) -> (b, c)
+mapFst f (x,y) = (f x, y)

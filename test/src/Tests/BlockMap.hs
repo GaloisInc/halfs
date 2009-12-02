@@ -50,17 +50,13 @@ propM_blockMapWR g dev = do
   orig <- run $ newBlockMap dev
   run $ writeBlockMap dev orig
   read1 <- run $ readBlockMap dev
-  assertEq numFreeBlocks          orig read1
-  assertEq (toList . bmUsedMap)   orig read1
-  assertEq (readRef . bmFreeTree) orig read1
+  check orig read1
 
   -- rewrite & reread after first read to ensure no baked-in behavior
   -- betwixt initial blockmap and the de/serialization functions
   run $ writeBlockMap dev read1
   read2 <- run $ readBlockMap dev
-  assertEq numFreeBlocks          read1 read2
-  assertEq (toList . bmUsedMap)   read1 read2
-  assertEq (readRef . bmFreeTree) read1 read2
+  check read1 read2
 
 {-
   -- temp
@@ -103,4 +99,15 @@ propM_blockMapWR g dev = do
 -}
 
   where
-    assertEq f x y = assert =<< liftM2 (==) (run . f $ x) (run . f $ y) 
+    assertEq f x y = assert =<< liftM2 (==) (run . f $ x) (run . f $ y)
+    check x y = do
+      assertEq numFreeBlocks          x y
+      assertEq (toList . bmUsedMap)   x y
+      assertEq (readRef . bmFreeTree) x y
+
+propM_blockMapIntegrity :: (Reffable r m, Bitmapped b m, Functor m) =>
+                           BDGeom
+                        -> BlockDevice m
+                        -> PropertyM m ()
+propM_blockMapIntegrity g dev = do
+  return () 

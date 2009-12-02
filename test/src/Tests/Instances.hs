@@ -22,7 +22,6 @@ data BDGeom = BDGeom
 powTwo :: Int -> Int -> Gen Word64
 powTwo l h = assert (l >= 0 && h <= 63) $ shiftL 1 <$> choose (l, h)
 
-
 instance Arbitrary BDGeom where
   arbitrary = 
     BDGeom
