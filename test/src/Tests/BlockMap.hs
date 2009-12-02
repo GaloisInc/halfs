@@ -110,4 +110,6 @@ propM_blockMapIntegrity :: (Reffable r m, Bitmapped b m, Functor m) =>
                         -> BlockDevice m
                         -> PropertyM m ()
 propM_blockMapIntegrity g dev = do
+  -- HERE: TODO: Determine a way to generate QC data for alloc/unalloc
+  -- sequences
   return () 

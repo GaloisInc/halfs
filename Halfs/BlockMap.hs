@@ -1,15 +1,16 @@
 {-# LANGUAGE MultiParamTypeClasses, FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances, BangPatterns #-}
-module Halfs.BlockMap(
-         BlockMap(..)
-       , newBlockMap
-       , readBlockMap
-       , writeBlockMap
-       , allocBlocks
-       , unallocBlocks
-       , unallocBlocksContig
-       , numFreeBlocks
-       )
+module Halfs.BlockMap
+  ( BlockMap(..)
+  , Extent(..)
+  , newBlockMap
+  , readBlockMap
+  , writeBlockMap
+  , allocBlocks
+  , unallocBlocks
+  , unallocBlocksContig
+  , numFreeBlocks
+  )
  where
 
 import Control.Exception (assert)
@@ -51,10 +52,10 @@ import Debug.Trace
 TODO: 
 
  * The distinction between unallocBlocksContig and unallocBlocks is
-   gross, as is the mixed representation between start/end and groups of
-   blocks.  Since allocations are coming from the free tree anyway, we
-   might as well just use Extents, and have the allocator yield
-   something like (e.g.):
+   gross, as is the mixed representation between start/end and a block
+   list.  Since allocations are coming from the free tree anyway, we
+   might as well just use Extents everywhere, and have the allocBlocks
+   function yield something like (e.g.):
 
    data BlockGroup = Contig Extent | Discontig [Extent]
 
@@ -65,7 +66,7 @@ TODO:
 
 -}
 
-data Extent = Extent { _extBase :: Word64, _extSz :: Word64 }
+data Extent = Extent { extBase :: Word64, extSz :: Word64 }
   deriving (Show, Eq)
 
 newtype ExtentSize = ES Word64
@@ -109,7 +110,7 @@ newBlockMap :: (Monad m, Reffable r m, Bitmapped b m) =>
                BlockDevice m
             -> m (BlockMap b r)
 newBlockMap dev = do
-  when (numBlks < 3) $ fail "Block device is too small for block map creation"
+  when (numFree == 0) $ fail "Block device is too small for block map creation"
 
   trace ("newBlockMap: numBlks = " ++ show numBlks) $ do
   trace ("newBlockMap: totalBits = " ++ show totalBits) $ do
