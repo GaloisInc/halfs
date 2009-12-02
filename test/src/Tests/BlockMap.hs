@@ -69,6 +69,27 @@ propM_blockMapWR g dev = do
   trace ("blks = " ++ show blks) $ do  
   t2 <- run $ readRef $ bmFreeTree orig
   trace ("t2 = " ++ show t2) $ do
+
+  trace ("unallocing [3,4]") $ do
+  run $ unallocBlocks orig 3 4
+  t3 <- run $ readRef $ bmFreeTree orig
+  trace ("t3 = " ++ show t3) $ do
+
+  trace ("unallocing [16..25]") $ do
+  run $ unallocBlocks orig 16 25
+  t4 <- run $ readRef $ bmFreeTree orig
+  trace ("t4 = " ++ show t4) $ do
+
+  blks2 <- run $ allocBlocks orig 11
+  trace ("blks2 = " ++ show blks2) $ do  
+  t5 <- run $ readRef $ bmFreeTree orig
+  trace ("t5 = " ++ show t5) $ do
+
+  blks3 <- run $ allocBlocks orig 11
+  trace ("blks3 = " ++ show blks3) $ do  
+  t6 <- run $ readRef $ bmFreeTree orig
+  trace ("t6 = " ++ show t6) $ do
+
   assert True
   -- temp
 

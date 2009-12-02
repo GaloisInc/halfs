@@ -17,6 +17,7 @@ import Data.Bits hiding (setBit)
 import qualified Data.Bits as B
 import qualified Data.ByteString as BS
 import Data.FingerTree
+import qualified Data.Foldable as DF
 import Data.Monoid
 import Data.Word
 import Prelude hiding (null)
@@ -213,47 +214,41 @@ allocBlocks bm numBlocks = do
             writeRef (bmNumFree bm) (available - numBlocks)
             return (Just blocks)
 
--- Precondition: There is sufficient free space in the free tree to accomodate
--- the given goal size (although that space may not be contiguous).
 findSpace :: Word64 -> FreeTree -> ([Word64], FreeTree)
 findSpace goalSz freeTree =
+  assert preCond $ -- There is sufficient space in the free tree to accomodate
+                   -- the given goal size (although that space may not be
+                   -- contiguous)
   case viewl treeR of
-    EmptyL                       -> 
-      -- must gather smaller extents
-      let (exts, treeL') = gatherL (viewr treeL) (0, [])
-      in
-        trace ("exts = " ++ show exts ++ ", treeL' = " ++ show treeL) $
-        undefined
-    (ext@(Extent b sz) :< treeR') -> 
-      -- contiguous blocks found
-      ( [b .. b + goalSz - 1]
+    EmptyL -> -- Cannot find an extent large enough, so gather smaller extents
+      trace ("exts = " ++ show exts ++ "\n, treeL' = " ++ show treeL') $
+      (concat exts, treeL') where (exts, treeL') = gatherL (viewr treeL) (0, [])
+
+    Extent b sz :< treeR' -> -- Found an extent with size >= the goal size
+      ( blockRange b goalSz
       , treeL
-        >< if sz > goalSz
-           then singleton $ Extent (b + goalSz) (sz - goalSz)
-           else empty
-        >< treeR'
+        ><
+        if sz > goalSz
+        then singleton $ Extent (b + goalSz) (sz - goalSz)
+        else empty
+        ><
+        treeR'
       )
   where
-    (treeL, treeR) = splitBlockSz goalSz freeTree
+    preCond         = goalSz <= DF.foldr (\(Extent _ s1) -> (s1 +)) 0 freeTree
+    (treeL, treeR)  = splitBlockSz goalSz freeTree
+    blockRange b sz = [b .. b + sz - 1]
     -- 
     gatherL EmptyR _ = error "Precondition violated: insufficent space"
-    gatherL (treeL' :> ext@(Extent b sz)) (accSz, exts)
-      | accSz + sz < goalSz  = gatherL (viewr treeL') (accSz + sz, ext : exts) 
-      | otherwise = -- accSz + sz >= goalSz
-          -- let ext = Extent { extBase = 16, extSz = 7 } 
-          -- accSz = 100, sz = 7, goalSz = 102, b = 16
-          -- diff = accSz + sz - goalSz  
-          --      = 100   + 7  - 102
-          --      = 5 
-          -- newExt = Extent (b + diff) (sz - diff)
-          --        = Extent (16 + 5) (7 - 5)
-          --        = Extent 21 2 --> 21, 22, 23
-          -- oldExt = Extent b diff
-          --        = Extent 16 5 --> 16, 17, 18, 19, 20
-          let diff = accSz + sz - goalSz
-          in ( Extent (b + diff) (sz - diff) : exts
-             , treeL' >< if diff == 0 then empty else singleton (Extent b diff)
-             )
+    gatherL (treeL' :> Extent b sz) (accSz, exts)
+      | accSz + sz < goalSz = gatherL (viewr treeL')
+                                      (accSz + sz, blockRange b sz : exts) 
+      | accSz + sz == goalSz = (blockRange b sz : exts, treeL')
+      | otherwise =
+          -- We've exceeded the goal, so split the extent we just encountered
+          (blockRange (b + diff) (sz - diff) : exts, treeL' >< extra)
+          where diff  = accSz + sz - goalSz
+                extra = singleton $ Extent b diff
 
 -- | Mark a given set of contiguous blocks as unused
 unallocBlocks :: (Monad m, Reffable r m, Bitmapped b m) =>
@@ -261,7 +256,14 @@ unallocBlocks :: (Monad m, Reffable r m, Bitmapped b m) =>
            -> Word64       -- ^ start block address
            -> Word64       -- ^ end block address
            -> m ()
-unallocBlocks = undefined
+unallocBlocks bm s e = do
+  -- TODO: modify usedMap here as well; has same non-escape problem as in allocBlocks
+  available <- readRef $! bmNumFree bm
+  freeTree  <- readRef $! bmFreeTree bm
+  writeRef (bmFreeTree bm) $ insert (Extent s numBlocks) freeTree
+  writeRef (bmNumFree bm)  $ available + numBlocks
+  where
+    numBlocks = e - s + 1
 
 -- |Return the number of blocks currently left
 numFreeBlocks :: (Monad m, Reffable r m, Bitmapped b m) =>
