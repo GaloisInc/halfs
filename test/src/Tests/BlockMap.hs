@@ -65,7 +65,7 @@ propM_blockMapWR g dev = do
   -- temp
   t1 <- run $ readRef $ bmFreeTree orig
   trace ("t1 = " ++ show t1) $ do
-  blks <- run $ allocBlocks orig 31
+  blks <- run $ allocBlocks orig 50
   trace ("blks = " ++ show blks) $ do  
   t2 <- run $ readRef $ bmFreeTree orig
   trace ("t2 = " ++ show t2) $ do

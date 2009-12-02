@@ -218,26 +218,41 @@ allocBlocks bm numBlocks = do
 findSpace :: Word64 -> FreeTree -> ([Word64], FreeTree)
 findSpace goalSz freeTree =
   case viewl treeR of
-    EmptyL                       ->
-      error ("viewl treeR == empty: unhandled case")
-    (ext@(Extent b _) :< treeR') -> 
+    EmptyL                       -> 
+      -- must gather smaller extents
+      let (exts, treeL') = gatherL (viewr treeL) (0, [])
+      in
+        trace ("exts = " ++ show exts ++ ", treeL' = " ++ show treeL) $
+        undefined
+    (ext@(Extent b sz) :< treeR') -> 
       -- contiguous blocks found
-      ([b..b + goalSz - 1], treeL >< remTree ext >< treeR')
+      ( [b .. b + goalSz - 1]
+      , treeL
+        >< if sz > goalSz
+           then singleton $ Extent (b + goalSz) (sz - goalSz)
+           else empty
+        >< treeR'
+      )
   where
     (treeL, treeR) = splitBlockSz goalSz freeTree
     -- 
-    remTree (Extent b sz)
-      | sz > goalSz = singleton $ Extent (b + goalSz) (sz - goalSz)
-      | otherwise   = empty
-    --
     gatherL EmptyR _ = error "Precondition violated: insufficent space"
     gatherL (treeL' :> ext@(Extent b sz)) (accSz, exts)
       | accSz + sz < goalSz  = gatherL (viewr treeL') (accSz + sz, ext : exts) 
-      | accSz + sz == goalSz = (ext : exts, treeL')
-      | otherwise = -- accSz + sz > goalSz
+      | otherwise = -- accSz + sz >= goalSz
+          -- let ext = Extent { extBase = 16, extSz = 7 } 
+          -- accSz = 100, sz = 7, goalSz = 102, b = 16
+          -- diff = accSz + sz - goalSz  
+          --      = 100   + 7  - 102
+          --      = 5 
+          -- newExt = Extent (b + diff) (sz - diff)
+          --        = Extent (16 + 5) (7 - 5)
+          --        = Extent 21 2 --> 21, 22, 23
+          -- oldExt = Extent b diff
+          --        = Extent 16 5 --> 16, 17, 18, 19, 20
           let diff = accSz + sz - goalSz
           in ( Extent (b + diff) (sz - diff) : exts
-             , treeL' >< singleton (Extent b undefined) -- HERE
+             , treeL' >< if diff == 0 then empty else singleton (Extent b diff)
              )
 
 -- | Mark a given set of contiguous blocks as unused
