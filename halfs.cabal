@@ -48,7 +48,8 @@ executable halfs-tests
     buildable: False
 
   build-depends:    QuickCheck == 2.1.0.2,
-                    directory  >= 1.0.0.3
+                    directory  >= 1.0.0.3,
+                    random     >= 1.0.0.1           
 
   hs-source-dirs: test/src . 
   main-is: Driver.hs
