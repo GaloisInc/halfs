@@ -28,14 +28,17 @@ qcProps :: Bool -> [(Args, Property)]
 qcProps quickMode =
   [
 --     numTests 25 $ geomProp "BlockMap de/serialization" memDev propM_blockMapWR
---   , numTests 50 $ geomProp
---                     "BlockMap internal integrity under contiguous alloc/unalloc"
---                     memDev
---                     propM_bmInOrderAllocUnallocIntegrity
+--  ,
+    numTests 2000 $ geomProp
+                    "BlockMap internal integrity under contiguous alloc/unalloc"
+                    memDev
+                    propM_bmInOrderAllocUnallocIntegrity
+{-
     numTests 1 $ geomProp
                     "BlockMap internal integrity under contiguous alloc/unalloc"
                     memDev
                     propM_bmOutOfOrderAllocUnallocIntegrity
+-}
   ]
   where
     numTests n  = (,) $ if quickMode then stdArgs{maxSuccess = n} else stdArgs
@@ -95,11 +98,18 @@ propM_bmInOrderAllocUnallocIntegrity _g dev = do
   ------------------------------------------------------------------------------
   -- (1a) Check integrity during sequence of contiguous block allocations
   forM_ (subs `zip` availSeq (-) avail subs) $ \(sub, avail') -> do
-    Just blks <- run $ allocBlocks bm (extSz sub)
-    assert (head blks == extBase sub)                -- got expected base
-    assert (fromIntegral (length blks) == extSz sub) -- got expected size
-    checkUsedMap bm sub True
-    checkAvail bm avail'
+    mblkGroup <- run $ allocBlocks bm (extSz sub)
+    maybe (fail "propM_bmAllocUnallocIntegrity: Allocation request failed")
+          (\blkGroup -> case blkGroup of
+            Contig allocExt -> do
+              assert (allocExt == sub) -- got expected base & size; this only
+                                       -- works because we are doing in-order
+                                       -- contiguous allocation
+              checkUsedMap bm sub True
+              checkAvail bm avail'
+            _ -> fail $ "propM_bmAllocUnallocIntegrity: Expected "
+                        ++ "contiguous allocation"
+          ) mblkGroup
   ------------------------------------------------------------------------------
   -- (1b) After all allocations, check that an additional allocation fails and
   --      used map is entirely marked 'used'.
@@ -111,7 +121,11 @@ propM_bmInOrderAllocUnallocIntegrity _g dev = do
   --      perturbations in this simple property.
   let rsubs = Prelude.reverse subs 
   forM_ (rsubs `zip` availSeq (+) 0 rsubs) $ \(sub, avail') -> do
-    run $ unallocBlocksContig bm (extBase sub) (extBase sub + extSz sub - 1)
+    -- If we haven't failed before now, we know that all subextents were
+    -- contiguously allocated, so we don't have to directly track the return
+    -- value of allocBlocks in order to supply the correct BlockGroup to
+    -- unallocBlocks.
+    run $ unallocBlocks bm (Contig sub) 
     checkUsedMap bm sub False
     checkAvail bm avail'
   ------------------------------------------------------------------------------ 
@@ -120,6 +134,7 @@ propM_bmInOrderAllocUnallocIntegrity _g dev = do
   checkUsedMap bm ext False
   assert =<< isJust `fmap` run (allocBlocks bm 1)
 
+{-
 -- | Ensures that a new blockmap subjected to a series of (1) random,
 -- out-of-order, block allocations that entirely cover the free region
 -- followed by (2) out-of-order unallocations maintains integrity with
@@ -169,6 +184,8 @@ oooAllocUnalloc bm allocated szToAlloc = do
       trace ("here3") $ do 
       return blks
 
+-}
+
 --------------------------------------------------------------------------------
 -- Misc helpers
 
@@ -186,7 +203,7 @@ checkUsedMap :: Bitmapped b m =>
              -> Bool
              -> PropertyM m ()
 checkUsedMap bm ext used =
-  assert =<< liftM ((if used then and else not . or) . (\x -> trace ("bmap region = " ++ show x) x))
+  assert =<< liftM ((if used then and else not . or) {-. (\x -> trace ("bmap region = " ++ show x) x)-})
                    (run $ mapM (checkBit $ bmUsedMap bm) (blkRangeExt ext))
 
 

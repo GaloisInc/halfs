@@ -3,7 +3,8 @@
 module Halfs.BlockMap
   (
   -- * Types
-    BlockMap(..)
+    BlockGroup(..)
+  , BlockMap(..)
   , Extent(..)
   -- * Block Map creation, de/serialization, and query functions
   , newBlockMap
@@ -13,10 +14,10 @@ module Halfs.BlockMap
   -- * Block Map allocation/unallocation functions
   , allocBlocks
   , unallocBlocks
-  , unallocBlocksContig
   -- * Utility functions
   , blkRange
   , blkRangeExt
+  , blkRangeBG
   )
  where
 
@@ -66,12 +67,14 @@ TODO:
 
    data BlockGroup = Contig Extent | Discontig [Extent]
 
-   together with a simple toplevel function to expand an extent into
+   together with a simple toplevel function to expand a BlockGroup into
    block addresses.
 
    This'll make life a lot easier when we want to unalloc block groups.
 
 -}
+
+data BlockGroup = Contig Extent | Discontig [Extent]
 
 data Extent = Extent { extBase :: Word64, extSz :: Word64 }
   deriving (Show, Eq)
@@ -225,14 +228,14 @@ writeBlockMap dev bmap = do
 -- | Allocate a set of blocks from the disk. This routine will attempt
 -- to fetch a contiguous set of blocks, but isn't guaranteed to do so.
 -- Contiguous blocks are represented via the Contig constructor of the
--- BlockGroup datatype; discontiguous blocks via Discontig.  If there
+-- BlockGroup datatype, discontiguous blocks via Discontig.  If there
 -- aren't enough blocks available, this function yields Nothing.
 allocBlocks :: (Monad m, Reffable r m, Bitmapped b m) =>
                BlockMap b r
             -- ^ the block map 
             -> Word64
             -- ^ requested number of blocks to allocate
-            -> m (Maybe [Word64])
+            -> m (Maybe BlockGroup)
 allocBlocks bm numBlocks = do
   available <- readRef $! bmNumFree bm
   if available < numBlocks
@@ -240,13 +243,14 @@ allocBlocks bm numBlocks = do
       return Nothing
     else do
       freeTree <- readRef $! bmFreeTree bm
-      let (blocks, freeTree') = findSpace numBlocks freeTree
-      trace ("Setting bits True for the following blocks: " ++ show blocks) $ do 
-      forM_ blocks $ setBit $ bmUsedMap bm
+      let (blkGroup, freeTree') = findSpace numBlocks freeTree
+--      trace ("Setting bits True for the following blocks: " ++ show (blkRangeBG blkGroup)) $ do 
+      forM_ (blkRangeBG blkGroup) $ setBit $ bmUsedMap bm
       writeRef (bmFreeTree bm) freeTree'
       writeRef (bmNumFree bm) (available - numBlocks)
-      return (Just blocks)
+      return $ Just blkGroup
 
+{-
 -- | Mark a given set of contiguous blocks as unused
 unallocBlocksContig :: (Monad m, Reffable r m, Bitmapped b m) =>
                        BlockMap b r -- ^ the block map
@@ -275,27 +279,43 @@ unallocBlocks bm bs = mapM_ (uncurry $ unallocBlocksContig bm) (contigExts bs)
     contigExts     = map toExt . contigGroups . sort
     toExt []       = error "Empty contiguous group: should not happen"
     toExt xs@(x:_) = (x, x + fromIntegral (length xs) - 1)
+-}
 
--- |Return the number of blocks currently left
-numFreeBlocks
-  :: (Monad m, Reffable r m, Bitmapped b m) =>
-     BlockMap b r
-  -> m Word64
+-- NB: unallocBlocks is probably a good place to handle lightweight
+-- coalescing (try to glue extents being unallocated onto existing
+-- extents in the freetree) or heavyweight coalescing (insert this batch
+-- of extents being unallocated and invoke a freetree-wide coalesce
+-- operation, probably subject to an internal fragmentation threshold)
+
+-- | Mark a given block group as unused
+unallocBlocks :: (Monad m, Reffable r m, Bitmapped b m) =>
+                 BlockMap b r -- ^ the block map
+              -> BlockGroup
+              -> m ()
+unallocBlocks bm (Discontig exts) = mapM_ (unallocBlocks bm . Contig) exts
+unallocBlocks bm (Contig ext)     = do
+  avail    <- numFreeBlocks bm
+  freeTree <- readRef $! bmFreeTree bm
+  forM_ (blkRangeExt ext) $ clearBit $ bmUsedMap bm
+  writeRef (bmFreeTree bm) $ insert ext freeTree
+  writeRef (bmNumFree bm)  $ avail + extSz ext
+
+-- | Return the number of blocks currently left
+numFreeBlocks :: (Monad m, Reffable r m, Bitmapped b m) =>
+                 BlockMap b r
+              -> m Word64
 numFreeBlocks = readRef . bmNumFree
 
-findSpace :: Word64 -> FreeTree -> ([Word64], FreeTree)
+findSpace :: Word64 -> FreeTree -> (BlockGroup, FreeTree)
 findSpace goalSz freeTree =
   -- Precondition: There is sufficient space in the free tree to accomodate the
   -- given goal size, although that space may not be contiguous
-  assert preCond $
+  assert (goalSz <= DF.foldr (\e -> (extSz e +)) 0 freeTree) $ do
+  let (treeL, treeR) = splitBlockSz goalSz freeTree
   case viewl treeR of
-    EmptyL -> 
-      -- Cannot find an extent large enough, so gather smaller extents
-      mapFst concat $ gatherL (viewr treeL) 0 []
-
     Extent b sz :< treeR' -> 
       -- Found an extent with size >= the goal size
-      ( blkRange b goalSz
+      ( Contig $ Extent b goalSz 
       , treeL
         ><
         -- Split the extent when it exceeds the goal size
@@ -305,25 +325,26 @@ findSpace goalSz freeTree =
         ><
         treeR'
       )
-  where
-    preCond         = goalSz <= DF.foldr (\e -> (extSz e +)) 0 freeTree
-    (treeL, treeR)  = splitBlockSz goalSz freeTree
-    -- 
-    gatherL :: ViewR (FingerTree ExtentSize) Extent
-            -> Word64
-            -> [[Word64]]
-            -> ([[Word64]], FreeTree)
-    gatherL EmptyR _ _ = error "Precondition violated: insufficent space"
-    gatherL (treeL' :> Extent b sz) accSz accRngs
-      | accSz + sz < goalSz = gatherL (viewr treeL')
-                                      (accSz + sz)
-                                      (blkRange b sz : accRngs) 
-      | accSz + sz == goalSz = (blkRange b sz : accRngs, treeL')
-      | otherwise =
-          -- We've exceeded the goal, so split the extent we just encountered
-          (blkRange (b + diff) (sz - diff) : accRngs, treeL' >< extra)
-          where diff  = accSz + sz - goalSz
-                extra = singleton $ Extent b diff
+
+    EmptyL -> 
+      -- Cannot find an extent large enough, so gather smaller extents
+      fmapFst Discontig $ gatherL (viewr treeL) 0 []
+      where
+        gatherL :: ViewR (FingerTree ExtentSize) Extent
+                -> Word64
+                -> [Extent]
+                -> ([Extent], FreeTree)
+        gatherL EmptyR _ _ = error "Precondition violated: insufficent space"
+        gatherL (treeL' :> ext@(Extent b sz)) accSz accExts
+          | accSz + sz < goalSz = gatherL (viewr treeL')
+                                          (accSz + sz)
+                                          (ext : accExts) 
+          | accSz + sz == goalSz = (ext : accExts, treeL')
+          | otherwise =
+            -- We've exceeded the goal, so split the extent we just encountered
+            (Extent (b + diff) (sz - diff) : accExts, treeL' >< extra)
+            where diff  = accSz + sz - goalSz
+                  extra = singleton $ Extent b diff
 
 --------------------------------------------------------------------------------
 -- Utility functions
@@ -333,6 +354,10 @@ blkRange b sz = [b .. b + sz - 1]
 
 blkRangeExt :: Extent -> [Word64]
 blkRangeExt (Extent b sz) = blkRange b sz
+
+blkRangeBG :: BlockGroup -> [Word64]
+blkRangeBG (Contig ext)     = blkRangeExt ext
+blkRangeBG (Discontig exts) = concatMap blkRangeExt exts
 
 divCeil :: Integral a => a -> a -> a
 divCeil a b = (a + (b - 1)) `div` b
@@ -349,5 +374,5 @@ adjGroupBy p (x:xs) = (x:ys) : adjGroupBy p zs
 contigGroups :: Num a => [a] -> [[a]]
 contigGroups = adjGroupBy $ \x y -> y - x == 1
 
-mapFst :: (a -> b) -> (a, c) -> (b, c)
-mapFst f (x,y) = (f x, y)
+fmapFst :: (a -> b) -> (a, c) -> (b, c)
+fmapFst f (x,y) = (f x, y)
