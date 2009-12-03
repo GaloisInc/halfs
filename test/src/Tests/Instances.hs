@@ -122,15 +122,15 @@ permute xs = do
 --------------------------------------------------------------------------------
 -- Instances and helpers
 
-instance Arbitrary BDGeom where
-  arbitrary = 
-    BDGeom
-    <$> powTwo 10 13   -- 1024..8192 sectors
-    <*> powTwo  8 12   -- 256b..4K sector size
-                       -- => 256K .. 32M filesystem siz
-
 -- instance Arbitrary BDGeom where
---  arbitrary = return $ BDGeom 64 4
+--   arbitrary = 
+--     BDGeom
+--     <$> powTwo 10 13   -- 1024..8192 sectors
+--     <*> powTwo  8 12   -- 256b..4K sector size
+--                        -- => 256K .. 32M filesystem siz
+
+instance Arbitrary BDGeom where
+ arbitrary = return $ BDGeom 64 4
 
 instance Random Word64 where
   randomR = integralRandomR

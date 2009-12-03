@@ -29,7 +29,7 @@ qcProps quickMode =
   [
 --     numTests 25 $ geomProp "BlockMap de/serialization" memDev propM_blockMapWR
 --  ,
-    numTests 2000 $ geomProp
+    numTests 1 $ geomProp
                     "BlockMap internal integrity under contiguous alloc/unalloc"
                     memDev
                     propM_bmInOrderAllocUnallocIntegrity

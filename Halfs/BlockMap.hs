@@ -244,48 +244,11 @@ allocBlocks bm numBlocks = do
     else do
       freeTree <- readRef $! bmFreeTree bm
       let (blkGroup, freeTree') = findSpace numBlocks freeTree
---      trace ("Setting bits True for the following blocks: " ++ show (blkRangeBG blkGroup)) $ do 
+      trace ("Setting bits True for the following blocks: " ++ show (blkRangeBG blkGroup)) $ do 
       forM_ (blkRangeBG blkGroup) $ setBit $ bmUsedMap bm
       writeRef (bmFreeTree bm) freeTree'
       writeRef (bmNumFree bm) (available - numBlocks)
       return $ Just blkGroup
-
-{-
--- | Mark a given set of contiguous blocks as unused
-unallocBlocksContig :: (Monad m, Reffable r m, Bitmapped b m) =>
-                       BlockMap b r -- ^ the block map
-                    -> Word64       -- ^ start block address
-                    -> Word64       -- ^ end block address
-                    -> m ()
-unallocBlocksContig bm s e = do
-  assert (e >= s) $ do
-  available <- readRef $! bmNumFree bm
-  freeTree  <- readRef $! bmFreeTree bm
-  forM_ [s .. e] $ clearBit $ bmUsedMap bm
-  writeRef (bmFreeTree bm) $ insert (Extent s numBlocks) freeTree
-  writeRef (bmNumFree bm)  $ available + numBlocks
-  where
-    numBlocks = e - s + 1
-
--- | Unallocate the given set of blocks; note that if the set of blocks
--- is known to be contiguous, unallocBlocksContig is preferred
-unallocBlocks :: (Monad m, Reffable r m, Bitmapped b m) =>
-                 BlockMap b r -- ^ the block map
-              -> [Word64]     -- ^ the blocks to unalloc
-              -> m ()
-unallocBlocks _ []  = return ()
-unallocBlocks bm bs = mapM_ (uncurry $ unallocBlocksContig bm) (contigExts bs)
-  where
-    contigExts     = map toExt . contigGroups . sort
-    toExt []       = error "Empty contiguous group: should not happen"
-    toExt xs@(x:_) = (x, x + fromIntegral (length xs) - 1)
--}
-
--- NB: unallocBlocks is probably a good place to handle lightweight
--- coalescing (try to glue extents being unallocated onto existing
--- extents in the freetree) or heavyweight coalescing (insert this batch
--- of extents being unallocated and invoke a freetree-wide coalesce
--- operation, probably subject to an internal fragmentation threshold)
 
 -- | Mark a given block group as unused
 unallocBlocks :: (Monad m, Reffable r m, Bitmapped b m) =>
@@ -361,18 +324,6 @@ blkRangeBG (Discontig exts) = concatMap blkRangeExt exts
 
 divCeil :: Integral a => a -> a -> a
 divCeil a b = (a + (b - 1)) `div` b
-
--- Group by, but compares adjacent elements in the input list
-adjGroupBy :: (a -> a -> Bool) -> [a] -> [[a]]
-adjGroupBy _ []     =  []
-adjGroupBy p (x:xs) = (x:ys) : adjGroupBy p zs
-  where (ys,zs) = aux x xs
-        --
-        aux x' (q:qs) | p x' q = (q:ys', zs') where (ys',zs') = aux q qs
-        aux _ xs'              = ([], xs')
-
-contigGroups :: Num a => [a] -> [[a]]
-contigGroups = adjGroupBy $ \x y -> y - x == 1
 
 fmapFst :: (a -> b) -> (a, c) -> (b, c)
 fmapFst f (x,y) = (f x, y)
