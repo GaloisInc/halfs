@@ -5,7 +5,7 @@ where
 
 import Control.Applicative       ((<$>), (<*>))
 import Control.Exception         (assert)
-import Control.Monad             (replicateM)
+import Control.Monad             (foldM, replicateM)
 import Data.Bits                 (shiftL)
 import Data.ByteString           (ByteString)
 import qualified Data.ByteString as BS
@@ -107,18 +107,30 @@ arbBlockData (BDGeom _cnt sz) =
 byte :: Gen Word8
 byte = fromIntegral `fmap` choose (0 :: Int, 255)
 
+-- | A hacky, inefficient-but-good-enough permuter
+permute :: [a] -> Gen [a]
+permute xs = do
+  let len = fromIntegral $ length xs
+  foldM rswap xs $ replicate len len
+  where
+    rswap [] _       = return []
+    rswap (x:xs') len = do
+      i <- choose (0, len - 1)
+      return $ let (l,r) = splitAt i xs'
+               in l ++ [x] ++ r
+
 --------------------------------------------------------------------------------
 -- Instances and helpers
 
-instance Arbitrary BDGeom where
-  arbitrary = 
-    BDGeom
-    <$> powTwo 10 13   -- 1024..8192 sectors
-    <*> powTwo  8 12   -- 256b..4K sector size
-                       -- => 256K .. 32M filesystem siz
-
 -- instance Arbitrary BDGeom where
---  arbitrary = return $ BDGeom 64 4
+--   arbitrary = 
+--     BDGeom
+--     <$> powTwo 10 13   -- 1024..8192 sectors
+--     <*> powTwo  8 12   -- 256b..4K sector size
+--                        -- => 256K .. 32M filesystem siz
+
+instance Arbitrary BDGeom where
+ arbitrary = return $ BDGeom 64 4
 
 instance Random Word64 where
   randomR = integralRandomR

@@ -8,6 +8,7 @@ where
 import Control.Monad
 import Data.FingerTree
 import Data.Maybe (isNothing, isJust)
+import Data.Word
 import Prelude hiding (null)
 import Test.QuickCheck hiding (numTests)
 import Test.QuickCheck.Monadic
@@ -26,11 +27,16 @@ import Debug.Trace
 
 qcProps :: Bool -> [(Args, Property)]
 qcProps quickMode =
-  [ numTests 25 $ geomProp "BlockMap de/serialization" memDev propM_blockMapWR
-  , numTests 50 $ geomProp
+  [
+--     numTests 25 $ geomProp "BlockMap de/serialization" memDev propM_blockMapWR
+--   , numTests 50 $ geomProp
+--                     "BlockMap internal integrity under contiguous alloc/unalloc"
+--                     memDev
+--                     propM_bmInOrderAllocUnallocIntegrity
+    numTests 1 $ geomProp
                     "BlockMap internal integrity under contiguous alloc/unalloc"
                     memDev
-                    propM_bmInOrderAllocUnallocIntegrity
+                    propM_bmOutOfOrderAllocUnallocIntegrity
   ]
   where
     numTests n  = (,) $ if quickMode then stdArgs{maxSuccess = n} else stdArgs
@@ -78,14 +84,7 @@ propM_bmInOrderAllocUnallocIntegrity ::
   -> PropertyM m ()
 propM_bmInOrderAllocUnallocIntegrity _g dev = do
 --  trace ("propM_bmAllocUnallocIntegrity: g = " ++ show g) $ do
-  bm          <- run $ newBlockMap dev
-  avail       <- numFree bm
-  initialTree <- run $ readRef $ bmFreeTree bm
-  -- NB: ext is the maximally-sized free region for this device
-  ext         <- case viewl initialTree of
-    e :< t' -> assert (null t') >> return e
-    EmptyL  -> assert False     >> fail "New blockmap's freetree is empty"
-
+  (bm, avail, ext) <- initBM dev
   -- Check initial state
   checkUsedMap bm ext False
   checkAvail bm (extSz ext)
@@ -121,12 +120,80 @@ propM_bmInOrderAllocUnallocIntegrity _g dev = do
   -- 'unused' and an additional allocation succeeds.
   checkUsedMap bm ext False
   assert =<< isJust `fmap` run (allocBlocks bm 1)
-  where
-    availSeq op x = drop 1 . scanl op x . map extSz
-    numFree       = run . readRef . bmNumFree 
-    -- Check that the given free block count is the same as the blockmap reports
-    checkAvail bm x = assert =<< liftM2 (==) (numFree bm) (return x)
-    -- Check that the given extent is marked as un/used in the usedMap
-    checkUsedMap bm ext used =
-      assert =<< liftM (if used then and else not . or)
-                       (run $ mapM (checkBit $ bmUsedMap bm) (blkRangeExt ext))
+
+-- | Ensures that a new blockmap subjected to a series of (1) random,
+-- out-of-order, block allocations that entirely cover the free region
+-- followed by (2) out-of-order unallocations maintains integrity with
+-- respect to free block counts, used map contents, and freetree
+-- structure.
+propM_bmOutOfOrderAllocUnallocIntegrity ::
+  (Reffable r m, Bitmapped b m, Functor m) =>
+     BDGeom
+  -> BlockDevice m
+  -> PropertyM m ()
+propM_bmOutOfOrderAllocUnallocIntegrity _g dev = do
+  (bm, avail, ext) <- initBM dev
+  forAllM (permute =<< arbExtents ext) $ \subs -> do
+    trace ("subs = " ++ show subs) $ do
+    foldM_ oooAllocUnalloc ([], []) subs
+--    forM_ (subs `zip` availSeq (-) avail subs) $ \(sub, avail') -> do
+--      trace ("sub = " ++ show sub ++ ", avail' = " ++ show avail') $ do
+--      return ()                                                             
+
+-- TODO: may need a 'skipped' list as well for when we decide to only dealloc...
+-- when we later decide to alloc, pull from the skipped list first...but this
+-- approach is flawed because we need to keep iterating this function until both
+-- the input extent list and the 'skipped' list is exhausted :( We could somehow
+-- keep folding at the top level until the skipped list is exhaused... blech.
+--
+-- what about StateT (PropertyM m) () or something similar...?
+--
+-- or, alternately, we just ensure that if a given step chooses to dealloc, it
+-- always does a continual dealloc...? Or pass a flag that is true on the last
+-- allocation so we just deallocate everything pending at that time...? ? Blech!
+--
+-- Probably need to carry a block list along with the dealloc'd list
+-- as well!
+oooAllocUnalloc :: Monad m => ([Extent], [Extent]) -> Extent -> PropertyM m ([Extent], [Extent])
+oooAllocUnalloc (allocd, unallocd) extToAlloc = do
+  trace ("extToAlloc = " ++ show extToAlloc) $ do
+  forAllM (arbitrary :: Gen Bool) $ \shouldAlloc ->
+    trace ("shouldAlloc = " ++ show shouldAlloc) $ do 
+    return ([], [])
+
+--------------------------------------------------------------------------------
+-- Misc helpers
+
+availSeq :: (a -> Word64 -> a) -> a -> [Extent] -> [a]
+availSeq op x = drop 1 . scanl op x . map extSz
+
+-- | Check that the given free block count is the same as the blockmap reports
+checkAvail :: Reffable r m => BlockMap b r -> Word64 -> PropertyM m ()
+checkAvail bm x = assert =<< liftM2 (==) (numFree bm) (return x)
+
+-- Check that the given extent is marked as un/used in the usedMap
+checkUsedMap :: Bitmapped b m =>
+                BlockMap b r
+             -> Extent
+             -> Bool
+             -> PropertyM m ()
+checkUsedMap bm ext used =
+  assert =<< liftM (if used then and else not . or)
+                   (run $ mapM (checkBit $ bmUsedMap bm) (blkRangeExt ext))
+
+
+numFree :: Reffable r m => BlockMap b r -> PropertyM m Word64
+numFree = run . readRef . bmNumFree 
+
+initBM :: (Reffable r m, Bitmapped b m) =>
+          BlockDevice m
+       -> PropertyM m (BlockMap b r, Word64, Extent)
+initBM dev = do
+  bm          <- run $ newBlockMap dev
+  avail       <- numFree bm
+  initialTree <- run $ readRef $ bmFreeTree bm
+  -- NB: ext is the maximally-sized free region for this device
+  ext         <- case viewl initialTree of
+    e :< t' -> assert (null t') >> return e
+    EmptyL  -> fail "New blockmap's freetree is empty"
+  return (bm, avail, ext)
