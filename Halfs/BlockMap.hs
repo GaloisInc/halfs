@@ -241,6 +241,7 @@ allocBlocks bm numBlocks = do
     else do
       freeTree <- readRef $! bmFreeTree bm
       let (blocks, freeTree') = findSpace numBlocks freeTree
+      trace ("Setting bits True for the following blocks: " ++ show blocks) $ do 
       forM_ blocks $ setBit $ bmUsedMap bm
       writeRef (bmFreeTree bm) freeTree'
       writeRef (bmNumFree bm) (available - numBlocks)

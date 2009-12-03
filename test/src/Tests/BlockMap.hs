@@ -6,10 +6,9 @@ module Tests.BlockMap
 where
   
 import Control.Monad
-import Data.FingerTree
+import qualified Data.FingerTree as FT
 import Data.Maybe (isNothing, isJust)
 import Data.Word
-import Prelude hiding (null)
 import Test.QuickCheck hiding (numTests)
 import Test.QuickCheck.Monadic
   
@@ -133,33 +132,42 @@ propM_bmOutOfOrderAllocUnallocIntegrity ::
   -> PropertyM m ()
 propM_bmOutOfOrderAllocUnallocIntegrity _g dev = do
   (bm, avail, ext) <- initBM dev
-  forAllM (permute =<< arbExtents ext) $ \subs -> do
-    trace ("subs = " ++ show subs) $ do
-    foldM_ oooAllocUnalloc ([], []) subs
+  forAllM (liftM (map extSz) (permute =<< arbExtents ext)) $ \subSizes -> do
+--    trace ("subSizes = " ++ show subSizes) $ do
+    toUnalloc <- foldM (oooAllocUnalloc bm) [] subSizes
+    trace ("toUnalloc = " ++ show toUnalloc) $ do
+    return ()
+
 --    forM_ (subs `zip` availSeq (-) avail subs) $ \(sub, avail') -> do
 --      trace ("sub = " ++ show sub ++ ", avail' = " ++ show avail') $ do
 --      return ()                                                             
 
--- TODO: may need a 'skipped' list as well for when we decide to only dealloc...
--- when we later decide to alloc, pull from the skipped list first...but this
--- approach is flawed because we need to keep iterating this function until both
--- the input extent list and the 'skipped' list is exhausted :( We could somehow
--- keep folding at the top level until the skipped list is exhaused... blech.
---
--- what about StateT (PropertyM m) () or something similar...?
---
--- or, alternately, we just ensure that if a given step chooses to dealloc, it
--- always does a continual dealloc...? Or pass a flag that is true on the last
--- allocation so we just deallocate everything pending at that time...? ? Blech!
---
--- Probably need to carry a block list along with the dealloc'd list
--- as well!
-oooAllocUnalloc :: Monad m => ([Extent], [Extent]) -> Extent -> PropertyM m ([Extent], [Extent])
-oooAllocUnalloc (allocd, unallocd) extToAlloc = do
-  trace ("extToAlloc = " ++ show extToAlloc) $ do
-  forAllM (arbitrary :: Gen Bool) $ \shouldAlloc ->
-    trace ("shouldAlloc = " ++ show shouldAlloc) $ do 
-    return ([], [])
+oooAllocUnalloc :: (Monad m, Reffable r m, Bitmapped b m) =>
+                   BlockMap b r
+                -> [(Word64, [Word64])] -- ^ already-allocated sizes and their
+                                        -- blocks
+                -> Word64               -- ^ size to allocate
+                -> PropertyM m [(Word64, [Word64])]
+oooAllocUnalloc bm allocated szToAlloc = do
+  trace ("szToAlloc = " ++ show szToAlloc) $ do
+-- TODO: add in random unallocation throughout the allocation process
+--  forAllM (arbitrary :: Gen Bool) $ \shouldUnalloc -> do
+--     when (shouldUnalloc && not (Prelude.null allocated)) $ do
+--         trace ("  would unallocate here") $ do                                                
+--         return ()                                               
+    blks <- checkedAlloc
+    return $ (szToAlloc, blks) : allocated
+  where
+    checkedAlloc = do
+      avail <- numFree bm
+      Just blks <- run $ allocBlocks bm szToAlloc
+      avail' <- numFree bm
+      trace ("here1: avail = " ++ show avail ++ ", avail' = " ++ show avail') $ do
+      assert (avail' == avail - szToAlloc)
+      trace ("here2") $ do 
+      checkUsedMap bm (Extent (head blks) (fromIntegral $ length blks)) True
+      trace ("here3") $ do 
+      return blks
 
 --------------------------------------------------------------------------------
 -- Misc helpers
@@ -178,7 +186,7 @@ checkUsedMap :: Bitmapped b m =>
              -> Bool
              -> PropertyM m ()
 checkUsedMap bm ext used =
-  assert =<< liftM (if used then and else not . or)
+  assert =<< liftM ((if used then and else not . or) . (\x -> trace ("bmap region = " ++ show x) x))
                    (run $ mapM (checkBit $ bmUsedMap bm) (blkRangeExt ext))
 
 
@@ -193,7 +201,7 @@ initBM dev = do
   avail       <- numFree bm
   initialTree <- run $ readRef $ bmFreeTree bm
   -- NB: ext is the maximally-sized free region for this device
-  ext         <- case viewl initialTree of
-    e :< t' -> assert (null t') >> return e
-    EmptyL  -> fail "New blockmap's freetree is empty"
+  ext         <- case FT.viewl initialTree of
+    e FT.:< t' -> assert (FT.null t') >> return e
+    FT.EmptyL  -> fail "New blockmap's freetree is empty"
   return (bm, avail, ext)
