@@ -60,19 +60,12 @@ import Debug.Trace
 
 TODO: 
 
- * The distinction between unallocBlocksContig and unallocBlocks is
-   gross, as is the mixed representation between start/end and a block
-   list.  Since allocations are coming from the free tree anyway, we
-   might as well just use Extents everywhere, and have the allocBlocks
-   function yield something like (e.g.):
+ * Extend properties to check free tree maintains free count coherent with bmNumFree
 
-   data BlockGroup = Contig Extent | Discontig [Extent]
-
-   together with a simple toplevel function to expand a BlockGroup into
-   block addresses.
-
-   This'll make life a lot easier when we want to unalloc block groups.
-
+ * Write a property that exercises the gather-extents path of freeSpace
+   (e.g. big allocs (retain) -> small allocs -> unalloc all smalls ->
+   big alloc (e.g., two big allocs splitting the size of all unalloc'd
+   smalls))
 -}
 
 data BlockGroup = Contig Extent | Discontig [Extent]
