@@ -20,6 +20,7 @@ import Tests.Instances
 import Tests.Utils
   
 import Debug.Trace
+import Data.List (sort)
 
 --------------------------------------------------------------------------------
 -- BlockDevice properties
@@ -29,16 +30,14 @@ qcProps quickMode =
   [
 --     numTests 25 $ geomProp "BlockMap de/serialization" memDev propM_blockMapWR
 --  ,
-    numTests 1 $ geomProp
-                    "BlockMap internal integrity under contiguous alloc/unalloc"
-                    memDev
-                    propM_bmInOrderAllocUnallocIntegrity
-{-
+--     numTests 1 $ geomProp
+--                     "BlockMap internal integrity under contiguous alloc/unalloc"
+--                     memDev
+--                     propM_bmInOrderAllocUnallocIntegrity
     numTests 1 $ geomProp
                     "BlockMap internal integrity under contiguous alloc/unalloc"
                     memDev
                     propM_bmOutOfOrderAllocUnallocIntegrity
--}
   ]
   where
     numTests n  = (,) $ if quickMode then stdArgs{maxSuccess = n} else stdArgs
@@ -134,57 +133,55 @@ propM_bmInOrderAllocUnallocIntegrity _g dev = do
   checkUsedMap bm ext False
   assert =<< isJust `fmap` run (allocBlocks bm 1)
 
-{-
+
 -- | Ensures that a new blockmap subjected to a series of (1) random,
--- out-of-order, block allocations that entirely cover the free region
--- followed by (2) out-of-order unallocations maintains integrity with
--- respect to free block counts, used map contents, and freetree
--- structure.
+-- out-of-order, block allocations intermixed with (2) potentially out-of-order
+-- unallocations maintains integrity with respect to free block counts, used map
+-- contents, and freetree structure.
 propM_bmOutOfOrderAllocUnallocIntegrity ::
   (Reffable r m, Bitmapped b m, Functor m) =>
      BDGeom
   -> BlockDevice m
   -> PropertyM m ()
 propM_bmOutOfOrderAllocUnallocIntegrity _g dev = do
-  (bm, avail, ext) <- initBM dev
+  (bm, _, ext) <- initBM dev
+  -- Check integrity over a sequence of (possibly discontiguous) block
+  -- allocations and unallocations.  NB: subSizes is our set of sub-extent sizes
+  -- that cover the initial free region.
   forAllM (liftM (map extSz) (permute =<< arbExtents ext)) $ \subSizes -> do
 --    trace ("subSizes = " ++ show subSizes) $ do
-    toUnalloc <- foldM (oooAllocUnalloc bm) [] subSizes
-    trace ("toUnalloc = " ++ show toUnalloc) $ do
-    return ()
-
---    forM_ (subs `zip` availSeq (-) avail subs) $ \(sub, avail') -> do
---      trace ("sub = " ++ show sub ++ ", avail' = " ++ show avail') $ do
---      return ()                                                             
-
-oooAllocUnalloc :: (Monad m, Reffable r m, Bitmapped b m) =>
-                   BlockMap b r
-                -> [(Word64, [Word64])] -- ^ already-allocated sizes and their
-                                        -- blocks
-                -> Word64               -- ^ size to allocate
-                -> PropertyM m [(Word64, [Word64])]
-oooAllocUnalloc bm allocated szToAlloc = do
-  trace ("szToAlloc = " ++ show szToAlloc) $ do
--- TODO: add in random unallocation throughout the allocation process
---  forAllM (arbitrary :: Gen Bool) $ \shouldUnalloc -> do
---     when (shouldUnalloc && not (Prelude.null allocated)) $ do
---         trace ("  would unallocate here") $ do                                                
---         return ()                                               
-    blks <- checkedAlloc
-    return $ (szToAlloc, blks) : allocated
-  where
-    checkedAlloc = do
-      avail <- numFree bm
-      Just blks <- run $ allocBlocks bm szToAlloc
-      avail' <- numFree bm
-      trace ("here1: avail = " ++ show avail ++ ", avail' = " ++ show avail') $ do
-      assert (avail' == avail - szToAlloc)
-      trace ("here2") $ do 
-      checkUsedMap bm (Extent (head blks) (fromIntegral $ length blks)) True
-      trace ("here3") $ do 
-      return blks
-
--}
+    toUnalloc <- foldM (\allocated szToAlloc -> do
+--      trace ("=== oooAllocUnalloc ===") $ do
+--      trace ("szToAlloc = " ++ show szToAlloc) $ do
+--      trace ("allocated = " ++ show allocated) $ do
+      -- Randomly decide to unallocate a previously-allocated block group
+      forAllM (arbitrary :: Gen Bool) $ \shouldUnalloc -> do
+        let doUnalloc = shouldUnalloc && not (Prelude.null allocated)
+        when doUnalloc $ checkedUnalloc bm $ head allocated 
+        blkGroup <- checkedAlloc bm szToAlloc
+        return $ blkGroup : (if doUnalloc then tail else id) allocated
+      ) [] subSizes
+--    trace ("toUnalloc = " ++ show toUnalloc) $ do
+    mapM_ (checkedUnalloc bm) toUnalloc
+    where
+      checkedAlloc bm szToAlloc = do
+--        trace ("Doing checkedAlloc: sz = " ++ show szToAlloc) $ do
+        avail     <- numFree bm
+        mblkGroup <- run $ allocBlocks bm szToAlloc
+        maybe (fail $ "propM_bmOutOfOrderAllocUnallocIntegrity: "
+                      ++ "Allocation request failed")
+              (\blkGroup -> do
+                checkAvail bm (avail - szToAlloc)
+                mapM_ (\ext -> checkUsedMap bm ext True) (blkGroupExts blkGroup)
+                return blkGroup
+              ) mblkGroup
+      --
+      checkedUnalloc bm bgToUnalloc = do
+--        trace ("Doing checkedUnalloc: bgToUnalloc = " ++ show bgToUnalloc) $ do
+        avail <- numFree bm
+        run $ unallocBlocks bm bgToUnalloc
+        checkAvail bm (avail + blkGroupSz bgToUnalloc)
+        mapM_ (\ext -> checkUsedMap bm ext False) (blkGroupExts bgToUnalloc)
 
 --------------------------------------------------------------------------------
 -- Misc helpers

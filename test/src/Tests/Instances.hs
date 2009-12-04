@@ -58,8 +58,7 @@ arbExtents (Extent b ub) = do
   filledQuarter <- fill (Extent (b + soFar) (ub - soFar))
   let r = Extent b halfCnt : (Extent (b + halfCnt) quarterCnt : filledQuarter)
   -- distinct base addrs
-  assert (let bs = map extBase r in
-          length bs == length (nub bs)) $ do
+  assert (let bs = map extBase r in length bs == length (nub bs)) $ do
   -- exactly covers input extent and contains and no 0-size extents
   assert (ub == foldr (\e -> assert (extSz e > 0) (extSz e +)) 0 r) $ do
   return r
@@ -122,15 +121,15 @@ permute xs = do
 --------------------------------------------------------------------------------
 -- Instances and helpers
 
--- instance Arbitrary BDGeom where
---   arbitrary = 
---     BDGeom
---     <$> powTwo 10 13   -- 1024..8192 sectors
---     <*> powTwo  8 12   -- 256b..4K sector size
---                        -- => 256K .. 32M filesystem siz
-
 instance Arbitrary BDGeom where
- arbitrary = return $ BDGeom 64 4
+  arbitrary = 
+    BDGeom
+    <$> powTwo 10 13   -- 1024..8192 sectors
+    <*> powTwo  8 12   -- 256b..4K sector size
+                       -- => 256K .. 32M filesystem siz
+
+-- instance Arbitrary BDGeom where
+--  arbitrary = return $ BDGeom 64 4
 
 instance Random Word64 where
   randomR = integralRandomR

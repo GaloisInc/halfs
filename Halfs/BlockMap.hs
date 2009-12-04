@@ -15,6 +15,8 @@ module Halfs.BlockMap
   , allocBlocks
   , unallocBlocks
   -- * Utility functions
+  , blkGroupExts
+  , blkGroupSz
   , blkRange
   , blkRangeExt
   , blkRangeBG
@@ -28,7 +30,6 @@ import qualified Data.Bits as B
 import qualified Data.ByteString as BS
 import Data.FingerTree
 import qualified Data.Foldable as DF
-import Data.List (sort)
 import Data.Monoid
 import Data.Word
 import Prelude hiding (null)
@@ -75,6 +76,7 @@ TODO:
 -}
 
 data BlockGroup = Contig Extent | Discontig [Extent]
+  deriving (Show, Eq)
 
 data Extent = Extent { extBase :: Word64, extSz :: Word64 }
   deriving (Show, Eq)
@@ -179,7 +181,6 @@ readBlockMap dev = do
   blockMapSzBlks = blockMapSizeBlks numBlks (bdBlockSize dev)
   -- 
   writeExtent treeR ext = do
---    trace ("writing extent " ++ show ext) $ do
     t <- readRef treeR
     writeRef treeR $! insert ext t
   -- 
@@ -194,12 +195,10 @@ readBlockMap dev = do
 
   getFreeBlocks bmap treeR Nothing cur = do
     used <- checkBit bmap cur
---    trace ("HERE 1: cur = " ++ show cur ++ ", used = " ++ show used) $ do
     getFreeBlocks bmap treeR (if used then Nothing else Just cur) (cur + 1)
 
   getFreeBlocks bmap treeR b@(Just base) cur = do
     used <- checkBit bmap cur
---    trace ("HERE 2: cur = " ++ show cur ++ ", used = " ++ show used) $ do
     when used $ writeExtent treeR (Extent base $ cur - base)
     getFreeBlocks bmap treeR (if used then Nothing else b) (cur + 1)
 
@@ -244,7 +243,9 @@ allocBlocks bm numBlocks = do
     else do
       freeTree <- readRef $! bmFreeTree bm
       let (blkGroup, freeTree') = findSpace numBlocks freeTree
-      trace ("Setting bits True for the following blocks: " ++ show (blkRangeBG blkGroup)) $ do 
+--       trace ("AFTER findSpace " ++ show numBlocks ++ ", TREE SIZE IS "
+--              ++ show (DF.foldr (\e -> (extSz e +)) 0 freeTree')) $ do
+--       trace ("freeTree = " ++ show freeTree') $ do
       forM_ (blkRangeBG blkGroup) $ setBit $ bmUsedMap bm
       writeRef (bmFreeTree bm) freeTree'
       writeRef (bmNumFree bm) (available - numBlocks)
@@ -273,23 +274,26 @@ findSpace :: Word64 -> FreeTree -> (BlockGroup, FreeTree)
 findSpace goalSz freeTree =
   -- Precondition: There is sufficient space in the free tree to accomodate the
   -- given goal size, although that space may not be contiguous
-  assert (goalSz <= DF.foldr (\e -> (extSz e +)) 0 freeTree) $ do
+  assert (let treeSz = DF.foldr (\e -> (extSz e +)) 0 freeTree
+          in
+--            trace ("BEFORE findSpace " ++ show goalSz ++ ", TREE SIZE IS " ++ show treeSz) $
+--            trace ("freeTree = " ++ show freeTree) $
+            goalSz <= treeSz
+         ) $ do
   let (treeL, treeR) = splitBlockSz goalSz freeTree
   case viewl treeR of
     Extent b sz :< treeR' -> 
       -- Found an extent with size >= the goal size
       ( Contig $ Extent b goalSz 
-      , treeL
-        ><
-        -- Split the extent when it exceeds the goal size
-        if sz > goalSz
-        then singleton $ Extent (b + goalSz) (sz - goalSz)
-        else empty
-        ><
-        treeR'
+      , -- Split the found extent when it exceeds the goal size
+        let mid = if sz > goalSz
+                  then singleton $ Extent (b + goalSz) (sz - goalSz)
+                  else empty
+        in treeL >< mid >< treeR'
       )
 
-    EmptyL -> 
+    EmptyL ->
+      assert False $ -- TODO: Generate tests that exercise this path!
       -- Cannot find an extent large enough, so gather smaller extents
       fmapFst Discontig $ gatherL (viewr treeL) 0 []
       where
@@ -321,6 +325,14 @@ blkRangeExt (Extent b sz) = blkRange b sz
 blkRangeBG :: BlockGroup -> [Word64]
 blkRangeBG (Contig ext)     = blkRangeExt ext
 blkRangeBG (Discontig exts) = concatMap blkRangeExt exts
+
+blkGroupExts :: BlockGroup -> [Extent]
+blkGroupExts (Contig ext)     = [ext]
+blkGroupExts (Discontig exts) = exts
+
+blkGroupSz :: BlockGroup -> Word64
+blkGroupSz (Contig ext)     = extSz ext
+blkGroupSz (Discontig exts) = foldr (\e -> (extSz e +)) 0 exts
 
 divCeil :: Integral a => a -> a -> a
 divCeil a b = (a + (b - 1)) `div` b
