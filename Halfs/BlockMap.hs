@@ -60,10 +60,6 @@ import Debug.Trace
 
 TODO: 
 
- * Write a property that exercises the gather-extents path of freeSpace
-   (e.g. big allocs (retain) -> small allocs -> unalloc all smalls ->
-   big alloc (e.g., two big allocs splitting the size of all unalloc'd
-   smalls))
 -}
 
 data BlockGroup = Contig Extent | Discontig [Extent]
@@ -234,9 +230,6 @@ allocBlocks bm numBlocks = do
     else do
       freeTree <- readRef $! bmFreeTree bm
       let (blkGroup, freeTree') = findSpace numBlocks freeTree
---       trace ("AFTER findSpace " ++ show numBlocks ++ ", TREE SIZE IS "
---              ++ show (DF.foldr (\e -> (extSz e +)) 0 freeTree')) $ do
---       trace ("freeTree = " ++ show freeTree') $ do
       forM_ (blkRangeBG blkGroup) $ setBit $ bmUsedMap bm
       writeRef (bmFreeTree bm) freeTree'
       writeRef (bmNumFree bm) (available - numBlocks)
@@ -265,12 +258,7 @@ findSpace :: Word64 -> FreeTree -> (BlockGroup, FreeTree)
 findSpace goalSz freeTree =
   -- Precondition: There is sufficient space in the free tree to accomodate the
   -- given goal size, although that space may not be contiguous
-  assert (let treeSz = DF.foldr (\e -> (extSz e +)) 0 freeTree
-          in
---            trace ("BEFORE findSpace " ++ show goalSz ++ ", TREE SIZE IS " ++ show treeSz) $
---            trace ("freeTree = " ++ show freeTree) $
-            goalSz <= treeSz
-         ) $ do
+  assert (goalSz <= DF.foldr ((+) . extSz) 0 freeTree) $ do
   let (treeL, treeR) = splitBlockSz goalSz freeTree
   case viewl treeR of
     Extent b sz :< treeR' -> 
@@ -284,7 +272,6 @@ findSpace goalSz freeTree =
       )
 
     EmptyL ->
-      assert False $ -- TODO: Generate tests that exercise this path!
       -- Cannot find an extent large enough, so gather smaller extents
       fmapFst Discontig $ gatherL (viewr treeL) 0 []
       where
@@ -298,7 +285,7 @@ findSpace goalSz freeTree =
                                           (accSz + sz)
                                           (ext : accExts) 
           | accSz + sz == goalSz = (ext : accExts, treeL')
-          | otherwise =
+          | otherwise = 
             -- We've exceeded the goal, so split the extent we just encountered
             (Extent (b + diff) (sz - diff) : accExts, treeL' >< extra)
             where diff  = accSz + sz - goalSz

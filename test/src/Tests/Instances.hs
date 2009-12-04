@@ -50,16 +50,20 @@ arbBDGeom = arbitrary
 
 -- | Given an extent, generates subextents that cover it; useful for creating
 -- allocation sequences.  To keep the number of subextents relatively small, the
--- first two subextents generated cover ~75% of the input extent.  In order to
--- avoid generating identical base addresses due to integer division, the input
--- extent must be at least size 4.
+-- first two subextents generated cover ~75% of the input extent.  The input
+-- extent should be of reasonable size (>= 8) in order to avoid degenerate
+-- corner cases.
 arbExtents :: Extent -> Gen [Extent]
-arbExtents (Extent _ ub) | ub < 4 =
-  fail "Tests.Instances.arbExtents: Input extent size is too small (< 4)"
-arbExtents (Extent b ub) = do
+arbExtents ext@(Extent _ ub)
+  | ub < 8   = fail $ "Tests.Instances.arbExtents: "
+               ++ "Input extent size is too small (<8)"
+  | otherwise = arbExtents' ext
+
+arbExtents' :: Extent -> Gen [Extent]
+arbExtents' (Extent b ub) = do
   filledQuarter <- fill (Extent (b + soFar) (ub - soFar))
   let r = Extent b halfCnt : (Extent (b + halfCnt) quarterCnt : filledQuarter)
-  -- monotonically decreasing size over regions
+  -- monotonically decreasing size over region groups
   assert (halfCnt >= quarterCnt &&
           quarterCnt >= sum (map extSz filledQuarter)) $ do
   -- distinct base addrs
@@ -129,21 +133,21 @@ permute xs = do
 instance Arbitrary UnallocDecision where
   arbitrary = UnallocDecision `fmap` arbitrary
 
-instance Arbitrary BDGeom where
-  arbitrary = 
-    BDGeom
-    <$> powTwo 10 13   -- 1024..8192 sectors
-    <*> powTwo  8 12   -- 256b..4K sector size
-                       -- => 256K .. 32M filesystem siz
-
 -- instance Arbitrary BDGeom where
---  arbitrary = return $ BDGeom 64 4
+--   arbitrary = 
+--     BDGeom
+--     <$> powTwo 10 13   -- 1024..8192 sectors
+--     <*> powTwo  8 12   -- 256b..4K sector size
+--                        -- => 256K .. 32M filesystem size
+
+instance Arbitrary BDGeom where
+ arbitrary = return $ BDGeom 64 4
 
 instance Random Word64 where
   randomR = integralRandomR
   random  = randomR (minBound, maxBound)
 
 integralRandomR :: (Integral a, RandomGen g) => (a,a) -> g -> (a,g)
-integralRandomR (a,b) g = case randomR (fromIntegral a :: Integer,
-                                        fromIntegral b :: Integer) g of
-                            (x,g') -> (fromIntegral x, g')
+integralRandomR (a,b) g =
+  case randomR (fromIntegral a :: Integer, fromIntegral b :: Integer) g of
+    (x, g') -> (fromIntegral x, g')

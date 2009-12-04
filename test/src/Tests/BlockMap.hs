@@ -29,22 +29,27 @@ import Data.List (sort)
 qcProps :: Bool -> [(Args, Property)]
 qcProps quickMode =
   [
---     numTests 25 $ geomProp "BlockMap de/serialization" memDev propM_blockMapWR
---  ,
---     numTests 100 $ geomProp
---                     "BlockMap integrity: in-order alloc/unalloc"
---                     memDev
---                     propM_bmInOrderAllocUnallocIntegrity
---  ,
-     numTests 1 $ geomProp
-                    "BlockMap integrity: out-of-order alloc/unalloc"
-                    memDev
-                    propM_bmOutOfOrderAllocUnallocIntegrity
+    numTests 25 $ geomProp "BlockMap de/serialization" memDev propM_blockMapWR
+  ,
+    numTests 100 $ geomProp
+                     "BlockMap integrity: in-order alloc/unalloc"
+                     memDev
+                     propM_bmInOrderAllocUnallocIntegrity
+  ,
+    numTests 100 $ geomProp
+                     "BlockMap integrity: out-of-order alloc/unalloc"
+                     memDev
+                     (propM_bmOutOfOrderAllocUnallocIntegrity (const return))
   , 
-     numTests 1 $ geomProp
-                   "BlockMap integrity: alloc/unalloc w/ extent aggregation"
-                   memDev
-                   propM_bmExtentAggregationIntegrity
+    numTests 100 $ geomProp
+                     "BlockMap integrity: alloc/unalloc w/ extent aggregation"
+                     memDev
+                     propM_bmExtentAggregationIntegrity
+--   ,
+--     numTests 1 $ geomProp
+--                    "BlockMap integrity: BlockMap de/serialization stress test"
+--                    memDev
+--                    propM_bmStressWR
   ]
   where
     numTests n  = (,) $ if quickMode then stdArgs{maxSuccess = n} else stdArgs
@@ -58,40 +63,24 @@ qcProps quickMode =
 --------------------------------------------------------------------------------
 -- Property implementations
 
--- | Ensures that a new blockmap can be written and read back
-propM_blockMapWR :: (Reffable r m, Bitmapped b m, Functor m) =>
-                    BDGeom
-                 -> BlockDevice m
-                 -> PropertyM m ()
-propM_blockMapWR _g dev = do
---  trace ("propM_blockMapWR: g = " ++ show g) $ do
-  orig <- run $ newBlockMap dev
-  run $ writeBlockMap dev orig
-  read1 <- run $ readBlockMap dev
-  check orig read1
-  -- rewrite & reread after first read to ensure no baked-in behavior
-  -- betwixt initial blockmap and the de/serialization functions
-  run $ writeBlockMap dev read1
-  read2 <- run $ readBlockMap dev
-  check read1 read2
-  where
-    assertEq f x y = assert =<< liftM2 (==) (run . f $ x) (run . f $ y)
-    check x y = do
-      assertEq numFreeBlocks          x y
-      assertEq (toList . bmUsedMap)   x y
-      assertEq (readRef . bmFreeTree) x y
+type BMProp = (Reffable r m, Bitmapped b m, Functor m) =>
+               BDGeom
+            -> BlockDevice m
+            -> PropertyM m ()
 
+-- | Ensures that a new blockmap can be written and read back
+propM_blockMapWR :: BMProp
+propM_blockMapWR _g d = 
+  -- write & read-back twice, to ensure there's no baked-in behavior w.r.t the
+  -- initial blockmap contents and the de/serialization functions
+  fst `fmap` initBM d >>= checkBlockMapWR d >>= checkBlockMapWR d >> return ()
+  
 -- | Ensures that a new blockmap subjected to a series of (1) random, in-order,
 -- contiguous block allocations that entirely cover the free region followed by
 -- (2) reverse-order unallocations maintains integrity with respect to free
 -- block counts, used map contents, and freetree structure.
-propM_bmInOrderAllocUnallocIntegrity ::
-  (Reffable r m, Bitmapped b m, Functor m) =>
-     BDGeom
-  -> BlockDevice m
-  -> PropertyM m ()
+propM_bmInOrderAllocUnallocIntegrity :: BMProp
 propM_bmInOrderAllocUnallocIntegrity _g dev = do
---  trace ("propM_bmAllocUnallocIntegrity: g = " ++ show g) $ do
   (bm, ext) <- initBM dev
   ------------------------------------------------------------------------------
   -- Check integrity over sequence of contiguous block allocations followed by
@@ -133,65 +122,108 @@ propM_bmInOrderAllocUnallocIntegrity _g dev = do
 -- out-of-order, block allocations intermixed with (2) potentially out-of-order
 -- unallocations maintains integrity with respect to free block counts, used map
 -- contents, and freetree structure.
+--
+-- The first parameter is a blockmap checker (which is permitted to mutate the
+-- BlockMap if needed) that is invoked at every allocation step; useful for
+-- describing other properties.
 propM_bmOutOfOrderAllocUnallocIntegrity ::
   (Reffable r m, Bitmapped b m, Functor m) =>
-     BDGeom
+     (BlockDevice m -> BlockMap b r -> PropertyM m (BlockMap b r))
+  -> BDGeom
   -> BlockDevice m
   -> PropertyM m ()
-propM_bmOutOfOrderAllocUnallocIntegrity _g dev = do
+propM_bmOutOfOrderAllocUnallocIntegrity checkBM _g dev = do
   (bm, ext) <- initBM dev
-  -- Check integrity over a sequence of (possibly discontiguous) block
-  -- allocations and unallocations.  NB: subSizes is our set of sub-extent sizes
-  -- that cover the initial free region.
+  -- Check integrity over a sequence of block allocations and unallocations.
+  -- NB: subSizes is our set of sub-extent sizes that cover the initial free
+  -- region.
   forAllM (liftM (map extSz) (permute =<< arbExtents ext)) $ \subSizes -> do
---    trace ("subSizes = " ++ show subSizes) $ do
-    toUnalloc <- foldM (\allocated szToAlloc -> do
---      trace ("=== oooAllocUnalloc ===") $ do
---      trace ("szToAlloc = " ++ show szToAlloc) $ do
---      trace ("allocated = " ++ show allocated) $ do
-      -- Randomly decide to unallocate a previously-allocated block group
+    -- toUnalloc contains BlockGroups allocated by the folded function that
+    -- weren't already selected for unallocation
+    (bm', toUnalloc) <- foldM (\(bm', allocated) szToAlloc -> do
+      -- Randomly decide to unallocate a previously-allocated BlockGroup
       forAllM arbitrary $ \(UnallocDecision shouldUnalloc) -> do
-        let doUnalloc = shouldUnalloc && not (Prelude.null allocated)
-        when doUnalloc $ checkedUnalloc bm $ head allocated 
-        blkGroup <- checkedAlloc bm szToAlloc
-        return $ blkGroup : (if doUnalloc then tail else id) allocated
-      ) [] subSizes
+      let doUnalloc = shouldUnalloc && not (Prelude.null allocated)
+      when doUnalloc $ checkedUnalloc bm' $ head allocated 
+      blkGroup <- checkedAlloc bm' szToAlloc
+      newBM <- checkBM dev bm'
+      return $ (newBM, blkGroup : (if doUnalloc then tail else id) allocated)
+      ) (bm, []) subSizes
 
-    assert False
-    checkAvail bm (extSz ext - sum (map blkGroupSz toUnalloc))
-    mapM_ (checkedUnalloc bm) toUnalloc
-    checkAvail bm (extSz ext)
+    checkAvail bm' (extSz ext - sum (map blkGroupSz toUnalloc))
+    mapM_ (checkedUnalloc bm') toUnalloc
+    checkAvail bm' (extSz ext)
 
--- | Esnures that a new blockmap subjected to a series of allocs/unallocs
--- intended to force extend aggregation maintains integrity with respect to free
--- block counts, used map contents, and freetree structure.  
-
-propM_bmExtentAggregationIntegrity ::
-  (Reffable r m, Bitmapped b m, Functor m) =>
-     BDGeom
-  -> BlockDevice m
-  -> PropertyM m ()
-propM_bmExtentAggregationIntegrity g dev = do
-  -- We can force extent aggregation by (e.g.):
+-- | Ensures that a new blockmap subjected to a series of allocs/unallocs
+-- intended to force extent aggregation in the freetree maintains integrity with
+-- respect to free block counts, used map contents, and freetree structure.
+propM_bmExtentAggregationIntegrity :: BMProp
+propM_bmExtentAggregationIntegrity _g dev = do
+  -- We can force extent aggregation in the freetree by (e.g.):
   -- (1) Allocating large regions and retaining them
   -- (2) Allocating a number of small regions (results in many split extents)
   -- (3) Unallocating those small regions (fragmentation occurs)
   -- (4) Allocating a region that requires aggregation of small extents
-
-  trace ("propM_bmExtentAggregationIntegrity: g = " ++ show g) $ do
-
   (bm, ext) <- initBM dev
   forAllM (liftM (map extSz) (arbExtents ext)) $ \subSizes -> do
   case subSizes of
     (large:med:smalls) | (large >= med && med >= sum smalls) -> do
-      return ()
-    _ -> fail "arbExtents failed to return subextents with expected granularity"
+      largeBG  <- checkedAlloc bm large            -- (1) alloc large regions
+      medBG    <- checkedAlloc bm med              -- (1) alloc large regions
+      smallBGs <- mapM (checkedAlloc bm) smalls    -- (2) extent splitting
+      mapM (checkedUnalloc bm) smallBGs            -- (3) fragmentation
+      aggBG    <- checkedAlloc bm (sum smalls - 1) -- (4) force aggregation
+      checkAvail bm 1
+      mapM (checkedUnalloc bm) [largeBG, medBG, aggBG]
+      checkAvail bm (extSz ext)
+    _ -> fail "arbExtents failed to yield subextents with expected granularity"
 
+-- | Ensures that a blockmap subjected to a variety of allocs/unallocs can be
+-- successfully written and read back at every step.
+propM_bmStressWR :: BMProp
+propM_bmStressWR = propM_bmOutOfOrderAllocUnallocIntegrity checkBlockMapWR
+     
 --------------------------------------------------------------------------------
 -- Misc helpers
 
-availSeq :: (a -> Word64 -> a) -> a -> [Extent] -> [a]
-availSeq op x = drop 1 . scanl op x . map extSz
+-- | Initialize a new BlockMap and check that internal data structures are
+-- coherent
+initBM :: (Reffable r m, Bitmapped b m) =>
+          BlockDevice m
+       -> PropertyM m (BlockMap b r, Extent)
+initBM dev = do
+  bm          <- run $ newBlockMap dev
+  initialTree <- run $ readRef $ bmFreeTree bm
+  -- NB: ext is the maximally-sized free region for this device
+  ext <- case FT.viewl initialTree of
+    e FT.:< t' -> assert (FT.null t') >> return e
+    FT.EmptyL  -> fail "New blockmap's freetree is empty"
+  -- Check initial state
+  checkUsedMap bm ext False
+  checkAvail bm (extSz ext)
+  return (bm, ext)
+
+-- | Check that a blockmap is successfully written to and read back from the
+-- given device.  Yields the read-back BlockMap (which is required to be the
+-- same as the input BlockMap).
+checkBlockMapWR :: (Reffable r m, Bitmapped b m, Functor m) =>
+                   BlockDevice m
+                -> BlockMap b r
+                -> PropertyM m (BlockMap b r)
+checkBlockMapWR dev bm = do
+  trace ("Writing BM...") $ do
+  run $ writeBlockMap dev bm
+  trace ("Reading BM...") $ do
+  bm' <- run $ readBlockMap dev
+  check bm bm'
+  trace ("BMs checked OK.") $ do
+  return bm'
+  where
+    assertEq f x y = assert =<< liftM2 (==) (run . f $ x) (run . f $ y)
+    check x y = do
+      assertEq numFreeBlocks          x y
+      assertEq (toList . bmUsedMap)   x y
+      assertEq (readRef . bmFreeTree) x y
 
 -- | Check that the given free block count is the same as reported by the the
 -- blockmap and the free tree
@@ -209,12 +241,13 @@ checkUsedMap bm ext used =
   assert =<< liftM (if used then and else not . or)
                    (run $ mapM (checkBit $ bmUsedMap bm) (blkRangeExt ext))
 
+-- | Check that a given size can be allocated from the BlockMap and that
+-- internal data structures remain coherent
 checkedAlloc :: (Reffable r m, Bitmapped b m) =>
                 BlockMap b r
              -> Word64
              -> PropertyM m BlockGroup
 checkedAlloc bm szToAlloc = do
---   trace ("Doing checkedAlloc: sz = " ++ show szToAlloc) $ do
   avail     <- numFree bm
   mblkGroup <- run $ allocBlocks bm szToAlloc
   maybe (fail $ "checkedAlloc: allocation request failed")
@@ -224,35 +257,24 @@ checkedAlloc bm szToAlloc = do
           return blkGroup
         ) mblkGroup
 
+-- | Check that a given BlockGroup can be unallocated from the BlockMap and that
+-- internal data structure remain coherent
 checkedUnalloc :: (Reffable r m, Bitmapped b m) =>
                   BlockMap b r
                -> BlockGroup
                -> PropertyM m ()
 checkedUnalloc bm bgToUnalloc = do
---   trace ("Doing checkedUnalloc: bgToUnalloc = " ++ show bgToUnalloc) $ do
+  trace ("checkedUnalloc start") $ do
   avail <- numFree bm
   run $ unallocBlocks bm bgToUnalloc
   checkAvail bm (avail + blkGroupSz bgToUnalloc)
   mapM_ (\ext -> checkUsedMap bm ext False) (blkGroupExts bgToUnalloc)
+  trace ("checkedUnAlloc end") $ return ()
 
 numFree :: Reffable r m => BlockMap b r -> PropertyM m Word64
 numFree = run . readRef . bmNumFree 
 
 freeTreeSz :: Reffable r m => BlockMap b r -> PropertyM m Word64
 freeTreeSz bm = 
-  DF.foldr (\e -> (extSz e +)) 0 `fmap` (run $! readRef $! bmFreeTree bm)
+  DF.foldr ((+) . extSz) 0 `fmap` (run $! readRef $! bmFreeTree bm)
 
-initBM :: (Reffable r m, Bitmapped b m) =>
-          BlockDevice m
-       -> PropertyM m (BlockMap b r, Extent)
-initBM dev = do
-  bm          <- run $ newBlockMap dev
-  initialTree <- run $ readRef $ bmFreeTree bm
-  -- NB: ext is the maximally-sized free region for this device
-  ext         <- case FT.viewl initialTree of
-    e FT.:< t' -> assert (FT.null t') >> return e
-    FT.EmptyL  -> fail "New blockmap's freetree is empty"
-  -- Check initial state
-  checkUsedMap bm ext False
-  checkAvail bm (extSz ext)
-  return (bm, ext)
