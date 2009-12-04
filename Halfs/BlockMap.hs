@@ -60,8 +60,6 @@ import Debug.Trace
 
 TODO: 
 
- * Extend properties to check free tree maintains free count coherent with bmNumFree
-
  * Write a property that exercises the gather-extents path of freeSpace
    (e.g. big allocs (retain) -> small allocs -> unalloc all smalls ->
    big alloc (e.g., two big allocs splitting the size of all unalloc'd

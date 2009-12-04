@@ -7,6 +7,7 @@ where
   
 import Control.Monad
 import qualified Data.FingerTree as FT
+import qualified Data.Foldable as DF
 import Data.Maybe (isNothing, isJust)
 import Data.Word
 import Test.QuickCheck hiding (numTests)
@@ -30,14 +31,14 @@ qcProps quickMode =
   [
 --     numTests 25 $ geomProp "BlockMap de/serialization" memDev propM_blockMapWR
 --  ,
---     numTests 1 $ geomProp
---                     "BlockMap internal integrity under contiguous alloc/unalloc"
---                     memDev
---                     propM_bmInOrderAllocUnallocIntegrity
     numTests 1 $ geomProp
-                    "BlockMap internal integrity under contiguous alloc/unalloc"
+                    "BlockMap internal integrity: in-order alloc/unalloc"
                     memDev
-                    propM_bmOutOfOrderAllocUnallocIntegrity
+                    propM_bmInOrderAllocUnallocIntegrity
+  , numTests 1 $ geomProp
+                   "BlockMap internal integrity: out-of-order alloc/unalloc"
+                   memDev
+                   propM_bmOutOfOrderAllocUnallocIntegrity
   ]
   where
     numTests n  = (,) $ if quickMode then stdArgs{maxSuccess = n} else stdArgs
@@ -85,30 +86,24 @@ propM_bmInOrderAllocUnallocIntegrity ::
   -> PropertyM m ()
 propM_bmInOrderAllocUnallocIntegrity _g dev = do
 --  trace ("propM_bmAllocUnallocIntegrity: g = " ++ show g) $ do
-  (bm, avail, ext) <- initBM dev
-  -- Check initial state
-  checkUsedMap bm ext False
-  checkAvail bm (extSz ext)
+  (bm, ext) <- initBM dev
 
   -- Check integrity over sequence of contiguous block allocations followed by
   -- sequence of corresponding unallocations.  NB: subs is our set of
   -- sub-extents that cover the initial free region
   forAllM (arbExtents ext) $ \subs -> do
+
   ------------------------------------------------------------------------------
   -- (1a) Check integrity during sequence of contiguous block allocations
-  forM_ (subs `zip` availSeq (-) avail subs) $ \(sub, avail') -> do
-    mblkGroup <- run $ allocBlocks bm (extSz sub)
-    maybe (fail "propM_bmAllocUnallocIntegrity: Allocation request failed")
-          (\blkGroup -> case blkGroup of
-            Contig allocExt -> do
-              assert (allocExt == sub) -- got expected base & size; this only
-                                       -- works because we are doing in-order
-                                       -- contiguous allocation
-              checkUsedMap bm sub True
-              checkAvail bm avail'
-            _ -> fail $ "propM_bmAllocUnallocIntegrity: Expected "
-                        ++ "contiguous allocation"
-          ) mblkGroup
+  forM_ subs $ \sub -> do
+    blkGrp <- checkedAlloc bm (extSz sub)
+    case blkGrp of
+      Contig allocExt ->
+        assert (allocExt == sub) -- got expected base & size; this only works
+                                 -- because we are doing in-order contiguous
+                                 -- allocation
+      _ ->
+        fail $ "propM_bmAllocUnallocIntegrity: Expected contiguous allocation"
   ------------------------------------------------------------------------------
   -- (1b) After all allocations, check that an additional allocation fails and
   --      used map is entirely marked 'used'.
@@ -117,16 +112,12 @@ propM_bmInOrderAllocUnallocIntegrity _g dev = do
   ------------------------------------------------------------------------------
   -- (2a) Check integrity during sequence of contiguous block deallocations. NB:
   --      we unallocate in most-recently-allocated order to reduce freetree
-  --      perturbations in this simple property.
-  let rsubs = Prelude.reverse subs 
-  forM_ (rsubs `zip` availSeq (+) 0 rsubs) $ \(sub, avail') -> do
-    -- If we haven't failed before now, we know that all subextents were
-    -- contiguously allocated, so we don't have to directly track the return
-    -- value of allocBlocks in order to supply the correct BlockGroup to
-    -- unallocBlocks.
-    run $ unallocBlocks bm (Contig sub) 
-    checkUsedMap bm sub False
-    checkAvail bm avail'
+  --      perturbations in this simple property.  If we haven't failed before
+  --      now, we know that all subextents were contiguously allocated, so we
+  --      don't have to directly track the return value of prior checkedAlloc
+  --      invocations in order to supply the correct BlockGroup to
+  --      checkedUnalloc
+  forM_ (Prelude.reverse subs) $ checkedUnalloc bm . Contig
   ------------------------------------------------------------------------------ 
   -- (2b) After all unallocations, check that used map is entirely marked
   -- 'unused' and an additional allocation succeeds.
@@ -144,7 +135,7 @@ propM_bmOutOfOrderAllocUnallocIntegrity ::
   -> BlockDevice m
   -> PropertyM m ()
 propM_bmOutOfOrderAllocUnallocIntegrity _g dev = do
-  (bm, _, ext) <- initBM dev
+  (bm, ext) <- initBM dev
   -- Check integrity over a sequence of (possibly discontiguous) block
   -- allocations and unallocations.  NB: subSizes is our set of sub-extent sizes
   -- that cover the initial free region.
@@ -163,25 +154,8 @@ propM_bmOutOfOrderAllocUnallocIntegrity _g dev = do
       ) [] subSizes
 --    trace ("toUnalloc = " ++ show toUnalloc) $ do
     mapM_ (checkedUnalloc bm) toUnalloc
-    where
-      checkedAlloc bm szToAlloc = do
---        trace ("Doing checkedAlloc: sz = " ++ show szToAlloc) $ do
-        avail     <- numFree bm
-        mblkGroup <- run $ allocBlocks bm szToAlloc
-        maybe (fail $ "propM_bmOutOfOrderAllocUnallocIntegrity: "
-                      ++ "Allocation request failed")
-              (\blkGroup -> do
-                checkAvail bm (avail - szToAlloc)
-                mapM_ (\ext -> checkUsedMap bm ext True) (blkGroupExts blkGroup)
-                return blkGroup
-              ) mblkGroup
-      --
-      checkedUnalloc bm bgToUnalloc = do
---        trace ("Doing checkedUnalloc: bgToUnalloc = " ++ show bgToUnalloc) $ do
-        avail <- numFree bm
-        run $ unallocBlocks bm bgToUnalloc
-        checkAvail bm (avail + blkGroupSz bgToUnalloc)
-        mapM_ (\ext -> checkUsedMap bm ext False) (blkGroupExts bgToUnalloc)
+
+--propM_bmExtentAggregationIntegrity :: 
 
 --------------------------------------------------------------------------------
 -- Misc helpers
@@ -189,9 +163,11 @@ propM_bmOutOfOrderAllocUnallocIntegrity _g dev = do
 availSeq :: (a -> Word64 -> a) -> a -> [Extent] -> [a]
 availSeq op x = drop 1 . scanl op x . map extSz
 
--- | Check that the given free block count is the same as the blockmap reports
-checkAvail :: Reffable r m => BlockMap b r -> Word64 -> PropertyM m ()
-checkAvail bm x = assert =<< liftM2 (==) (numFree bm) (return x)
+-- | Check that the given free block count is the same as reported by the the
+-- blockmap and the free tree
+checkAvail :: (Reffable r m, Bitmapped b m) => BlockMap b r -> Word64 -> PropertyM m ()
+checkAvail bm x = xeq (numFree bm) >> xeq (freeTreeSz bm)
+  where xeq y = assert =<< liftM2 (==) y (return x)
 
 -- Check that the given extent is marked as un/used in the usedMap
 checkUsedMap :: Bitmapped b m =>
@@ -200,22 +176,53 @@ checkUsedMap :: Bitmapped b m =>
              -> Bool
              -> PropertyM m ()
 checkUsedMap bm ext used =
-  assert =<< liftM ((if used then and else not . or) {-. (\x -> trace ("bmap region = " ++ show x) x)-})
+  assert =<< liftM (if used then and else not . or)
                    (run $ mapM (checkBit $ bmUsedMap bm) (blkRangeExt ext))
 
+checkedAlloc :: (Reffable r m, Bitmapped b m) =>
+                BlockMap b r
+             -> Word64
+             -> PropertyM m BlockGroup
+checkedAlloc bm szToAlloc = do
+--   trace ("Doing checkedAlloc: sz = " ++ show szToAlloc) $ do
+  avail     <- numFree bm
+  mblkGroup <- run $ allocBlocks bm szToAlloc
+  maybe (fail $ "checkedAlloc: allocation request failed")
+        (\blkGroup -> do
+          checkAvail bm (avail - szToAlloc)
+          mapM_ (\ext -> checkUsedMap bm ext True) (blkGroupExts blkGroup)
+          return blkGroup
+        ) mblkGroup
+
+checkedUnalloc :: (Reffable r m, Bitmapped b m) =>
+                  BlockMap b r
+               -> BlockGroup
+               -> PropertyM m ()
+checkedUnalloc bm bgToUnalloc = do
+--   trace ("Doing checkedUnalloc: bgToUnalloc = " ++ show bgToUnalloc) $ do
+  avail <- numFree bm
+  run $ unallocBlocks bm bgToUnalloc
+  checkAvail bm (avail + blkGroupSz bgToUnalloc)
+  mapM_ (\ext -> checkUsedMap bm ext False) (blkGroupExts bgToUnalloc)
 
 numFree :: Reffable r m => BlockMap b r -> PropertyM m Word64
 numFree = run . readRef . bmNumFree 
 
+freeTreeSz :: Reffable r m => BlockMap b r -> PropertyM m Word64
+freeTreeSz bm = 
+  DF.foldr (\e -> (extSz e +)) 0 `fmap` (run $! readRef $! bmFreeTree bm)
+
 initBM :: (Reffable r m, Bitmapped b m) =>
           BlockDevice m
-       -> PropertyM m (BlockMap b r, Word64, Extent)
+       -> PropertyM m (BlockMap b r, Extent)
 initBM dev = do
   bm          <- run $ newBlockMap dev
-  avail       <- numFree bm
   initialTree <- run $ readRef $ bmFreeTree bm
   -- NB: ext is the maximally-sized free region for this device
   ext         <- case FT.viewl initialTree of
     e FT.:< t' -> assert (FT.null t') >> return e
     FT.EmptyL  -> fail "New blockmap's freetree is empty"
-  return (bm, avail, ext)
+  -- Check initial state
+  checkUsedMap bm ext False
+  checkAvail bm (extSz ext)
+  return (bm, ext)
