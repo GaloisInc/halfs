@@ -37,9 +37,7 @@ import Prelude hiding (null)
 import Halfs.Classes
 import System.Device.BlockDevice
 
--- temp
-import Debug.Trace
--- temp  
+-- import Debug.Trace
 
 -- ----------------------------------------------------------------------------
 --
@@ -111,11 +109,11 @@ newBlockMap :: (Monad m, Reffable r m, Bitmapped b m) =>
 newBlockMap dev = do
   when (numFree == 0) $ fail "Block device is too small for block map creation"
 
---   trace ("newBlockMap: numBlks = " ++ show numBlks) $ do
---   trace ("newBlockMap: totalBits = " ++ show totalBits) $ do
---   trace ("newBlockMap: blockMapSzBlks = " ++ show blockMapSzBlks) $ do
---   trace ("newBlockMap: baseFreeIdx = " ++ show baseFreeIdx) $ do
---   trace ("newBlockMap: numFree = " ++ show numFree) $ do
+--   trace ("newBlockMap: numBlks        = " ++ show numBlks)        $ do        
+--   trace ("newBlockMap: totalBits      = " ++ show totalBits)      $ do      
+--   trace ("newBlockMap: blockMapSzBlks = " ++ show blockMapSzBlks) $ do 
+--   trace ("newBlockMap: baseFreeIdx    = " ++ show baseFreeIdx)    $ do    
+--   trace ("newBlockMap: numFree        = " ++ show numFree)        $ do        
 
   -- We overallocate the bitmap up to the entire size of the block(s)
   -- needed for the block map region so that de/serialization in the
@@ -175,10 +173,8 @@ readBlockMap dev = do
   -- finds runs of free block regions, inserting representative Extents
   -- into the "free tree" as it does so.  The third parameter tracks the
   -- block address of start of the current free region.
-  getFreeBlocks _bmap treeR mbase cur | cur == totalBits =
-    maybe (return ())
-          (\base -> writeExtent treeR (Extent base $ cur - base))
-          mbase
+  getFreeBlocks _bmap treeR mb cur | cur == totalBits =
+    maybe (return ()) (writeExtent treeR . \b -> Extent b (cur - b)) mb
 
   getFreeBlocks bmap treeR Nothing cur = do
     used <- checkBit bmap cur
@@ -244,7 +240,7 @@ unallocBlocks bm (Discontig exts) = mapM_ (unallocBlocks bm . Contig) exts
 unallocBlocks bm (Contig ext)     = do
   avail    <- numFreeBlocks bm
   freeTree <- readRef $! bmFreeTree bm
-  forM_ (blkRangeExt ext) $ clearBit $ bmUsedMap bm
+  forM_ (blkRangeExt ext)  $ clearBit $ bmUsedMap bm
   writeRef (bmFreeTree bm) $ insert ext freeTree
   writeRef (bmNumFree bm)  $ avail + extSz ext
 

@@ -97,9 +97,9 @@ qcProps quickMode =
     numTests n  = (,) $ if quickMode then stdArgs{maxSuccess = n} else stdArgs
     scale k g   = BDGeom (bdgSecCnt g `div` k) (bdgSecSz g * k)
     unscale k g = BDGeom (bdgSecCnt g * k)     (bdgSecSz g `div` k)
-    geoLabel s  = s ++ " Block Device Geometry"
-    wrLabel s   = s ++ " Single Block Write/Read"
-    wrCLabel s  = s ++ " Contiguous Block Write/Read"
+    geoLabel s  = "BlockDevice: " ++ s ++ " Block Device Geometry"
+    wrLabel s   = "BlockDevice: " ++ s ++ " Single Block Write/Read"
+    wrCLabel s  = "BlockDevice: " ++ s ++ " Contiguous Block Write/Read"
     doProp      = (`whenDev` run . bdShutdown)
     doProp'     = (`whenDev` run . lift . bdShutdown)
 

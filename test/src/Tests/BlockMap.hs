@@ -20,44 +20,29 @@ import Halfs.Classes
 import Tests.Instances
 import Tests.Utils
   
-import Debug.Trace
+-- import Debug.Trace
 
 --------------------------------------------------------------------------------
 -- BlockDevice properties
 
 qcProps :: Bool -> [(Args, Property)]
-qcProps quickMode =
-  [
-    numTests 25 $ geomProp "BlockMap de/serialization" memDev propM_blockMapWR
-  ,
-    numTests 100 $ geomProp
-                     "BlockMap integrity: in-order alloc/unalloc"
-                     memDev
-                     propM_bmInOrderAllocUnallocIntegrity
-  ,
-    numTests 100 $ geomProp
-                     "BlockMap integrity: out-of-order alloc/unalloc"
-                     memDev
-                     (propM_bmOutOfOrderAllocUnallocIntegrity (const return))
-  , 
-    numTests 100 $ geomProp
-                     "BlockMap integrity: alloc/unalloc w/ extent aggregation"
-                     memDev
-                     propM_bmExtentAggregationIntegrity
---   , (CURRENTLY NOT WORKING)
---     numTests 1 $ geomProp
---                    "BlockMap integrity: BlockMap de/serialization stress test"
---                    memDev
---                    propM_bmStressWR
+qcProps quick =
+  [ p 50  "Simple serdes"             propM_blockMapWR
+  , p 50 "In-order alloc/unalloc"     propM_bmInOrderAllocUnallocIntegrity
+  , p 50 "Out-of-order alloc/unalloc" propM_bmOOO
+  , p 50 "Extent aggregation"         propM_bmExtentAggregationIntegrity
+  , p 30  "Serdes stress test"        propM_bmStressWR
   ]
   where
-    numTests n  = (,) $ if quickMode then stdArgs{maxSuccess = n} else stdArgs
-    doProp      = (`whenDev` run . bdShutdown)
+    propM_bmOOO      = propM_bmOutOfOrderAllocUnallocIntegrity (const return)
+    propM_bmStressWR = propM_bmOutOfOrderAllocUnallocIntegrity checkBlockMapWR
+    numTests n       = (,) $ if quick then stdArgs{maxSuccess = n} else stdArgs
+    doProp           = (`whenDev` run . bdShutdown)
     -- 
-    geomProp s dev prop = 
-      label s $ monadicIO $
+    p n s pr =
+      numTests n $ label ("BlockMap: " ++ s) $ monadicIO $
       forAllM arbBDGeom $ \g ->
-        run (dev g) >>= doProp (prop g)
+        run (memDev g) >>= doProp (pr g)
 
 --------------------------------------------------------------------------------
 -- Property implementations
@@ -177,11 +162,6 @@ propM_bmExtentAggregationIntegrity _g dev = do
       checkAvail bm (extSz ext)
     _ -> fail "arbExtents failed to yield subextents with expected granularity"
 
--- | Ensures that a blockmap subjected to a variety of allocs/unallocs can be
--- successfully written and read back at every step.
-propM_bmStressWR :: BMProp
-propM_bmStressWR = propM_bmOutOfOrderAllocUnallocIntegrity checkBlockMapWR
-     
 --------------------------------------------------------------------------------
 -- Misc helpers
 
@@ -210,19 +190,21 @@ checkBlockMapWR :: (Reffable r m, Bitmapped b m, Functor m) =>
                 -> BlockMap b r
                 -> PropertyM m (BlockMap b r)
 checkBlockMapWR dev bm = do
-  trace ("Writing BM...") $ do
   run $ writeBlockMap dev bm
-  trace ("Reading BM...") $ do
   bm' <- run $ readBlockMap dev
   check bm bm'
-  trace ("BMs checked OK.") $ do
   return bm'
   where
-    assertEq f x y = assert =<< liftM2 (==) (run . f $ x) (run . f $ y)
+    assertEq f x y = assert =<< liftM2 (==) (f x) (f y)
     check x y = do
-      assertEq numFreeBlocks          x y
-      assertEq (toList . bmUsedMap)   x y
-      assertEq (readRef . bmFreeTree) x y
+      assertEq (run . numFreeBlocks)      x y
+      assertEq (run . toList . bmUsedMap) x y
+      -- NB: The free trees most likely won't be identical after read-back, due
+      -- to the implicit coalescing that readBlockMap does, so we can't do
+      -- assertEq (readRef . bmFreeTree) x y here. Comparing sizes is sufficient
+      -- for now, but we might want to eventually use a coalescing function here
+      -- to strengthen the check.
+      assertEq freeTreeSz x y
 
 -- | Check that the given free block count is the same as reported by the the
 -- blockmap and the free tree
@@ -263,12 +245,10 @@ checkedUnalloc :: (Reffable r m, Bitmapped b m) =>
                -> BlockGroup
                -> PropertyM m ()
 checkedUnalloc bm bgToUnalloc = do
-  trace ("checkedUnalloc start") $ do
   avail <- numFree bm
   run $ unallocBlocks bm bgToUnalloc
   checkAvail bm (avail + blkGroupSz bgToUnalloc)
   mapM_ (\ext -> checkUsedMap bm ext False) (blkGroupExts bgToUnalloc)
-  trace ("checkedUnAlloc end") $ return ()
 
 numFree :: Reffable r m => BlockMap b r -> PropertyM m Word64
 numFree = run . readRef . bmNumFree 
