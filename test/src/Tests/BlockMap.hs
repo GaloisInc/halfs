@@ -121,7 +121,7 @@ propM_bmOutOfOrderAllocUnallocIntegrity checkBM _g dev = do
   -- Check integrity over a sequence of block allocations and unallocations.
   -- NB: subSizes is our set of sub-extent sizes that cover the initial free
   -- region.
-  forAllM (liftM (map extSz) (permute =<< arbExtents ext)) $ \subSizes -> do
+  forAllM (map extSz `fmap` (permute =<< arbExtents ext)) $ \subSizes -> do
     -- toUnalloc contains BlockGroups allocated by the folded function that
     -- weren't already selected for unallocation
     (bm', toUnalloc) <- foldM (\(bm', allocated) szToAlloc -> do
@@ -149,7 +149,7 @@ propM_bmExtentAggregationIntegrity _g dev = do
   -- (3) Unallocating those small regions (fragmentation occurs)
   -- (4) Allocating a region that requires aggregation of small extents
   (bm, ext) <- initBM dev
-  forAllM (liftM (map extSz) (arbExtents ext)) $ \subSizes -> do
+  forAllM (map extSz `fmap` arbExtents ext) $ \subSizes -> do
   case subSizes of
     (large:med:smalls) | (large >= med && med >= sum smalls) -> do
       largeBG  <- checkedAlloc bm large            -- (1) alloc large regions
@@ -219,8 +219,8 @@ checkUsedMap :: Bitmapped b m =>
              -> Bool
              -> PropertyM m ()
 checkUsedMap bm ext used =
-  assert =<< liftM (if used then and else not . or)
-                   (run $ mapM (checkBit $ bmUsedMap bm) (blkRangeExt ext))
+  assert =<< (if used then and else not . or) `fmap`
+             (run $ mapM (checkBit $ bmUsedMap bm) (blkRangeExt ext))
 
 -- | Check that a given size can be allocated from the BlockMap and that
 -- internal data structures remain coherent
