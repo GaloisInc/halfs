@@ -21,7 +21,6 @@ import Tests.Instances
 import Tests.Utils
   
 import Debug.Trace
-import Data.List (sort)
 
 --------------------------------------------------------------------------------
 -- BlockDevice properties
@@ -45,7 +44,7 @@ qcProps quickMode =
                      "BlockMap integrity: alloc/unalloc w/ extent aggregation"
                      memDev
                      propM_bmExtentAggregationIntegrity
---   ,
+--   , (CURRENTLY NOT WORKING)
 --     numTests 1 $ geomProp
 --                    "BlockMap integrity: BlockMap de/serialization stress test"
 --                    memDev
