@@ -45,8 +45,9 @@ newfs dev = do
   blockMap <- newBlockMap dev
   res <- allocBlocks blockMap 1
   case res of
-    Just [rootDirAddr] -> do
-      let rootDirInode :: InodeRef = blockAddrToInodeRef rootDirAddr
+    Just (Contig rootDirExt) -> do
+      let rootDirAddr              = extBase rootDirExt
+          rootDirInode :: InodeRef = blockAddrToInodeRef rootDirAddr
       writeBlockMap dev blockMap
       makeDirectory dev rootDirAddr rootDirInode rootUser rootGroup
       bdWriteBlock  dev 0 (superBlockBstr rootDirInode)
