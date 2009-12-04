@@ -17,6 +17,8 @@ import Test.QuickCheck.Monadic hiding (assert)
 
 import Halfs.BlockMap (Extent(..))
 
+newtype UnallocDecision = UnallocDecision Bool deriving Show
+
 data BDGeom = BDGeom
   { bdgSecCnt :: Word64       -- ^ number of sectors
   , bdgSecSz  :: Word64       -- ^ sector size, in bytes
@@ -57,6 +59,9 @@ arbExtents (Extent _ ub) | ub < 4 =
 arbExtents (Extent b ub) = do
   filledQuarter <- fill (Extent (b + soFar) (ub - soFar))
   let r = Extent b halfCnt : (Extent (b + halfCnt) quarterCnt : filledQuarter)
+  -- monotonically decreasing size over regions
+  assert (halfCnt >= quarterCnt &&
+          quarterCnt >= sum (map extSz filledQuarter)) $ do
   -- distinct base addrs
   assert (let bs = map extBase r in length bs == length (nub bs)) $ do
   -- exactly covers input extent and contains and no 0-size extents
@@ -64,7 +69,7 @@ arbExtents (Extent b ub) = do
   return r
   where
     halfCnt    = ub `div` 2
-    quarterCnt = ub `div` 4
+    quarterCnt = ub `div` 4 + 1
     soFar      = halfCnt + quarterCnt
     --
     fill :: Extent -> Gen [Extent]
@@ -120,6 +125,9 @@ permute xs = do
 
 --------------------------------------------------------------------------------
 -- Instances and helpers
+
+instance Arbitrary UnallocDecision where
+  arbitrary = UnallocDecision `fmap` arbitrary
 
 instance Arbitrary BDGeom where
   arbitrary = 

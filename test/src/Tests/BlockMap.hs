@@ -31,14 +31,20 @@ qcProps quickMode =
   [
 --     numTests 25 $ geomProp "BlockMap de/serialization" memDev propM_blockMapWR
 --  ,
-    numTests 1 $ geomProp
-                    "BlockMap internal integrity: in-order alloc/unalloc"
+--     numTests 100 $ geomProp
+--                     "BlockMap integrity: in-order alloc/unalloc"
+--                     memDev
+--                     propM_bmInOrderAllocUnallocIntegrity
+--  ,
+     numTests 1 $ geomProp
+                    "BlockMap integrity: out-of-order alloc/unalloc"
                     memDev
-                    propM_bmInOrderAllocUnallocIntegrity
-  , numTests 1 $ geomProp
-                   "BlockMap internal integrity: out-of-order alloc/unalloc"
+                    propM_bmOutOfOrderAllocUnallocIntegrity
+  , 
+     numTests 1 $ geomProp
+                   "BlockMap integrity: alloc/unalloc w/ extent aggregation"
                    memDev
-                   propM_bmOutOfOrderAllocUnallocIntegrity
+                   propM_bmExtentAggregationIntegrity
   ]
   where
     numTests n  = (,) $ if quickMode then stdArgs{maxSuccess = n} else stdArgs
@@ -87,12 +93,11 @@ propM_bmInOrderAllocUnallocIntegrity ::
 propM_bmInOrderAllocUnallocIntegrity _g dev = do
 --  trace ("propM_bmAllocUnallocIntegrity: g = " ++ show g) $ do
   (bm, ext) <- initBM dev
-
+  ------------------------------------------------------------------------------
   -- Check integrity over sequence of contiguous block allocations followed by
   -- sequence of corresponding unallocations.  NB: subs is our set of
   -- sub-extents that cover the initial free region
   forAllM (arbExtents ext) $ \subs -> do
-
   ------------------------------------------------------------------------------
   -- (1a) Check integrity during sequence of contiguous block allocations
   forM_ subs $ \sub -> do
@@ -105,9 +110,9 @@ propM_bmInOrderAllocUnallocIntegrity _g dev = do
       _ ->
         fail $ "propM_bmAllocUnallocIntegrity: Expected contiguous allocation"
   ------------------------------------------------------------------------------
-  -- (1b) After all allocations, check that an additional allocation fails and
-  --      used map is entirely marked 'used'.
+  -- (1b) Check blockmap state after all allocations are done
   assert =<< isNothing `fmap` run (allocBlocks bm 1)
+  checkAvail bm 0
   checkUsedMap bm ext True
   ------------------------------------------------------------------------------
   -- (2a) Check integrity during sequence of contiguous block deallocations. NB:
@@ -119,11 +124,10 @@ propM_bmInOrderAllocUnallocIntegrity _g dev = do
   --      checkedUnalloc
   forM_ (Prelude.reverse subs) $ checkedUnalloc bm . Contig
   ------------------------------------------------------------------------------ 
-  -- (2b) After all unallocations, check that used map is entirely marked
-  -- 'unused' and an additional allocation succeeds.
+  -- (2b) Check blockmap state after all unallocations are done
+  checkAvail bm (extSz ext)
   checkUsedMap bm ext False
   assert =<< isJust `fmap` run (allocBlocks bm 1)
-
 
 -- | Ensures that a new blockmap subjected to a series of (1) random,
 -- out-of-order, block allocations intermixed with (2) potentially out-of-order
@@ -146,16 +150,42 @@ propM_bmOutOfOrderAllocUnallocIntegrity _g dev = do
 --      trace ("szToAlloc = " ++ show szToAlloc) $ do
 --      trace ("allocated = " ++ show allocated) $ do
       -- Randomly decide to unallocate a previously-allocated block group
-      forAllM (arbitrary :: Gen Bool) $ \shouldUnalloc -> do
+      forAllM arbitrary $ \(UnallocDecision shouldUnalloc) -> do
         let doUnalloc = shouldUnalloc && not (Prelude.null allocated)
         when doUnalloc $ checkedUnalloc bm $ head allocated 
         blkGroup <- checkedAlloc bm szToAlloc
         return $ blkGroup : (if doUnalloc then tail else id) allocated
       ) [] subSizes
---    trace ("toUnalloc = " ++ show toUnalloc) $ do
-    mapM_ (checkedUnalloc bm) toUnalloc
 
---propM_bmExtentAggregationIntegrity :: 
+    assert False
+    checkAvail bm (extSz ext - sum (map blkGroupSz toUnalloc))
+    mapM_ (checkedUnalloc bm) toUnalloc
+    checkAvail bm (extSz ext)
+
+-- | Esnures that a new blockmap subjected to a series of allocs/unallocs
+-- intended to force extend aggregation maintains integrity with respect to free
+-- block counts, used map contents, and freetree structure.  
+
+propM_bmExtentAggregationIntegrity ::
+  (Reffable r m, Bitmapped b m, Functor m) =>
+     BDGeom
+  -> BlockDevice m
+  -> PropertyM m ()
+propM_bmExtentAggregationIntegrity g dev = do
+  -- We can force extent aggregation by (e.g.):
+  -- (1) Allocating large regions and retaining them
+  -- (2) Allocating a number of small regions (results in many split extents)
+  -- (3) Unallocating those small regions (fragmentation occurs)
+  -- (4) Allocating a region that requires aggregation of small extents
+
+  trace ("propM_bmExtentAggregationIntegrity: g = " ++ show g) $ do
+
+  (bm, ext) <- initBM dev
+  forAllM (liftM (map extSz) (arbExtents ext)) $ \subSizes -> do
+  case subSizes of
+    (large:med:smalls) | (large >= med && med >= sum smalls) -> do
+      return ()
+    _ -> fail "arbExtents failed to return subextents with expected granularity"
 
 --------------------------------------------------------------------------------
 -- Misc helpers
