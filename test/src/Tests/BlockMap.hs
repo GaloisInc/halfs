@@ -206,10 +206,11 @@ checkBlockMapWR dev bm = do
 -- blockmap and the free tree and (2) the given list of extents are all marked
 -- as un/used in the usedMap
 checkIntegrity :: (Reffable r m, Bitmapped b m) =>
-                  BlockMap b r
-               -> Word64
-               -> [Extent]
-               -> Bool
+                  BlockMap b r -- ^ the blockmap
+               -> Word64       -- ^ expected available block count
+               -> [Extent]     -- ^ extents to check in the usedmap...
+               -> Bool         -- ^ ...to see if they are used (True) or unused
+                               -- (False)
                -> PropertyM m ()
 checkIntegrity bm expectAvail exts used = do
   checkAvail bm expectAvail
