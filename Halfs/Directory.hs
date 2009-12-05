@@ -48,8 +48,8 @@ data DirectoryEntry = DirEnt {
   , deType  :: FileType
   }
 
-data AccessRight = Read | Write | Execute
-data FileType    = RegularFile | Directory | Symlink
+data AccessRight    = Read | Write | Execute
+data FileType       = RegularFile | Directory | Symlink
 data DirectoryState = Clean | OnlyAdded | OnlyDeleted | VeryDirty
 
 data FileMode = FileMode {

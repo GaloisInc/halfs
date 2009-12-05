@@ -17,15 +17,13 @@ import Test.QuickCheck.Monadic hiding (assert)
 
 import Halfs.BlockMap (Extent(..))
 
-newtype UnallocDecision = UnallocDecision Bool deriving Show
+--------------------------------------------------------------------------------
+-- Block Device generators and helpers
 
 data BDGeom = BDGeom
   { bdgSecCnt :: Word64       -- ^ number of sectors
   , bdgSecSz  :: Word64       -- ^ sector size, in bytes
   } deriving Show
-
---------------------------------------------------------------------------------
--- Generators and helpers
 
 -- | Generate an arbitrary geometry (modified by function given by the
 -- first parameter) and employ the given geometry-requiring generator to
@@ -47,6 +45,43 @@ powTwo l h = assert (l >= 0 && h <= 63) $ shiftL 1 <$> choose (l, h)
 
 arbBDGeom :: Gen BDGeom
 arbBDGeom = arbitrary
+
+-- | Creates arbitrary "filesystem data" : just block addresses and
+-- block data, constrained by the given device geometry
+arbFSData :: BDGeom -> Gen [(Word64, ByteString)]
+arbFSData g = listOf1 $ (,) <$> arbBlockAddr g <*> arbBlockData g
+
+-- | Creates arbitrary contiguous "filesystem data" : consecutive runs
+-- of block addresses and accompanying block data, constrained by the
+-- given device geometry
+arbContiguousData :: BDGeom -> Gen [(Word64, ByteString)]
+arbContiguousData g = do
+  let numBlks = fromIntegral $ bdgSecCnt g
+      limit   = 64 -- artificial limit on number of contiguous blocks
+                   -- generated; keeps generated data on the small side
+  numContig <- if numBlks > 1 -- maybe we can't create continguous blocks
+               then choose (2 :: Integer, max 2 (min limit (numBlks `div` 2)))
+               else return 1
+  baseAddrs <- (\x -> map fromIntegral [x .. x + numContig])
+               `fmap` choose (0 :: Integer, numBlks - numContig)
+  zip baseAddrs `fmap` vectorOf (fromIntegral numContig) (arbBlockData g)
+
+arbBlockAddr :: BDGeom -> Gen Word64
+arbBlockAddr (BDGeom cnt _sz) =
+  fromIntegral `fmap` choose (0 :: Integer, ub)
+    where ub = fromIntegral $ cnt - 1
+
+arbBlockData :: BDGeom -> Gen ByteString
+arbBlockData (BDGeom _cnt sz) =
+  BS.pack `fmap` replicateM (fromIntegral sz) byte
+
+byte :: Gen Word8
+byte = fromIntegral `fmap` choose (0 :: Int, 255)
+
+--------------------------------------------------------------------------------
+-- BlockMap generators and helpers
+
+newtype UnallocDecision = UnallocDecision Bool deriving Show
 
 -- | Given an extent, generates subextents that cover it; useful for creating
 -- allocation sequences.  To keep the number of subextents relatively small, the
@@ -82,38 +117,6 @@ arbExtents' (Extent b ub) = do
       sz   <- choose (1, ub')
       rest <- fill $ Extent (b' + sz) (ub' - sz)
       return (Extent b' sz : rest)
-
--- | Creates arbitrary "filesystem data" : just block addresses and
--- block data, constrained by the given device geometry
-arbFSData :: BDGeom -> Gen [(Word64, ByteString)]
-arbFSData g = listOf1 $ (,) <$> arbBlockAddr g <*> arbBlockData g
-
--- | Creates arbitrary contiguous "filesystem data" : consecutive runs
--- of block addresses and accompanying block data, constrained by the
--- given device geometry
-arbContiguousData :: BDGeom -> Gen [(Word64, ByteString)]
-arbContiguousData g = do
-  let numBlks = fromIntegral $ bdgSecCnt g
-      limit   = 64 -- artificial limit on number of contiguous blocks
-                   -- generated; keeps generated data on the small side
-  numContig <- if numBlks > 1 -- maybe we can't create continguous blocks
-               then choose (2 :: Integer, max 2 (min limit (numBlks `div` 2)))
-               else return 1
-  baseAddrs <- (\x -> map fromIntegral [x .. x + numContig])
-               `fmap` choose (0 :: Integer, numBlks - numContig)
-  zip baseAddrs `fmap` vectorOf (fromIntegral numContig) (arbBlockData g)
-
-arbBlockAddr :: BDGeom -> Gen Word64
-arbBlockAddr (BDGeom cnt _sz) =
-  fromIntegral `fmap` choose (0 :: Integer, ub)
-    where ub = fromIntegral $ cnt - 1
-
-arbBlockData :: BDGeom -> Gen ByteString
-arbBlockData (BDGeom _cnt sz) =
-  BS.pack `fmap` replicateM (fromIntegral sz) byte
-
-byte :: Gen Word8
-byte = fromIntegral `fmap` choose (0 :: Int, 255)
 
 -- | A hacky, inefficient-but-good-enough permuter
 permute :: [a] -> Gen [a]

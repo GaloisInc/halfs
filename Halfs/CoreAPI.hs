@@ -43,15 +43,15 @@ newfs dev = do
   when (superBlockSize > bdBlockSize dev) $
     fail "The device's block size is insufficiently large!"
   blockMap <- newBlockMap dev
-  res <- allocBlocks blockMap 1
+  res      <- allocBlocks blockMap 1
   case res of
-    Just (Contig rootDirExt) -> do
-      let rootDirAddr              = extBase rootDirExt
-          rootDirInode :: InodeRef = blockAddrToInodeRef rootDirAddr
+    Just (Contig rdirExt) -> do
+      let rdirAddr              = extBase rdirExt
+          rdirInode :: InodeRef = blockAddrToInodeRef rdirAddr
       writeBlockMap dev blockMap
-      makeDirectory dev rootDirAddr rootDirInode rootUser rootGroup
-      bdWriteBlock  dev 0 (superBlockBstr rootDirInode)
-    _                  -> do
+      makeDirectory dev rdirAddr rdirInode rootUser rootGroup
+      bdWriteBlock  dev 0 (superBlockBstr rdirInode)
+    _ -> 
       fail "Could not generate root directory!"
  where
   superBlockBstr r = encode $ superBlock r
