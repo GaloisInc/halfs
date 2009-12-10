@@ -53,8 +53,22 @@ instance Serialize UTCTime where
   put x = do
     let day = fromIntegral $ fromEnum $ utctDay x
         off = fromIntegral $ fromEnum $ utctDayTime x
+
+-- fromEnum (1 * 1000000000000 :: Integer) etc. (or just fromEnum $
+-- secondsToDiffTime 1) is the key to why this is messed up here,
+-- because fromEnum on DiffTime just invokes fromEnum on the underlying
+-- Data.Fixed Integer.
+
+-- round (10**12 :: Double) gets us the desired pico resolution
+-- precision as a constant Intege, should we need it to do calcs like
+-- what occur in showFixed...
+
+-- So this is actually quite easy, if we can just get the value as an
+-- Integer...but it's not looking like it'll work that way :(
+
 --    trace ("PUT:utctDay x = " ++ show (utctDay x) ++ ", day = " ++ show day) $ do
 --    trace ("PUT:utctDayTime x= " ++ show (utctDayTime x) ++ ", off = " ++ show off) $ do
+
     putWord64be day
     putWord64be off 
 
@@ -64,6 +78,11 @@ instance Serialize UTCTime where
 --    trace ("GET: day = " ++ show day) $ do
 --    trace ("GET: off = " ++ show off) $ do                         
     return $ UTCTime day off
+
+chopZeros :: Integer -> String
+chopZeros 0 = ""
+chopZeros a | mod a 10 == 0 = chopZeros (div a 10)
+chopZeros a = show a
 
 instance Timed UTCTime IO where
   getTime = getCurrentTime
