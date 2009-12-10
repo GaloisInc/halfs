@@ -5,12 +5,14 @@ import Test.QuickCheck.Test (isSuccess)
 import System.Exit (ExitCode(..), exitFailure, exitWith)
 
 import qualified Tests.BlockDevice as BD
-import qualified Tests.BlockMap as BM
+import qualified Tests.BlockMap    as BM
+import qualified Tests.Serdes      as SD
 
 qcProps :: [(Args, Property)]
-qcProps = BD.qcProps True -- "quick" mode for Block Devices
-          ++
-          BM.qcProps True -- "quick" mode for Block Map
+qcProps = -- BD.qcProps True -- "quick" mode for Block Devices
+--           ++
+--           BM.qcProps True -- "quick" mode for Block Map
+          SD.qcProps True   
 
 main :: IO ()
 main = do

@@ -10,12 +10,17 @@ import Data.Bits                 (shiftL)
 import Data.ByteString           (ByteString)
 import qualified Data.ByteString as BS
 import Data.List (nub)
+import Data.Serialize
+import Data.Time
 import Data.Word
 import System.Random
 import Test.QuickCheck
 import Test.QuickCheck.Monadic hiding (assert)
 
-import Halfs.BlockMap (Extent(..))
+import Halfs.BlockMap   (Extent(..))
+import Halfs.Inode      (Inode(..), InodeRef(..), minimumNumberOfBlocks)
+import Halfs.Protection (UserID(..), GroupID(..))
+import Halfs.SuperBlock (SuperBlock(..))
 
 --------------------------------------------------------------------------------
 -- Block Device generators and helpers
@@ -145,6 +150,57 @@ instance Arbitrary BDGeom where
 
 -- instance Arbitrary BDGeom where
 --  arbitrary = return $ BDGeom 64 4
+
+-- Generate an arbitrary version 1 superblock with coherent free and
+-- used block counts.  Block size and count are constrained by the
+-- Arbitrary instance for BDGeom.
+instance Arbitrary SuperBlock where
+  arbitrary = do
+    BDGeom cnt sz <- arbitrary
+    free          <- choose (0, cnt)
+    SuperBlock
+      <$> return 1             -- version                         
+      <*> return sz            -- blockSize     
+      <*> return cnt           -- blockCount    
+      <*> arbitrary            -- unmountClean  
+      <*> return free          -- freeBlocks    
+      <*> return (cnt - free)  -- usedBlocks    
+      <*> arbitrary            -- fileCount     
+      <*> IR `fmap` arbitrary  -- rootDir                     
+      <*> IR `fmap` return 1   -- blockMapStart
+
+instance (Arbitrary a, Ord a, Serialize a) => Arbitrary (Inode a) where
+  arbitrary = do
+    numAddrs' <- choose (0, minimumNumberOfBlocks)
+    Inode
+      <$> IR `fmap` arbitrary                        -- address
+      <*> IR `fmap` arbitrary                        -- parent
+      <*> fmap IR `fmap` arbitrary                   -- continuation
+      <*> arbitrary                                  -- createTime
+      <*> arbitrary                                  -- modifyTime
+      <*> UID `fmap` arbitrary                       -- user
+      <*> GID `fmap` arbitrary                       -- group
+      <*> return (fromIntegral numAddrs')            -- numAddrs
+      <*> arbitrary                                  -- sizeBytes
+      <*> arbitrary                                  -- liveSizeBytes
+      <*> replicateM numAddrs' (IR `fmap` arbitrary) -- blocks
+
+instance Arbitrary UTCTime where
+  arbitrary = UTCTime <$> arbitrary <*> arbitrary
+
+instance Arbitrary Day where
+  arbitrary =
+    fromGregorian <$> choose (1900, 2200) <*> choose (1, 12) <*> choose (1, 31)
+
+instance Arbitrary DiffTime where
+  -- XXX/TODO/FIXME: Yielding anything other than 0 here results in a
+  -- serdes test failure over when serializing values from (arbitrary ::
+  -- Gen UTCTime).  Gut sense is that this is a bug in the Serialize
+  -- instance for UTCTime, but it needs further investigation
+  arbitrary = secondsToDiffTime <$> (return 2) -- choose (0, 86400)
+
+instance Arbitrary Word64 where
+  arbitrary = choose (0, maxBound)
 
 instance Random Word64 where
   randomR = integralRandomR

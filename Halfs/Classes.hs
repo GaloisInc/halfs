@@ -25,6 +25,8 @@ import Data.STRef
 import Data.Time.Clock
 import Data.Word
 
+-- import Debug.Trace
+
 -- ----------------------------------------------------------------------------
 
 -- |A monad implementing Timed implements a monotonic clock that can be read
@@ -48,11 +50,20 @@ instance Monad m => Monad (TimedT m) where
                runTimerT (k a) (t + 1)
 
 instance Serialize UTCTime where
-  put x = do putWord64be $ fromIntegral $ fromEnum $ utctDay x
-             putWord64be $ fromIntegral $ fromEnum $ utctDayTime x
-  get   = do day <- (toEnum . fromIntegral) `fmap` getWord64be
-             off <- (toEnum . fromIntegral) `fmap` getWord64be
-             return $ UTCTime day off
+  put x = do
+    let day = fromIntegral $ fromEnum $ utctDay x
+        off = fromIntegral $ fromEnum $ utctDayTime x
+--    trace ("PUT:utctDay x = " ++ show (utctDay x) ++ ", day = " ++ show day) $ do
+--    trace ("PUT:utctDayTime x= " ++ show (utctDayTime x) ++ ", off = " ++ show off) $ do
+    putWord64be day
+    putWord64be off 
+
+  get = do
+    day <- (toEnum . fromIntegral) `fmap` getWord64be
+    off <- (toEnum . fromIntegral) `fmap` getWord64be
+--    trace ("GET: day = " ++ show day) $ do
+--    trace ("GET: off = " ++ show off) $ do                         
+    return $ UTCTime day off
 
 instance Timed UTCTime IO where
   getTime = getCurrentTime

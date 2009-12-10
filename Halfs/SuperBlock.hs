@@ -17,16 +17,18 @@ import Data.Word
 import Halfs.Inode
 
 data SuperBlock = SuperBlock {
-       version      :: !Word64
-     , blockSize    :: !Word64
-     , blockCount   :: !Word64
-     , unmountClean :: !Bool
-     , freeBlocks   :: !Word64
-     , usedBlocks   :: !Word64
-     , fileCount    :: !Word64
-     , rootDir      :: !InodeRef
-     , blockList    :: !InodeRef
+       version       :: !Word64   -- ^ Version of this superblock
+     , blockSize     :: !Word64   -- ^ Block size of underlying blkdev
+     , blockCount    :: !Word64   -- ^ Number of blocks on underlying blkdev
+     , unmountClean  :: !Bool     -- ^ Was this filesystem unmounted cleanly?
+     , freeBlocks    :: !Word64   -- ^ Number of free blocks
+     , usedBlocks    :: !Word64   -- ^ Number of blocks in use
+     , fileCount     :: !Word64   -- ^ Number of files present in the FS; 
+                                  --   does not count directories
+     , rootDir       :: !InodeRef -- ^ Reference to root directory
+     , blockMapStart :: !InodeRef -- ^ Reference to block map base
      }
+  deriving (Show, Eq, Ord)
 
 instance Serialize SuperBlock where
   put sb = do putByteString magic1
@@ -40,7 +42,7 @@ instance Serialize SuperBlock where
               putByteString magic3
               putWord64be $ fileCount sb
               put         $ rootDir sb
-              put         $ blockList sb
+              put         $ blockMapStart sb
               putByteString magic4
   get    = do checkMagic magic1
               v  <- getWord64be
@@ -54,9 +56,9 @@ instance Serialize SuperBlock where
               checkMagic magic3
               fc <- getWord64be
               rd <- get
-              bl <- get
+              bm <- get
               checkMagic magic4
-              return $ SuperBlock v bs bc uc fb ub fc rd bl
+              return $ SuperBlock v bs bc uc fb ub fc rd bm
    where
     checkMagic x = do magic <- getBytes 8
                       unless (magic == x) $ fail "Invalid superblock."

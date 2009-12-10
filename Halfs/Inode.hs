@@ -1,12 +1,17 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-module Halfs.Inode(
-         Inode
-       , InodeRef
-       , blockAddrToInodeRef
-       , inodeRefToBlockAddr
-       , minimalInodeSize
-       , buildEmptyInode
-       )
+module Halfs.Inode
+  (
+    Inode(..)
+  , InodeRef(..)
+  , blockAddrToInodeRef
+  , inodeRefToBlockAddr
+  , minimalInodeSize
+  , buildEmptyInode
+  , nilInodeRef
+  -- * for testing
+  , emptyInode
+  , minimumNumberOfBlocks
+  )
  where
 
 import Control.Exception
@@ -65,27 +70,32 @@ nilInodeRef = IR 0
 -- continuation field to allow multiple runs of block addresses within the
 -- file. We serialize Nothing as nilInodeRef, an invalid continuation.
 --
--- We semi-arbitrarily state that an Inode must be capable of maintaining
--- a minimum of 47 block addresses, which gives us a minimum inode size of
--- 512 bytes.
+-- We semi-arbitrarily state that an Inode must be capable of
+-- maintaining a minimum of 48 block addresses, which gives us a minimum
+-- inode size of 512 bytes (in the IO monad variant, which uses the
+-- UTCTime type for the createTime and modifyTime fields).
 --
 minimumNumberOfBlocks :: Int
-minimumNumberOfBlocks = 47
+minimumNumberOfBlocks = 48
 
 data (Eq t, Ord t, Serialize t) => Inode t = Inode {
-    address       :: InodeRef
-  , parent        :: InodeRef
+    address       :: InodeRef        -- ^ block addr of this inode
+  , parent        :: InodeRef        -- ^ block addr of parent directory inode
   , continuation  :: Maybe InodeRef
   , createTime    :: t
   , modifyTime    :: t
   , user          :: UserID
   , group         :: GroupID
-  , numAddrs      :: Word64
-  , sizeBytes     :: Word64
-  , sizeBlocks    :: Word64
-  , liveSizeBytes :: Word64
+  , numAddrs      :: Word64          -- ^ number of total block
+                                     -- addresses covered by this inode
+  , sizeBytes     :: Word64          -- ^ total number of bytes covered
+                                     -- by this inode (for sanity checking)
+  , liveSizeBytes :: Word64          -- ^ current number of "live" bytes
+                                     -- coverd by this inode (could be <
+                                     -- sizeBytes due to truncation
   , blocks        :: [InodeRef]
   }
+  deriving (Show, Eq)
 
 instance (Eq t, Ord t, Serialize t) => Serialize (Inode t) where
   put n = do putByteString magic1
@@ -102,7 +112,6 @@ instance (Eq t, Ord t, Serialize t) => Serialize (Inode t) where
              put $ group n
              putWord64be $ numAddrs n
              putWord64be $ sizeBytes n
-             putWord64be $ sizeBlocks n
              putWord64be $ liveSizeBytes n
              putByteString magic3
              let blocks'    = blocks n
@@ -123,14 +132,13 @@ instance (Eq t, Ord t, Serialize t) => Serialize (Inode t) where
                           else Just cntI
              ctm  <- get
              mtm  <- get
-             unless (mtm > ctm) $
+             unless (mtm >= ctm) $
                fail "Incoherent modified / creation times."
              checkMagic magic2
              u    <- get
              grp  <- get
              na   <- getWord64be
              sby  <- getWord64be
-             sbl  <- getWord64be
              lsb  <- getWord64be
              checkMagic magic3
              remb <- remaining
@@ -138,11 +146,11 @@ instance (Eq t, Ord t, Serialize t) => Serialize (Inode t) where
                  (numBlocks, check) = numBlockBytes `divMod` inodeRefSize
              unless (check == 0) $ 
                fail "Incorrect number of bytes left for block list."
-             unless (numBlocks > minimumNumberOfBlocks) $
+             unless (numBlocks >= minimumNumberOfBlocks) $
                fail "Not enough space left for minimum number of blocks."
-             blks <- replicateM numBlocks get
+             blks <- filter (/= nilInodeRef) `fmap` replicateM numBlocks get
              checkMagic magic4
-             return $ Inode addr par cont ctm mtm u grp na sby sbl lsb blks
+             return $ Inode addr par cont ctm mtm u grp na sby lsb blks
    where
     checkMagic x = do magic <- getBytes 8
                       unless (magic == x) $ fail "Invalid superblock."
@@ -150,22 +158,16 @@ instance (Eq t, Ord t, Serialize t) => Serialize (Inode t) where
 minimalInodeSize :: (Serialize t, Timed t m) => m Word64
 minimalInodeSize = do
   now <- getTime
-  return $ fromIntegral $ BS.length $ encode $ emptyInode now
- where
-  emptyInode now = Inode {
-    address       = nilInodeRef
-  , parent        = nilInodeRef
-  , continuation  = Nothing
-  , createTime    = now
-  , modifyTime    = now
-  , user          = rootUser
-  , group         = rootGroup
-  , numAddrs      = fromIntegral minimumNumberOfBlocks
-  , sizeBytes     = 0
-  , sizeBlocks    = 0
-  , liveSizeBytes = 0
-  , blocks        = replicate minimumNumberOfBlocks nilInodeRef
-  }
+  return $ fromIntegral $ BS.length $ encode $
+    let e = emptyInode (fromIntegral minimumNumberOfBlocks)
+                       now
+                       now
+                       nilInodeRef
+                       nilInodeRef
+                       rootUser
+                       rootGroup
+    in
+      e{ blocks = replicate minimumNumberOfBlocks nilInodeRef }
 
 computeNumAddrs :: (Serialize t, Timed t m) =>
                    Word64 ->
@@ -187,19 +189,28 @@ buildEmptyInode :: (Serialize t, Timed t m) =>
 buildEmptyInode bd me mommy usr grp = do
   now <- getTime
   nAddrs <- computeNumAddrs (bdBlockSize bd)
-  return $ encode $ emptyInode now nAddrs
- where
-  emptyInode now nAddrs = Inode {
+  return $ encode $ emptyInode nAddrs now now me mommy usr grp
+
+emptyInode :: (Ord t, Serialize t) => 
+              Word64   -- ^ number of block addresses
+           -> t        -- ^ creation time
+           -> t        -- ^ last modify time
+           -> InodeRef -- ^ block addr for this inode
+           -> InodeRef -- ^ parent block address
+           -> UserID  
+           -> GroupID
+           -> Inode t
+emptyInode nAddrs createTm modTm me mommy usr grp =
+  Inode {
     address       = me
   , parent        = mommy
   , continuation  = Nothing
-  , createTime    = now
-  , modifyTime    = now
+  , createTime    = createTm
+  , modifyTime    = modTm
   , user          = usr
   , group         = grp
   , numAddrs      = nAddrs
   , sizeBytes     = 0
-  , sizeBlocks    = 0
   , liveSizeBytes = 0
   , blocks        = []
   }

@@ -19,7 +19,7 @@ import Data.Word
 import System.FilePath
 
 import Halfs.Classes
-import Halfs.Inode
+import Halfs.Inode (InodeRef, blockAddrToInodeRef, buildEmptyInode)
 import Halfs.Protection
 import System.Device.BlockDevice
 
