@@ -12,20 +12,21 @@ module Halfs.Classes(
        )
  where
 
+import Control.Applicative
 import Control.Concurrent.MVar
+import Control.Exception
 import Control.Monad.Reader
 import Control.Monad.ST
 import Data.Array.IO
 import Data.Array.ST
 import Data.IORef
+import Data.Ratio (numerator)
 import Data.Serialize
 import Data.Serialize.Get
 import Data.Serialize.Put
 import Data.STRef
 import Data.Time.Clock
 import Data.Word
-
--- import Debug.Trace
 
 -- ----------------------------------------------------------------------------
 
@@ -51,38 +52,21 @@ instance Monad m => Monad (TimedT m) where
 
 instance Serialize UTCTime where
   put x = do
-    let day = fromIntegral $ fromEnum $ utctDay x
-        off = fromIntegral $ fromEnum $ utctDayTime x
-
--- fromEnum (1 * 1000000000000 :: Integer) etc. (or just fromEnum $
--- secondsToDiffTime 1) is the key to why this is messed up here,
--- because fromEnum on DiffTime just invokes fromEnum on the underlying
--- Data.Fixed Integer.
-
--- round (10**12 :: Double) gets us the desired pico resolution
--- precision as a constant Intege, should we need it to do calcs like
--- what occur in showFixed...
-
--- So this is actually quite easy, if we can just get the value as an
--- Integer...but it's not looking like it'll work that way :(
-
---    trace ("PUT:utctDay x = " ++ show (utctDay x) ++ ", day = " ++ show day) $ do
---    trace ("PUT:utctDayTime x= " ++ show (utctDayTime x) ++ ", off = " ++ show off) $ do
-
-    putWord64be day
-    putWord64be off 
+    putWord64be $ fromIntegral $ fromEnum $ utctDay x
+    putWord64be $
+      -- We have no way to extract the underlying fixed-precision Integer from
+      -- the DiffTime, but picosecond resolution for DiffTime documented, so we
+      -- scale via conversion to Rational (i.e., we reconstruct the underlying
+      -- fixed-precision Integer).  The assert is simply in case the underlying
+      -- representation changes at some point in the future.
+      let dt2pico = numerator . (1000000000000*) . toRational
+          off     = fromIntegral $ dt2pico $ utctDayTime x
+      in assert (off >= (minBound :: Word64) && off <= (maxBound :: Word64)) off
 
   get = do
-    day <- (toEnum . fromIntegral) `fmap` getWord64be
-    off <- (toEnum . fromIntegral) `fmap` getWord64be
---    trace ("GET: day = " ++ show day) $ do
---    trace ("GET: off = " ++ show off) $ do                         
-    return $ UTCTime day off
-
-chopZeros :: Integer -> String
-chopZeros 0 = ""
-chopZeros a | mod a 10 == 0 = chopZeros (div a 10)
-chopZeros a = show a
+    UTCTime
+    <$> (toEnum . fromIntegral)                `fmap` getWord64be
+    <*> (picosecondsToDiffTime . fromIntegral) `fmap` getWord64be
 
 instance Timed UTCTime IO where
   getTime = getCurrentTime
