@@ -9,10 +9,11 @@ import qualified Tests.BlockMap    as BM
 import qualified Tests.Serdes      as SD
 
 qcProps :: [(Args, Property)]
-qcProps = -- BD.qcProps True -- "quick" mode for Block Devices
---           ++
---           BM.qcProps True -- "quick" mode for Block Map
-          SD.qcProps True   
+qcProps = BD.qcProps True -- run in "quick" mode for Block Devices
+          ++
+          BM.qcProps True -- run in "quick" mode for Block Map
+          ++
+          SD.qcProps True -- run in "quick" mode for Serdes
 
 main :: IO ()
 main = do

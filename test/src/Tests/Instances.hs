@@ -18,7 +18,11 @@ import Test.QuickCheck
 import Test.QuickCheck.Monadic hiding (assert)
 
 import Halfs.BlockMap   (Extent(..))
-import Halfs.Inode      (Inode(..), InodeRef(..), minimumNumberOfBlocks)
+import Halfs.Inode      ( Inode(..)
+                        , InodeRef(..)
+                        , computeNumAddrs
+                        , minimalInodeSize
+                        )
 import Halfs.Protection (UserID(..), GroupID(..))
 import Halfs.SuperBlock (SuperBlock(..))
 
@@ -145,8 +149,8 @@ instance Arbitrary BDGeom where
   arbitrary = 
     BDGeom
     <$> powTwo 10 13   -- 1024..8192 sectors
-    <*> powTwo  8 12   -- 256b..4K sector size
-                       -- => 256K .. 32M filesystem size
+    <*> powTwo  9 12   -- 512b..4K sector size
+                       -- => 512K .. 32M filesystem size
 
 -- instance Arbitrary BDGeom where
 --  arbitrary = return $ BDGeom 64 4
@@ -169,21 +173,26 @@ instance Arbitrary SuperBlock where
       <*> IR `fmap` arbitrary  -- rootDir                     
       <*> IR `fmap` return 1   -- blockMapStart
 
+-- Generate an arbitrary inode with coherent fields based on the minimal inode
+-- size computation for an arbitrary device geometry
 instance (Arbitrary a, Ord a, Serialize a) => Arbitrary (Inode a) where
   arbitrary = do
-    numAddrs' <- choose (0, minimumNumberOfBlocks)
+    BDGeom _ blkSz <- arbitrary
+    createTm       <- arbitrary
+    addrCnt        <- computeNumAddrs blkSz =<< minimalInodeSize createTm
+    numBlocks      <- fromIntegral `fmap` choose (0, addrCnt)
     Inode
       <$> IR `fmap` arbitrary                        -- address
       <*> IR `fmap` arbitrary                        -- parent
       <*> fmap IR `fmap` arbitrary                   -- continuation
-      <*> arbitrary                                  -- createTime
-      <*> arbitrary                                  -- modifyTime
+      <*> return createTm                            -- createTime
+      <*> arbitrary `suchThat` (>= createTm)         -- modifyTime
       <*> UID `fmap` arbitrary                       -- user
       <*> GID `fmap` arbitrary                       -- group
-      <*> return (fromIntegral numAddrs')            -- numAddrs
-      <*> arbitrary                                  -- sizeBytes
-      <*> arbitrary                                  -- liveSizeBytes
-      <*> replicateM numAddrs' (IR `fmap` arbitrary) -- blocks
+      <*> return addrCnt                             -- numAddrs
+      <*> return (fromIntegral numBlocks)            -- blockCount
+      <*> replicateM numBlocks (IR `fmap` arbitrary) -- blocks
+                                             
 
 instance Arbitrary UTCTime where
   arbitrary = UTCTime <$> arbitrary <*> arbitrary
@@ -193,11 +202,11 @@ instance Arbitrary Day where
     fromGregorian <$> choose (1900, 2200) <*> choose (1, 12) <*> choose (1, 31)
 
 instance Arbitrary DiffTime where
-  -- XXX/TODO/FIXME: Yielding anything other than 0 here results in a
-  -- serdes test failure over when serializing values from (arbitrary ::
-  -- Gen UTCTime).  Gut sense is that this is a bug in the Serialize
-  -- instance for UTCTime, but it needs further investigation
-  arbitrary = secondsToDiffTime <$> (return 2) -- choose (0, 86400)
+  arbitrary = do
+    sec <- choose (0, 86400)
+    ps  <- choose (0, 10000000000000) -- 10^13, intentionally exceeds picosecond
+                                      -- resolution
+    return $ secondsToDiffTime sec + picosecondsToDiffTime ps
 
 instance Arbitrary Word64 where
   arbitrary = choose (0, maxBound)
