@@ -4,13 +4,12 @@ module Halfs.Inode
     Inode(..)
   , InodeRef(..)
   , blockAddrToInodeRef
-  , inodeRefToBlockAddr
-  , minimalInodeSize
   , buildEmptyInode
+  , inodeRefToBlockAddr
   , nilInodeRef
   -- * for testing
-  , emptyInode
-  , minimumNumberOfBlocks
+  , computeNumAddrs
+  , minimalInodeSize
   )
  where
 
@@ -70,13 +69,13 @@ nilInodeRef = IR 0
 -- continuation field to allow multiple runs of block addresses within the
 -- file. We serialize Nothing as nilInodeRef, an invalid continuation.
 --
--- We semi-arbitrarily state that an Inode must be capable of
--- maintaining a minimum of 48 block addresses, which gives us a minimum
--- inode size of 512 bytes (in the IO monad variant, which uses the
--- UTCTime type for the createTime and modifyTime fields).
+-- We semi-arbitrarily state that an Inode must be capable of maintaining a
+-- minimum of 49 block addresses, which gives us a minimum inode size of 512
+-- bytes (in the IO monad variant, which uses the our Serialize instance for the
+-- UTCTime when writing the createTime and modifyTime fields).
 --
 minimumNumberOfBlocks :: Int
-minimumNumberOfBlocks = 48
+minimumNumberOfBlocks = 49
 
 data (Eq t, Ord t, Serialize t) => Inode t = Inode {
     address       :: InodeRef        -- ^ block addr of this inode
@@ -86,13 +85,11 @@ data (Eq t, Ord t, Serialize t) => Inode t = Inode {
   , modifyTime    :: t
   , user          :: UserID
   , group         :: GroupID
-  , numAddrs      :: Word64          -- ^ number of total block
-                                     -- addresses covered by this inode
-  , sizeBytes     :: Word64          -- ^ total number of bytes covered
-                                     -- by this inode (for sanity checking)
-  , liveSizeBytes :: Word64          -- ^ current number of "live" bytes
-                                     -- coverd by this inode (could be <
-                                     -- sizeBytes due to truncation
+  , numAddrs      :: Word64          -- ^ number of total block addresses
+                                     -- that this inode covers
+  , blockCnt      :: Word64          -- ^ current number of active blocks (equal
+                                     -- to the number of inode references held
+                                     -- in the blocks list)
   , blocks        :: [InodeRef]
   }
   deriving (Show, Eq)
@@ -111,8 +108,7 @@ instance (Eq t, Ord t, Serialize t) => Serialize (Inode t) where
              put $ user n
              put $ group n
              putWord64be $ numAddrs n
-             putWord64be $ sizeBytes n
-             putWord64be $ liveSizeBytes n
+             putWord64be $ blockCnt n
              putByteString magic3
              let blocks'    = blocks n
                  numAddrs'  = fromIntegral $ numAddrs n
@@ -138,7 +134,6 @@ instance (Eq t, Ord t, Serialize t) => Serialize (Inode t) where
              u    <- get
              grp  <- get
              na   <- getWord64be
-             sby  <- getWord64be
              lsb  <- getWord64be
              checkMagic magic3
              remb <- remaining
@@ -150,45 +145,59 @@ instance (Eq t, Ord t, Serialize t) => Serialize (Inode t) where
                fail "Not enough space left for minimum number of blocks."
              blks <- filter (/= nilInodeRef) `fmap` replicateM numBlocks get
              checkMagic magic4
-             return $ Inode addr par cont ctm mtm u grp na sby lsb blks
+             return $ Inode addr par cont ctm mtm u grp na lsb blks
    where
     checkMagic x = do magic <- getBytes 8
                       unless (magic == x) $ fail "Invalid superblock."
 
-minimalInodeSize :: (Serialize t, Timed t m) => m Word64
-minimalInodeSize = do
-  now <- getTime
+-- | Size of a minimal inode structure when serialized, in bytes.  This will
+-- vary based on the space required for type t when serialized.  Note that
+-- minimal inode structure always contains minimumNumberOfBlocks InodeRefs in
+-- its blocks region.
+--
+-- You can check this value interactively in ghci by doing, e.g.
+-- minimalInodeSize =<< (getTime :: IO UTCTime)
+minimalInodeSize :: (Monad m, Ord t, Serialize t) => t -> m Word64
+minimalInodeSize t = do
   return $ fromIntegral $ BS.length $ encode $
-    let e = emptyInode (fromIntegral minimumNumberOfBlocks)
-                       now
-                       now
-                       nilInodeRef
-                       nilInodeRef
-                       rootUser
-                       rootGroup
+    let e = emptyInode
+              (fromIntegral minimumNumberOfBlocks)
+              t
+              t
+              nilInodeRef
+              nilInodeRef
+              rootUser
+              rootGroup
     in
       e{ blocks = replicate minimumNumberOfBlocks nilInodeRef }
 
-computeNumAddrs :: (Serialize t, Timed t m) =>
-                   Word64 ->
-                   m Word64
-computeNumAddrs blockSize = do
-  minSize <- minimalInodeSize
-  let padding       = fromIntegral $ minimumNumberOfBlocks * inodeRefSize
-      noBlockSize   = minSize - padding
-      blockBytes    = blockSize - noBlockSize
-      inodeRefSize' = fromIntegral inodeRefSize
-  unless (blockBytes `mod` inodeRefSize' == 0) $
-    fail "Inexplicably bad block size when computing number of blocks!"
-  return $ blockBytes `div` inodeRefSize'
+-- | Computes the number of block addresses storable by an inode
+computeNumAddrs :: Monad m => 
+                   Word64 -- ^ block size, in bytes
+                -> Word64 -- ^ minimum inode size, in bytes
+                -> m Word64
+computeNumAddrs blockSize minSize = do
+  unless (minSize <= blockSize) $
+    fail "computeNumAddrs: Block size too small to accomodate minimal inode"
+  let
+    -- # bytes required for the blocks region of the minimal inode
+    padding       = fromIntegral $ minimumNumberOfBlocks * inodeRefSize 
+    -- # bytes of the inode excluding the blocks region
+    notBlocksSize = minSize - padding
+    -- # bytes available for storing the blocks region
+    blockSize'    = blockSize - notBlocksSize
+  unless (0 == blockSize' `mod` fromIntegral inodeRefSize) $
+    fail "computeNumAddrs: Inexplicably bad block size"
+  return $ blockSize' `div` fromIntegral inodeRefSize
 
 buildEmptyInode :: (Serialize t, Timed t m) =>
                    BlockDevice m ->
                    InodeRef -> InodeRef -> UserID -> GroupID ->
                    m ByteString
 buildEmptyInode bd me mommy usr grp = do
-  now <- getTime
-  nAddrs <- computeNumAddrs (bdBlockSize bd)
+  now     <- getTime
+  minSize <- minimalInodeSize =<< return now
+  nAddrs  <- computeNumAddrs (bdBlockSize bd) minSize
   return $ encode $ emptyInode nAddrs now now me mommy usr grp
 
 emptyInode :: (Ord t, Serialize t) => 
@@ -210,8 +219,7 @@ emptyInode nAddrs createTm modTm me mommy usr grp =
   , user          = usr
   , group         = grp
   , numAddrs      = nAddrs
-  , sizeBytes     = 0
-  , liveSizeBytes = 0
+  , blockCnt      = 0
   , blocks        = []
   }
 
