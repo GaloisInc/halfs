@@ -28,22 +28,17 @@ import Tests.Utils
 
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
-  [ p 50  "Simple serdes"             propM_blockMapWR
-  , p 50 "In-order alloc/unalloc"     propM_bmInOrderAllocUnallocIntegrity
-  , p 50 "Out-of-order alloc/unalloc" propM_bmOOO
-  , p 50 "Extent aggregation"         propM_bmExtentAggregationIntegrity
-  , p 30 "Serdes stress test"         propM_bmStressWR
+  [ exec 50  "Simple serdes"             propM_blockMapWR
+  , exec 50 "In-order alloc/unalloc"     propM_bmInOrderAllocUnallocIntegrity
+  , exec 50 "Out-of-order alloc/unalloc" propM_bmOOO
+  , exec 50 "Extent aggregation"         propM_bmExtentAggregationIntegrity
+  , exec 30 "Serdes stress test"         propM_bmStressWR
   ]
   where
     propM_bmOOO      = propM_bmOutOfOrderAllocUnallocIntegrity (const return)
     propM_bmStressWR = propM_bmOutOfOrderAllocUnallocIntegrity checkBlockMapWR
-    numTests n       = (,) $ if quick then stdArgs{maxSuccess = n} else stdArgs
-    doProp           = (`whenDev` run . bdShutdown)
     -- 
-    p n s pr =
-      numTests n $ label ("BlockMap: " ++ s) $ monadicIO $
-      forAllM arbBDGeom $ \g ->
-        run (memDev g) >>= doProp (pr g)
+    exec = mkMemDevExec quick "BlockMap"
 
 --------------------------------------------------------------------------------
 -- Property implementations

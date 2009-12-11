@@ -26,9 +26,7 @@ import Halfs.Inode               ( Inode(..)
                                  )
 import Halfs.Protection          (UserID(..), GroupID(..))
 import Halfs.SuperBlock          (SuperBlock(..))
-import System.Device.BlockDevice (BlockDevice(..))
 import Tests.Types
-import Tests.Utils
 
 --------------------------------------------------------------------------------
 -- Block Device generators and helpers
@@ -82,9 +80,6 @@ arbBlockAddr (BDGeom cnt _sz) =
 arbBlockData :: BDGeom -> Gen ByteString
 arbBlockData (BDGeom _cnt sz) =
   BS.pack `fmap` replicateM (fromIntegral sz) byte
-
-arbBlkDev :: Gen (IO (Maybe (BlockDevice IO)))
-arbBlkDev = arbitrary
 
 byte :: Gen Word8
 byte = fromIntegral `fmap` choose (0 :: Int, 255)
@@ -153,11 +148,6 @@ instance Arbitrary BDGeom where
     <$> powTwo 10 13   -- 1024..8192 sectors
     <*> powTwo  9 12   -- 512b..4K sector size
                        -- => 512K .. 32M filesystem size
-
-instance Arbitrary (IO (Maybe (BlockDevice IO))) where
-  arbitrary = do
-    g <- arbitrary
-    return $ memDev g
 
 -- Generate an arbitrary version 1 superblock with coherent free and
 -- used block counts.  Block size and count are constrained by the

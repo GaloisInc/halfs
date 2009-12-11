@@ -11,11 +11,13 @@ import System.Directory
 import Test.QuickCheck hiding (numTests)
 import Test.QuickCheck.Monadic
 
+import Halfs.Classes
 import System.Device.BlockDevice
 import System.Device.File
 import System.Device.Memory
 import System.Device.ST
 
+import Tests.Instances
 import Tests.Types
 
 type DevCtor = BDGeom -> IO (Maybe (BlockDevice IO))
@@ -72,3 +74,19 @@ whenDev act cleanup =
     y <- act x
     cleanup x
     return y
+
+mkMemDevExec :: forall m.
+                Bool
+             -> String
+             -> Int
+             -> String
+             -> (BDGeom -> BlockDevice IO -> PropertyM IO m)
+             -> (Args, Property)
+mkMemDevExec quick pfx =
+  let numTests n = (,) $ if quick then stdArgs{maxSuccess = n} else stdArgs
+      doProp     = (`whenDev` run . bdShutdown)
+  in
+    \n s pr ->
+      numTests n $ label (pfx ++ ": " ++ s) $ monadicIO $
+        forAllM arbBDGeom $ \g ->
+          run (memDev g) >>= doProp (pr g)
