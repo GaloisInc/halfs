@@ -1,4 +1,4 @@
-{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE ScopedTypeVariables, BangPatterns #-}
 module System.Device.ST(
          newSTBlockDevice
        )
@@ -24,7 +24,7 @@ newSTBlockDevice numSectors sectorSize
         bdBlockSize  = sectorSize
       , bdNumBlocks  = numSectors
       , bdReadBlock  = \ i -> readArray arr i
-      , bdWriteBlock = \ i v -> do
+      , bdWriteBlock = \ i !v -> do
                          let v' = BS.take secSize64 $ v `BS.append` empty
                          writeArray arr i v'
       , bdFlush      = return ()

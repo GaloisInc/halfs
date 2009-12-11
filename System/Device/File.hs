@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 module System.Device.File(
          newFileBlockDevice
        )
@@ -24,7 +25,7 @@ newFileBlockDevice fname secSize = do
                     v <- BS.hGet hndl secSizeInt
                     let v' = BS.take secSize64 $ v `BS.append` empty
                     return v'
-  , bdWriteBlock = \ i v -> do
+  , bdWriteBlock = \ i !v -> do
                     let v' = BS.take secSize64 $ v `BS.append` empty
                     hSeek hndl AbsoluteSeek (fromIntegral $ i * secSize)
                     BS.hPut hndl v'
