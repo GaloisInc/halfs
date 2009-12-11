@@ -16,7 +16,7 @@ import System.Device.File
 import System.Device.Memory
 import System.Device.ST
 
-import Tests.Instances
+import Tests.Types
 
 type DevCtor = BDGeom -> IO (Maybe (BlockDevice IO))
 

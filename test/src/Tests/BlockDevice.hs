@@ -15,6 +15,7 @@ import Test.QuickCheck.Monadic
 import System.Device.BlockDevice
 
 import Tests.Instances
+import Tests.Types
 import Tests.Utils
 
 --------------------------------------------------------------------------------

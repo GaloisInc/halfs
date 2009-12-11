@@ -18,6 +18,7 @@ import Halfs.BlockMap
 import Halfs.Classes
 
 import Tests.Instances
+import Tests.Types
 import Tests.Utils
   
 -- import Debug.Trace

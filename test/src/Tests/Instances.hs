@@ -1,4 +1,5 @@
 {-# OPTIONS_GHC -fno-warn-orphans #-}
+{-# LANGUAGE FlexibleInstances #-}
 
 module Tests.Instances
 where
@@ -17,22 +18,20 @@ import System.Random
 import Test.QuickCheck
 import Test.QuickCheck.Monadic hiding (assert)
 
-import Halfs.BlockMap   (Extent(..))
-import Halfs.Inode      ( Inode(..)
-                        , InodeRef(..)
-                        , computeNumAddrs
-                        , minimalInodeSize
-                        )
-import Halfs.Protection (UserID(..), GroupID(..))
-import Halfs.SuperBlock (SuperBlock(..))
+import Halfs.BlockMap            (Extent(..))
+import Halfs.Inode               ( Inode(..)
+                                 , InodeRef(..)
+                                 , computeNumAddrs
+                                 , minimalInodeSize
+                                 )
+import Halfs.Protection          (UserID(..), GroupID(..))
+import Halfs.SuperBlock          (SuperBlock(..))
+import System.Device.BlockDevice (BlockDevice(..))
+import Tests.Types
+import Tests.Utils
 
 --------------------------------------------------------------------------------
 -- Block Device generators and helpers
-
-data BDGeom = BDGeom
-  { bdgSecCnt :: Word64       -- ^ number of sectors
-  , bdgSecSz  :: Word64       -- ^ sector size, in bytes
-  } deriving Show
 
 -- | Generate an arbitrary geometry (modified by function given by the
 -- first parameter) and employ the given geometry-requiring generator to
@@ -83,6 +82,9 @@ arbBlockAddr (BDGeom cnt _sz) =
 arbBlockData :: BDGeom -> Gen ByteString
 arbBlockData (BDGeom _cnt sz) =
   BS.pack `fmap` replicateM (fromIntegral sz) byte
+
+arbBlkDev :: Gen (IO (Maybe (BlockDevice IO)))
+arbBlkDev = arbitrary
 
 byte :: Gen Word8
 byte = fromIntegral `fmap` choose (0 :: Int, 255)
@@ -152,8 +154,10 @@ instance Arbitrary BDGeom where
     <*> powTwo  9 12   -- 512b..4K sector size
                        -- => 512K .. 32M filesystem size
 
--- instance Arbitrary BDGeom where
---  arbitrary = return $ BDGeom 64 4
+instance Arbitrary (IO (Maybe (BlockDevice IO))) where
+  arbitrary = do
+    g <- arbitrary
+    return $ memDev g
 
 -- Generate an arbitrary version 1 superblock with coherent free and
 -- used block counts.  Block size and count are constrained by the
@@ -193,7 +197,6 @@ instance (Arbitrary a, Ord a, Serialize a) => Arbitrary (Inode a) where
       <*> return (fromIntegral numBlocks)            -- blockCount
       <*> replicateM numBlocks (IR `fmap` arbitrary) -- blocks
                                              
-
 instance Arbitrary UTCTime where
   arbitrary = UTCTime <$> arbitrary <*> arbitrary
 
