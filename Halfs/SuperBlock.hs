@@ -25,8 +25,8 @@ data SuperBlock = SuperBlock {
      , usedBlocks    :: !Word64   -- ^ Number of blocks in use
      , fileCount     :: !Word64   -- ^ Number of files present in the FS; 
                                   --   does not count directories
-     , rootDir       :: !InodeRef -- ^ Reference to root directory
-     , blockMapStart :: !InodeRef -- ^ Reference to block map base
+     , rootDir       :: !InodeRef -- ^ IR to root directory
+     , blockMapStart :: !InodeRef -- ^ IR to first block map addr
      }
   deriving (Show, Eq, Ord)
 

@@ -18,10 +18,11 @@ import Data.Word
 import Halfs.BlockMap
 import Halfs.Classes
 import Halfs.Errors
+import Halfs.SuperBlock
 import System.Device.BlockDevice
 
 -- Any monad used in Halfs must implement the following interface:
-class (Bitmapped b m, Timed t m, Reffable r m, Lockable l m, Serialize t, Functor m) =>
+class (Bitmapped b m, Timed t m, Reffable r m, Lockable l m, Serialize t, Functor m, Monad m) =>
    HalfsCapable b t r l m | m -> b t r l
 
 instance HalfsCapable (IOUArray Word64 Bool)   UTCTime IORef     IOLock IO
@@ -37,7 +38,7 @@ type HalfsM m a = m (Either HalfsError a)
 data Halfs b r m l = HalfsState {
     hsBlockDev   :: BlockDevice m
   , hsBlockMap   :: BlockMap b r
-  , hsNumFiles   :: r Word64
+  , hsSuperBlock :: r SuperBlock
   , hsLock       :: l
   }
 

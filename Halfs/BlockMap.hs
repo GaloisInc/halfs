@@ -87,8 +87,10 @@ insert ext tr = treeL >< (ext <| treeR)
 
 data BlockMap b r = BM {
     bmFreeTree :: r FreeTree
-  , bmUsedMap  :: b -- ^ Is the given block free?
-  , bmNumFree  :: r Word64
+  , bmUsedMap  :: b          -- ^ Is the given block free?
+  , bmNumFree  :: r Word64   -- ^ Number of available free blocks; the blockmap
+                             -- never counts blocks required for storing
+                             -- blockmap itself nor the superblock as 'free'
   }
 
 -- | Calculate the number of bytes required to store a block map for the
@@ -108,12 +110,6 @@ newBlockMap :: (Monad m, Reffable r m, Bitmapped b m) =>
             -> m (BlockMap b r)
 newBlockMap dev = do
   when (numFree == 0) $ fail "Block device is too small for block map creation"
-
---   trace ("newBlockMap: numBlks        = " ++ show numBlks)        $ do        
---   trace ("newBlockMap: totalBits      = " ++ show totalBits)      $ do      
---   trace ("newBlockMap: blockMapSzBlks = " ++ show blockMapSzBlks) $ do 
---   trace ("newBlockMap: baseFreeIdx    = " ++ show baseFreeIdx)    $ do    
---   trace ("newBlockMap: numFree        = " ++ show numFree)        $ do        
 
   -- We overallocate the bitmap up to the entire size of the block(s)
   -- needed for the block map region so that de/serialization in the

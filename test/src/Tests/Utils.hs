@@ -11,7 +11,6 @@ import System.Directory
 import Test.QuickCheck hiding (numTests)
 import Test.QuickCheck.Monadic
 
-import Halfs.Classes
 import System.Device.BlockDevice
 import System.Device.File
 import System.Device.Memory

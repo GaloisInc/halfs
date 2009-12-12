@@ -72,16 +72,16 @@ data FileStat t = FileStat {
   , fsChangeTime :: t
   }
 
--- |Given a block address to place the directory, its parent, its owner, and
--- its group, generate a new, empty directory.
+-- | Given a block address to place the directory, its parent, its
+-- owner, and its group, generate a new, empty directory.
 makeDirectory :: (Serialize t, Timed t m) =>
                  BlockDevice m -> Word64 -> InodeRef -> UserID -> GroupID ->
                  m InodeRef
 makeDirectory bd addr mommy user group = do
   bstr <- buildEmptyInode bd (blockAddrToInodeRef addr) mommy user group
   -- sanity check
-  let bsize = fromIntegral $ bdBlockSize bd
-  assert (BS.length bstr == bsize) $ return ()
+  assert (BS.length bstr == fromIntegral (bdBlockSize bd)) $ return ()
   -- end sanity check
   bdWriteBlock bd addr bstr
-  return (blockAddrToInodeRef addr)
+  return $ blockAddrToInodeRef addr
+  -- TODO: update parent inode when not self

@@ -1,4 +1,4 @@
-{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE ScopedTypeVariables, BangPatterns #-}
 module System.Device.Memory(
          newMemoryBlockDevice
        )

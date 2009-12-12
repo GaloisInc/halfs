@@ -1,6 +1,7 @@
 {-# LANGUAGE FlexibleContexts, ScopedTypeVariables #-}
 module Halfs.CoreAPI where
 
+import Control.Exception (assert)
 import Control.Monad.Reader
 import Data.ByteString(ByteString)
 import qualified Data.ByteString as BS
@@ -9,13 +10,17 @@ import Data.Word
 import System.FilePath
 
 import Halfs.BlockMap
+import Halfs.Classes
 import Halfs.Directory
+import Halfs.Errors
 import Halfs.File
 import Halfs.Inode
 import Halfs.Monad
 import Halfs.Protection
 import Halfs.SuperBlock
 import System.Device.BlockDevice
+
+import Debug.Trace
 
 data SyncType = Data | Everything
 
@@ -31,49 +36,66 @@ data FileSystemStats = FSS {
 --------------------------------------------------------------------------------
 -- Filesystem init, teardown, and check functions
 
--- |Create a new file system on the given device. The new file system will use
--- the block size reported by bdBlockSize on the device; if you want to increase
--- the file system's block size, you should use 'newRescaledBlockDevice' from
--- System.Device.BlockDevice.
+-- | Create a new file system on the given device. The new file system
+-- will use the block size reported by bdBlockSize on the device; if you
+-- want to increase the file system's block size, you should use
+-- 'newRescaledBlockDevice' from System.Device.BlockDevice.
 --
 -- Block size has no bearing on the maximum size of a file or directory, but
 -- will impact the size of certain internal data structures that keep track of
 -- free blocks. Larger block sizes will decrease the cost of these structures
 -- per underlying disk megabyte, but may also lead to more wasted space for
 -- small files and directories.
-newfs :: (HalfsCapable b t r l m) => BlockDevice m -> m ()
+
+newfs :: (HalfsCapable b t r l m) => BlockDevice m -> m SuperBlock
 newfs dev = do
   when (superBlockSize > bdBlockSize dev) $
     fail "The device's block size is insufficiently large!"
+
+  let rdirBlks = 1
   blockMap <- newBlockMap dev
-  res      <- allocBlocks blockMap 1
+  numFree  <- readRef $! bmNumFree blockMap
+  res      <- allocBlocks blockMap rdirBlks
   case res of
     Just (Contig rdirExt) -> do
-      let rdirAddr              = extBase rdirExt
-          rdirInode :: InodeRef = blockAddrToInodeRef rdirAddr
-      writeBlockMap dev blockMap
+      let rdirAddr  = extBase rdirExt
+          rdirInode = blockAddrToInodeRef rdirAddr
       makeDirectory dev rdirAddr rdirInode rootUser rootGroup
-      bdWriteBlock  dev 0 (superBlockBstr rdirInode)
+      writeBlockMap dev blockMap
+      writeSB       dev $ superBlock rdirInode (numFree - rdirBlks) rdirBlks
     _ -> 
       fail "Could not generate root directory!"
  where
-  superBlockBstr r = encode $ superBlock r
-  superBlock rdir  = SuperBlock {
-    version        = 1
-  , blockSize      = bdBlockSize dev
-  , blockCount     = bdNumBlocks dev
-  , unmountClean   = True
-  , freeBlocks     = -- Was: bdNumBlocks dev - 1 -- FIXME
-      error "freeBlocks calculation not yet implemented"
-  , usedBlocks     = -- Was: 1                   -- FIXME
-      error "usedBlocks calculation not yet implemented"
-  , fileCount      = 0
-  , rootDir        = rdir
-  , blockMapStart  = blockAddrToInodeRef 1
-  }
+   superBlock rdirIR nf nu = SuperBlock {
+     version        = 1
+   , blockSize      = bdBlockSize dev
+   , blockCount     = bdNumBlocks dev
+   , unmountClean   = True
+   , freeBlocks     = nf 
+   , usedBlocks     = nu
+   , fileCount      = 0
+   , rootDir        = rdirIR
+   , blockMapStart  = blockAddrToInodeRef 1
+   }
 
-mount :: (HalfsCapable b t r l m) => BlockDevice m -> Halfs b r m l
-mount = undefined
+-- | Mounts a filesystem from a given block device.
+mount :: (HalfsCapable b t r l m) => BlockDevice m -> HalfsM m (Halfs b r m l)
+mount dev = 
+  decode `fmap` bdReadBlock dev 0 >>=
+  either
+    (return . Left . HalfsMountFailed . BadSuperBlock)
+    (\sb -> do
+       if unmountClean sb then do
+         sb' <- writeSB dev sb{ unmountClean = False }
+         Right `fmap`
+           (HalfsState dev
+            `fmap` readBlockMap dev       
+            `ap`   newRef sb'
+            `ap`   newLock
+           )
+        else
+          return $ Left $ HalfsMountFailed DirtyUnmount
+    )
 
 unmount :: (HalfsCapable b t r l m) =>
            Halfs b r m l ->
@@ -219,3 +241,17 @@ fsstat :: (HalfsCapable b t r l m) =>
           Halfs b r m l ->
           HalfsM m FileSystemStats
 fsstat = undefined
+
+--------------------------------------------------------------------------------
+-- Utility functions
+
+writeSB :: HalfsCapable b t r l m =>
+           BlockDevice m
+        -> SuperBlock
+        -> m SuperBlock
+writeSB dev sb = do 
+  let sbdata = encode sb
+  assert (BS.length sbdata <= fromIntegral (bdBlockSize dev)) $ 
+    bdWriteBlock dev 0 sbdata
+  return sb
+
