@@ -32,8 +32,12 @@ import Tests.Utils
 
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
-  [ -- exec 20 "Init and mount" propM_initAndMountOK
-    exec 20 "Mount/unmount" propM_mountUnmountOK
+  [
+    exec 50  "Init and mount" propM_initAndMountOK
+  ,
+    exec 50  "Mount/unmount"  propM_mountUnmountOK
+  ,
+    exec 50  "Unmount mutex"  propM_unmountMutexOK
   ]
   where
     exec = mkMemDevExec quick "CoreAPI"
@@ -109,21 +113,35 @@ propM_mountUnmountOK _g dev = do
       run (unmount fs)
       >>= either (fail . (++) "Unxpected unmount failure: " . show) (const ok)
 
-propM_unmountMutexOK :: HalfsCapable b t r l m =>
-                        BDGeom
-                     -> BlockDevice m
-                     -> PropertyM m ()
+-- | Sanity check: unmount is mutex'd sensibly
+
+-- NB: this is probably of limited utility at the time of writing, because
+-- removing the locks from the unmount still yields the expected behavior; doing
+-- gymnastics to ensure various kinds of interleaving is probably not worth it
+-- for this small test.  This might change down the road, though, as the unmount
+-- responsibilities take longer.  Also, something like this is probably going to
+-- be useful for multithreaded tests (and for operations more frequent than
+-- unmount) down the road, so we'll leave it here for the time being.
+propM_unmountMutexOK :: BDGeom
+                     -> BlockDevice IO
+                     -> PropertyM IO ()
 propM_unmountMutexOK _g dev = do
-  return undefined
+  fs <- run (newfs dev) >> mountOK dev
+  ch <- run newChan
+  run $ forkIO $ threadTest fs ch
+  run $ threadTest fs ch
+  r1 <- run $ readChan ch
+  r2 <- run $ readChan ch
+  assert $ (r1 || r2) && not (r1 && r2) -- r1 `xor` r2
   where
-    threadTest fs = 
-      unmount fs >>= either (const $ return False) (const $ return True)
+    threadTest fs ch =
+      unmount fs >>= either (\_ -> writeChan ch False) (\_ -> writeChan ch True)
 
 --------------------------------------------------------------------------------
 -- Misc
 
 ok :: Monad m => PropertyM m ()
-ok            = return () 
+ok = return () 
  
 unexpectedErr :: (Monad m, Show a) => a -> PropertyM m ()
 unexpectedErr = fail . (++) "Expected failure, but not: " . show
@@ -137,4 +155,3 @@ mountOK :: HalfsCapable b t r l m =>
 mountOK dev =
   run (mount dev)
   >>= either (fail . (++) "Unexpected mount failure: " . show) (return)
-      

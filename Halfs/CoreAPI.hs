@@ -20,7 +20,7 @@ import Halfs.Protection
 import Halfs.SuperBlock
 import System.Device.BlockDevice
 
-import Debug.Trace
+-- import Debug.Trace
 
 data SyncType = Data | Everything
 
@@ -265,10 +265,7 @@ fsstat = undefined
 --------------------------------------------------------------------------------
 -- Utility functions
 
-writeSB :: HalfsCapable b t r l m =>
-           BlockDevice m
-        -> SuperBlock
-        -> m SuperBlock
+writeSB :: HalfsCapable b t r l m => BlockDevice m -> SuperBlock -> m SuperBlock
 writeSB dev sb =
   let sbdata = encode sb in 
   assert (BS.length sbdata <= fromIntegral (bdBlockSize dev)) $ do
@@ -276,10 +273,7 @@ writeSB dev sb =
     bdFlush dev
     return sb
 
-locked :: HalfsCapable b t r l m =>
-          Halfs b r m l
-       -> HalfsM m a
-       -> HalfsM m a
+locked :: HalfsCapable b t r l m => Halfs b r m l -> HalfsM m a -> HalfsM m a
 locked fs act = do
   lock $ hsLock fs
   res <- act
@@ -290,6 +284,7 @@ locked fs act = do
 sreadRef :: Reffable r m => r a -> m a
 sreadRef = ($!) readRef
 
+-- Strict writeRef
 swriteRef :: Reffable r m => r a -> a -> m ()
 swriteRef = ($!) writeRef
             
