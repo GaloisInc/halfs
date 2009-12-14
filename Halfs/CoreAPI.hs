@@ -47,7 +47,8 @@ data FileSystemStats = FSS {
 -- per underlying disk megabyte, but may also lead to more wasted space for
 -- small files and directories.
 
-newfs :: (HalfsCapable b t r l m) => BlockDevice m -> m SuperBlock
+newfs :: (HalfsCapable b t r l m) =>
+         BlockDevice m -> m SuperBlock
 newfs dev = do
   when (superBlockSize > bdBlockSize dev) $
     fail "The device's block size is insufficiently large!"
@@ -81,8 +82,7 @@ newfs dev = do
 -- | Mounts a filesystem from a given block device.  After this operation
 -- completes, the superblock will have its unmountClean flag set to False.
 mount :: (HalfsCapable b t r l m) =>
-         BlockDevice m
-      -> HalfsM m (Halfs b r m l)
+         BlockDevice m -> HalfsM m (Halfs b r m l)
 mount dev = 
   decode `fmap` bdReadBlock dev 0 >>=
   either
@@ -103,8 +103,7 @@ mount dev =
 -- | Unmounts the given filesystem.  After this operation completes, the
 -- superblock will have its unmountClean flag set to True.
 unmount :: (HalfsCapable b t r l m) =>
-           Halfs b r m l ->
-           HalfsM m ()
+           Halfs b r m l -> HalfsM m ()
 unmount fs@HalfsState{hsBlockDev = dev, hsSuperBlock = sbRef} = do
   locked fs $ do
     sb <- sreadRef sbRef
@@ -128,144 +127,125 @@ fsck = undefined
 -- Directory manipulation
 
 mkdir :: (HalfsCapable b t r l m) =>
-         Halfs b r m l -> FilePath -> FileMode ->
-         HalfsM m ()
+         Halfs b r m l -> FilePath -> FileMode -> HalfsM m ()
 mkdir = undefined
 
 rmdir :: (HalfsCapable b t r l m) =>
-         Halfs b r m l -> FilePath ->
-         HalfsM m ()
+         Halfs b r m l -> FilePath -> HalfsM m ()
 rmdir = undefined
 
-
 openDir :: (HalfsCapable b t r l m) =>
-           Halfs b r m l -> FilePath ->
-           HalfsM m (DirHandle r)
+           Halfs b r m l -> FilePath -> HalfsM m (DirHandle r)
 openDir = undefined
 
 closeDir :: (HalfsCapable b t r l m) =>
-            Halfs b r m l -> (DirHandle r) ->
-            HalfsM m ()
+            Halfs b r m l -> (DirHandle r) -> HalfsM m ()
 closeDir = undefined
 
 readDir :: (HalfsCapable b t r l m) =>
-           Halfs b r m l -> (DirHandle r) ->
-           HalfsM m [(FilePath, FileStat t)]
+           Halfs b r m l -> (DirHandle r) -> HalfsM m [(FilePath, FileStat t)]
 readDir = undefined
 
 -- | Synchronize the given directory to disk.
 syncDir :: (HalfsCapable b t r l m) =>
-           Halfs b r m l -> FilePath -> SyncType ->
-           HalfsM m ()
+           Halfs b r m l -> FilePath -> SyncType -> HalfsM m ()
 syncDir = undefined
 
 --------------------------------------------------------------------------------
 -- File manipulation
 
 openFile :: (HalfsCapable b t r l m) =>
-            Halfs b r m l -> FilePath ->
-            HalfsM m FileHandle
+            Halfs b r m l -> FilePath -> HalfsM m FileHandle
 openFile = undefined
 
 read :: (HalfsCapable b t r l m) =>
-        Halfs b r m l -> FileHandle -> Word64 -> Word64 ->
-        HalfsM m ByteString
+        Halfs b r m l -> FileHandle -> Word64 -> Word64 -> HalfsM m ByteString
 read = undefined
 
 write :: (HalfsCapable b t r l m) =>
-         Halfs b r m l -> FileHandle -> Word64 -> Word64 -> ByteString ->
-         HalfsM m ()
+         Halfs b r m l
+      -> FileHandle
+      -> Word64
+      -> Word64
+      -> ByteString
+      -> HalfsM m ()
 write = undefined
 
 flush :: (HalfsCapable b t r l m) =>
-         Halfs b r m l -> FilePath ->
-         HalfsM m ()
+         Halfs b r m l -> FilePath -> HalfsM m ()
 flush = undefined
 
 syncFile :: (HalfsCapable b t r l m) =>
-            Halfs b r m l -> FilePath -> SyncType ->
-            HalfsM m ()
+            Halfs b r m l -> FilePath -> SyncType ->HalfsM m ()
 syncFile = undefined
 
 closeFile :: (HalfsCapable b t r l m) =>
-             Halfs b r m l -> FilePath ->
-             HalfsM m ()
+             Halfs b r m l -> FilePath -> HalfsM m ()
 closeFile = undefined
 
 setFileSize :: (HalfsCapable b t r l m) =>
-               Halfs b r m l -> FilePath -> Word64 ->
-               HalfsM m ()
+               Halfs b r m l -> FilePath -> Word64 -> HalfsM m ()
 setFileSize = undefined
 
 setFileTimes :: (HalfsCapable b t r l m) =>
-                Halfs b r m l -> FilePath -> t -> t ->
-                HalfsM m ()
+                Halfs b r m l -> FilePath -> t -> t -> HalfsM m ()
 setFileTimes = undefined
 
 rename :: (HalfsCapable b t r l m) =>
-          Halfs b r m l -> FilePath -> FilePath ->
-          HalfsM m ()
+          Halfs b r m l -> FilePath -> FilePath -> HalfsM m ()
 rename = undefined
 
 --------------------------------------------------------------------------------
 -- Access control
 
 chmod :: (HalfsCapable b t r l m) =>
-         Halfs b r m l -> FilePath -> FileMode ->
-         HalfsM m ()
+         Halfs b r m l -> FilePath -> FileMode -> HalfsM m ()
 chmod = undefined
 
 chown :: (HalfsCapable b t r l m) =>
-         Halfs b r m l -> FilePath -> UserID -> GroupID ->
-         HalfsM m ()
+         Halfs b r m l -> FilePath -> UserID -> GroupID -> HalfsM m ()
 chown = undefined
 
 -- | JS XXX/TODO: What's the intent of this function?
 access :: (HalfsCapable b t r l m) =>
-          Halfs b r m l -> FilePath -> [AccessRight] ->
-          HalfsM m ()
+          Halfs b r m l -> FilePath -> [AccessRight] -> HalfsM m ()
 access = undefined
 
 --------------------------------------------------------------------------------
 -- Link manipulation
 
 mklink :: (HalfsCapable b t r l m) =>
-          Halfs b r m l -> FilePath -> FilePath ->
-          HalfsM m ()
+          Halfs b r m l -> FilePath -> FilePath -> HalfsM m ()
 mklink = undefined
 
 rmlink :: (HalfsCapable b t r l m) =>
-          Halfs b r m l -> FilePath ->
-          HalfsM m ()
+          Halfs b r m l -> FilePath -> HalfsM m ()
 rmlink = undefined
 
 createSymLink :: (HalfsCapable b t r l m) =>
-                 Halfs b r m l -> FilePath -> FilePath ->
-                 HalfsM m ()
+                 Halfs b r m l -> FilePath -> FilePath -> HalfsM m ()
 createSymLink = undefined
 
 readSymLink :: (HalfsCapable b t r l m) =>
-               Halfs b r m l -> FilePath ->
-               HalfsM m FilePath
+               Halfs b r m l -> FilePath -> HalfsM m FilePath
 readSymLink = undefined
 
 --------------------------------------------------------------------------------
 -- Filesystem stats
 
 fstat :: (HalfsCapable b t r l m) =>
-         Halfs b r m l -> FilePath ->
-         HalfsM m (FileStat t)
+         Halfs b r m l -> FilePath -> HalfsM m (FileStat t)
 fstat = undefined
 
 fsstat :: (HalfsCapable b t r l m) =>
-          Halfs b r m l ->
-          HalfsM m FileSystemStats
+          Halfs b r m l -> HalfsM m FileSystemStats
 fsstat = undefined
 
 --------------------------------------------------------------------------------
 -- Utility functions
 
-writeSB :: HalfsCapable b t r l m => BlockDevice m -> SuperBlock -> m SuperBlock
+writeSB :: (HalfsCapable b t r l m) =>
+           BlockDevice m -> SuperBlock -> m SuperBlock
 writeSB dev sb =
   let sbdata = encode sb in 
   assert (BS.length sbdata <= fromIntegral (bdBlockSize dev)) $ do
@@ -273,7 +253,8 @@ writeSB dev sb =
     bdFlush dev
     return sb
 
-locked :: HalfsCapable b t r l m => Halfs b r m l -> HalfsM m a -> HalfsM m a
+locked :: (HalfsCapable b t r l m) =>
+          Halfs b r m l -> HalfsM m a -> HalfsM m a
 locked fs act = do
   lock $ hsLock fs
   res <- act
@@ -287,5 +268,3 @@ sreadRef = ($!) readRef
 -- Strict writeRef
 swriteRef :: Reffable r m => r a -> a -> m ()
 swriteRef = ($!) writeRef
-            
-           
