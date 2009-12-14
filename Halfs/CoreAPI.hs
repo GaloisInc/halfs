@@ -100,7 +100,10 @@ mount dev =
 unmount :: (HalfsCapable b t r l m) =>
            Halfs b r m l ->
            HalfsM m ()
-unmount = undefined
+unmount fs = do
+  return undefined
+             
+  
 
 fsck :: Int
 fsck = undefined
@@ -117,6 +120,7 @@ rmdir :: (HalfsCapable b t r l m) =>
          Halfs b r m l -> FilePath ->
          HalfsM m ()
 rmdir = undefined
+
 
 openDir :: (HalfsCapable b t r l m) =>
            Halfs b r m l -> FilePath ->
