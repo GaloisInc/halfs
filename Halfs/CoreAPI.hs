@@ -54,7 +54,7 @@ newfs dev = do
 
   let rdirBlks = 1
   blockMap <- newBlockMap dev
-  numFree  <- readRef $! bmNumFree blockMap
+  numFree  <- sreadRef (bmNumFree blockMap)
   res      <- allocBlocks blockMap rdirBlks
   case res of
     Just (Contig rdirExt) -> do
@@ -78,8 +78,11 @@ newfs dev = do
    , blockMapStart  = blockAddrToInodeRef 1
    }
 
--- | Mounts a filesystem from a given block device.
-mount :: (HalfsCapable b t r l m) => BlockDevice m -> HalfsM m (Halfs b r m l)
+-- | Mounts a filesystem from a given block device.  After this operation
+-- completes, the superblock will have its unmountClean flag set to False.
+mount :: (HalfsCapable b t r l m) =>
+         BlockDevice m
+      -> HalfsM m (Halfs b r m l)
 mount dev = 
   decode `fmap` bdReadBlock dev 0 >>=
   either
@@ -97,14 +100,27 @@ mount dev =
           return $ Left $ HalfsMountFailed DirtyUnmount
     )
 
+-- | Unmounts the given filesystem.  After this operation completes, the
+-- superblock will have its unmountClean flag set to True.
 unmount :: (HalfsCapable b t r l m) =>
            Halfs b r m l ->
            HalfsM m ()
-unmount fs = do
-  return undefined
-             
+unmount fs@HalfsState{hsBlockDev = dev, hsSuperBlock = sbRef} = do
+  locked fs $ do
+    sb <- sreadRef sbRef
+    if (unmountClean sb) then
+      return $ Left HalfsUnmountFailed
+     else do
+       -- TODO:
+       -- * Persist any dirty data structures (dirents, files w/ buffered IO, etc)
+       bdFlush dev
+     
+       -- Finalize the superblock
+       let sb' = sb{ unmountClean = True }
+       swriteRef sbRef sb'
+       writeSB dev sb'
+       return $ Right $ ()
   
-
 fsck :: Int
 fsck = undefined
 
@@ -253,9 +269,28 @@ writeSB :: HalfsCapable b t r l m =>
            BlockDevice m
         -> SuperBlock
         -> m SuperBlock
-writeSB dev sb = do 
-  let sbdata = encode sb
-  assert (BS.length sbdata <= fromIntegral (bdBlockSize dev)) $ 
+writeSB dev sb =
+  let sbdata = encode sb in 
+  assert (BS.length sbdata <= fromIntegral (bdBlockSize dev)) $ do
     bdWriteBlock dev 0 sbdata
-  return sb
+    bdFlush dev
+    return sb
 
+locked :: HalfsCapable b t r l m =>
+          Halfs b r m l
+       -> HalfsM m a
+       -> HalfsM m a
+locked fs act = do
+  lock $ hsLock fs
+  res <- act
+  release $ hsLock fs
+  return res
+
+-- Strict readRef
+sreadRef :: Reffable r m => r a -> m a
+sreadRef = ($!) readRef
+
+swriteRef :: Reffable r m => r a -> a -> m ()
+swriteRef = ($!) writeRef
+            
+           

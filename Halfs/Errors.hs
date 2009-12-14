@@ -3,7 +3,8 @@ where
 
 data HalfsError =
     HalfsFileNotFound
-  | HalfsMountFailed RsnHalfsMountFail
+  | HalfsUnmountFailed 
+  | HalfsMountFailed   RsnHalfsMountFail
   deriving Show
 
 data RsnHalfsMountFail = 
