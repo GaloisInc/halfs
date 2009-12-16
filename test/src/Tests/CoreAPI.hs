@@ -14,7 +14,7 @@ import Test.QuickCheck.Monadic
 
 import Halfs.BlockMap
 import Halfs.Classes
-import Halfs.CoreAPI hiding (sreadRef)
+import Halfs.CoreAPI
 import Halfs.Errors
 import Halfs.Inode
 import Halfs.Monad

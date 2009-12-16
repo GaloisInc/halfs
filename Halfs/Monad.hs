@@ -41,4 +41,3 @@ data Halfs b r m l = HalfsState {
   , hsSuperBlock :: r SuperBlock
   , hsLock       :: l
   }
-

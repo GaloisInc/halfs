@@ -20,7 +20,7 @@ import Halfs.Protection
 import Halfs.SuperBlock
 import System.Device.BlockDevice
 
--- import Debug.Trace
+import Debug.Trace
 
 data SyncType = Data | Everything
 
@@ -53,20 +53,16 @@ newfs dev = do
   when (superBlockSize > bdBlockSize dev) $
     fail "The device's block size is insufficiently large!"
 
-  let rdirBlks = 1
   blockMap <- newBlockMap dev
-  numFree  <- sreadRef (bmNumFree blockMap)
-  res      <- allocBlocks blockMap rdirBlks
-  case res of
-    Just (Contig rdirExt) -> do
-      let rdirAddr  = extBase rdirExt
-          rdirInode = blockAddrToInodeRef rdirAddr
-      makeDirectory dev rdirAddr rdirInode rootUser rootGroup
-      writeBlockMap dev blockMap
-      writeSB       dev $ superBlock rdirInode (numFree - rdirBlks) rdirBlks
-    _ -> 
-      fail "Could not generate root directory!"
+  numFree  <- readRef (bmNumFree blockMap)
+  rdirExt  <- alloc1 blockMap
+  let rdirAddr  = extBase rdirExt
+      rdirInode = blockAddrToInodeRef rdirAddr
+  makeDirectory dev rdirAddr rdirInode Nothing rootUser rootGroup
+  writeBlockMap dev blockMap
+  writeSB       dev $ superBlock rdirInode (numFree - rdirBlks) rdirBlks
  where
+   rdirBlks                = 1
    superBlock rdirIR nf nu = SuperBlock {
      version        = 1
    , blockSize      = bdBlockSize dev
@@ -88,15 +84,16 @@ mount dev =
   either
     (return . Left . HalfsMountFailed . BadSuperBlock)
     (\sb -> do
-       if unmountClean sb then do
-         sb' <- writeSB dev sb{ unmountClean = False }
-         Right `fmap`
-           (HalfsState dev
-            `fmap` readBlockMap dev       
-            `ap`   newRef sb'
-            `ap`   newLock
-           )
-        else
+       if unmountClean sb
+        then do
+          sb' <- writeSB dev sb{ unmountClean = False }
+          Right `fmap`
+            (HalfsState dev
+             `fmap` readBlockMap dev       
+             `ap`   newRef sb'
+             `ap`   newLock
+            )
+        else do 
           return $ Left $ HalfsMountFailed DirtyUnmount
     )
 
@@ -106,9 +103,10 @@ unmount :: (HalfsCapable b t r l m) =>
            Halfs b r m l -> HalfsM m ()
 unmount fs@HalfsState{hsBlockDev = dev, hsSuperBlock = sbRef} = do
   locked fs $ do
-    sb <- sreadRef sbRef
-    if (unmountClean sb) then
-      return $ Left HalfsUnmountFailed
+    sb <- readRef sbRef
+    if (unmountClean sb)
+     then do
+       return $ Left HalfsUnmountFailed
      else do
        -- TODO:
        -- * Persist any dirty data structures (dirents, files w/ buffered IO, etc)
@@ -116,7 +114,7 @@ unmount fs@HalfsState{hsBlockDev = dev, hsSuperBlock = sbRef} = do
      
        -- Finalize the superblock
        let sb' = sb{ unmountClean = True }
-       swriteRef sbRef sb'
+       writeRef sbRef sb'
        writeSB dev sb'
        return $ Right $ ()
   
@@ -126,9 +124,24 @@ fsck = undefined
 --------------------------------------------------------------------------------
 -- Directory manipulation
 
+-- | Makes a directory given an absolute path.
+--
+-- * Yields HalfsPathComponentNotFound if any path component on the way down to
+--   the directory to create does not exist.
+--
+-- * Yields HalfsAbsolutePathExpected if an absolute path is not provided.
+--
 mkdir :: (HalfsCapable b t r l m) =>
          Halfs b r m l -> FilePath -> FileMode -> HalfsM m ()
-mkdir = undefined
+mkdir fs fp fm = do
+  usr       <- getUser
+  grp       <- getGroup
+  dirAddr   <- extBase `fmap` alloc1 (hsBlockMap fs)
+  withAbsPathIR fs path Directory $ \parentIR -> do
+    makeDirectory (hsBlockDev fs) dirAddr parentIR (Just dirName) usr grp
+    chmod fs fp fm
+  where
+    (path, dirName) = splitFileName fp
 
 rmdir :: (HalfsCapable b t r l m) =>
          Halfs b r m l -> FilePath -> HalfsM m ()
@@ -136,14 +149,16 @@ rmdir = undefined
 
 openDir :: (HalfsCapable b t r l m) =>
            Halfs b r m l -> FilePath -> HalfsM m (DirHandle r)
-openDir = undefined
+openDir fs fp =
+  withAbsPathIR fs fp Directory $ \dirIR ->
+    Right `fmap` openDirectory (hsBlockDev fs) dirIR
 
 closeDir :: (HalfsCapable b t r l m) =>
-            Halfs b r m l -> (DirHandle r) -> HalfsM m ()
+            Halfs b r m l -> DirHandle r -> HalfsM m ()
 closeDir = undefined
 
 readDir :: (HalfsCapable b t r l m) =>
-           Halfs b r m l -> (DirHandle r) -> HalfsM m [(FilePath, FileStat t)]
+           Halfs b r m l -> DirHandle r -> HalfsM m [(FilePath, FileStat t)]
 readDir = undefined
 
 -- | Synchronize the given directory to disk.
@@ -154,9 +169,44 @@ syncDir = undefined
 --------------------------------------------------------------------------------
 -- File manipulation
 
+-- | Opens a file given an absolute path.
+--
+-- * Yields HalfsPathComponentNotFound if any path component on the way down to
+-- the file does not exist.
+--
+-- * Yields HalfsAbsolutePathExpected if an absolute path is not provided
+--
+-- * Yields HalfsFileNotFound if the request file does not exist and create is
+-- false
+--
+-- * Otherwise, provides a FileHandle to the requested file
+
+-- TODO: modes and flags for open: append, r/w, ronly, truncate, etc., and
+-- enforcement of the same
 openFile :: (HalfsCapable b t r l m) =>
-            Halfs b r m l -> FilePath -> HalfsM m FileHandle
-openFile = undefined
+            Halfs b r m l -- ^ The FS
+         -> FilePath      -- ^ The absolute path of the file
+         -> Bool          -- ^ Should we create the file if it is not found?
+         -> HalfsM m FileHandle 
+openFile fs fp creat = do
+  trace ("openFile: path = " ++ show path ++ ", fname = " ++ show fname) $ do
+  whenOK (openDir fs path) $ \dh -> do 
+    fileExists <- existsInDir dh fname RegularFile
+    if fileExists
+     then do
+       fail "TODO: openFile for existing files not yet implemented"
+     else do
+       if creat
+        then do
+          -- TODO/HERE: allocate new inode for file being created, etc.  -->
+          -- should probably delegate to Directory.createFile or somesuch; also,
+          -- implement Directory.openDirectory before worrying about this part.
+          fail "TODO: openFile for new files not yet implemented"
+        else do
+          return $ Left $ HalfsFileNotFound
+  where
+    whenOK act f  = act >>= either (return . Left) f
+    (path, fname) = splitFileName fp
 
 read :: (HalfsCapable b t r l m) =>
         Halfs b r m l -> FileHandle -> Word64 -> Word64 -> HalfsM m ByteString
@@ -172,7 +222,7 @@ write :: (HalfsCapable b t r l m) =>
 write = undefined
 
 flush :: (HalfsCapable b t r l m) =>
-         Halfs b r m l -> FilePath -> HalfsM m ()
+         Halfs b r m l -> FileHandle -> HalfsM m ()
 flush = undefined
 
 syncFile :: (HalfsCapable b t r l m) =>
@@ -180,7 +230,7 @@ syncFile :: (HalfsCapable b t r l m) =>
 syncFile = undefined
 
 closeFile :: (HalfsCapable b t r l m) =>
-             Halfs b r m l -> FilePath -> HalfsM m ()
+             Halfs b r m l -> FileHandle -> HalfsM m ()
 closeFile = undefined
 
 setFileSize :: (HalfsCapable b t r l m) =>
@@ -200,7 +250,7 @@ rename = undefined
 
 chmod :: (HalfsCapable b t r l m) =>
          Halfs b r m l -> FilePath -> FileMode -> HalfsM m ()
-chmod = undefined
+chmod _ _ _ = trace ("WARNING: chmod NYI") $ return $ Right ()
 
 chown :: (HalfsCapable b t r l m) =>
          Halfs b r m l -> FilePath -> UserID -> GroupID -> HalfsM m ()
@@ -244,6 +294,32 @@ fsstat = undefined
 --------------------------------------------------------------------------------
 -- Utility functions
 
+-- | Find the InodeRef corresponding to the given path, and call the given
+-- function with it.  On error, yields HalfsPathComponentNotFound or
+-- HalfsAbsolutePathExpected.
+withAbsPathIR :: HalfsCapable b t r l m =>
+                 Halfs b r m l
+              -> FilePath
+              -> FileType
+              -> (InodeRef -> HalfsM m a)
+              -> HalfsM m a
+withAbsPathIR fs fp ftype f = do
+  if isAbsolute fp
+   then do
+     rdirIR <- rootDir `fmap` readRef (hsSuperBlock fs)
+     find (hsBlockDev fs) rdirIR ftype (drop 1 $ splitDirectories fp) >>= do
+     maybe (return $ Left $ HalfsPathComponentNotFound fp) f
+   else do
+     return $ Left $ HalfsAbsolutePathExpected
+
+alloc1 :: (Bitmapped b m, Reffable r m) =>
+          BlockMap b r -> m Extent
+alloc1 bm = do 
+  res <- allocBlocks bm 1
+  case res of
+    Just (Contig ext) -> return ext
+    _                 -> fail "Could not allocate single block"
+
 writeSB :: (HalfsCapable b t r l m) =>
            BlockDevice m -> SuperBlock -> m SuperBlock
 writeSB dev sb =
@@ -261,10 +337,10 @@ locked fs act = do
   release $ hsLock fs
   return res
 
--- Strict readRef
-sreadRef :: Reffable r m => r a -> m a
-sreadRef = ($!) readRef
+-- TODO: Placeholder
+getUser :: Monad m => m UserID
+getUser = return rootUser
 
--- Strict writeRef
-swriteRef :: Reffable r m => r a -> a -> m ()
-swriteRef = ($!) writeRef
+-- TODO: Placeholder
+getGroup :: Monad m => m GroupID
+getGroup = return rootGroup

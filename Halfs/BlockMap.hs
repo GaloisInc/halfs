@@ -35,6 +35,7 @@ import Data.Word
 import Prelude hiding (null)
 
 import Halfs.Classes
+import Halfs.Utils
 import System.Device.BlockDevice
 
 -- import Debug.Trace
@@ -306,6 +307,3 @@ blkGroupSz (Discontig exts) = foldr (\e -> (extSz e +)) 0 exts
 
 divCeil :: Integral a => a -> a -> a
 divCeil a b = (a + (b - 1)) `div` b
-
-fmapFst :: (a -> b) -> (a, c) -> (b, c)
-fmapFst f (x,y) = (f x, y)

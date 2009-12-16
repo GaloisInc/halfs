@@ -3,6 +3,8 @@ where
 
 data HalfsError =
     HalfsFileNotFound
+  | HalfsPathComponentNotFound String
+  | HalfsAbsolutePathExpected
   | HalfsUnmountFailed 
   | HalfsMountFailed   RsnHalfsMountFail
   deriving Show

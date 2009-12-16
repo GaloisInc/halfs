@@ -89,13 +89,13 @@ class Monad m => Reffable r m | m -> r where
 
 instance Reffable (STRef s) (ST s) where
   newRef   = newSTRef
-  readRef  = readSTRef
-  writeRef = writeSTRef
+  readRef  = ($!) readSTRef
+  writeRef = ($!) writeSTRef
 
 instance Reffable IORef IO where
   newRef   = newIORef
-  readRef  = readIORef
-  writeRef = writeIORef
+  readRef  = ($!) readIORef
+  writeRef = ($!) writeIORef
 
 -- ---------------------------------------------------------------------------
 
