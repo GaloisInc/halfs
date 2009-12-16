@@ -308,8 +308,8 @@ withAbsPathIR fs fp ftype f = do
   if isAbsolute fp
    then do
      rdirIR <- rootDir `fmap` readRef (hsSuperBlock fs)
-     find (hsBlockDev fs) rdirIR ftype (drop 1 $ splitDirectories fp) >>= do
-     maybe (return $ Left $ HalfsPathComponentNotFound fp) f
+     find (hsBlockDev fs) rdirIR ftype (drop 1 $ splitDirectories fp) >>= 
+       maybe (return $ Left $ HalfsPathComponentNotFound fp) f
    else do
      return $ Left $ HalfsAbsolutePathExpected
 

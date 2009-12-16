@@ -131,10 +131,10 @@ find _ startINR _ [] =
 --
 find dev startINR ftype (pathComp:rest) = do
   dh <- openDirectory dev startINR
-  findInDir' dh pathComp ftype >>= do
-  maybe
-    (return Nothing)
-    (\dirEnt -> find dev (deInode dirEnt) ftype rest)
+  findInDir' dh pathComp ftype >>=
+    maybe
+      (return Nothing)
+      (\de -> find dev (deInode de) ftype rest)
 
 findInDir' :: Reffable r m =>
              DirHandle r
@@ -143,13 +143,9 @@ findInDir' :: Reffable r m =>
           -> m (Maybe DirectoryEntry)
 findInDir' dh fname ftype =
   liftM (M.lookup fname) (readRef $ dhContents dh) >>= 
-  maybe
-    (return Nothing)
-    (\dirEnt -> 
-      if dirEnt `isFileType` ftype
-        then return (Just dirEnt)
-        else return Nothing
-    )
+    maybe
+      (return Nothing)
+      (\de -> return $ if de `isFileType` ftype then Just de else Nothing)
 
 -- Exportable version that doesn't expose DirectoryEntry
 findInDir :: Reffable r m =>
