@@ -5,7 +5,7 @@ module Halfs.Directory
   , FileMode(..)
   , AccessRight(..)
   , FileType(..)
-  , existsInDir
+  , findInDir
   , find
   , makeDirectory
   , openDirectory
@@ -131,17 +131,17 @@ find _ startINR _ [] =
 --
 find dev startINR ftype (pathComp:rest) = do
   dh <- openDirectory dev startINR
-  findInDir dh pathComp ftype >>= do
+  findInDir' dh pathComp ftype >>= do
   maybe
     (return Nothing)
     (\dirEnt -> find dev (deInode dirEnt) ftype rest)
 
-findInDir :: Reffable r m =>
+findInDir' :: Reffable r m =>
              DirHandle r
           -> String
           -> FileType
           -> m (Maybe DirectoryEntry)
-findInDir dh fname ftype =
+findInDir' dh fname ftype =
   liftM (M.lookup fname) (readRef $ dhContents dh) >>= 
   maybe
     (return Nothing)
@@ -152,20 +152,16 @@ findInDir dh fname ftype =
     )
 
 -- Exportable version that doesn't expose DirectoryEntry
-existsInDir :: Reffable r m =>
+findInDir :: Reffable r m =>
                DirHandle r
             -> String
             -> FileType
-            -> m Bool
-existsInDir dh fname ftype = 
-  findInDir dh fname ftype >>=
-  maybe
-    (return False)
-    (const $ return True)
+            -> m (Maybe InodeRef)
+findInDir dh fname ftype = 
+  findInDir' dh fname ftype >>= return . maybe Nothing (Just . deInode)
 
 --------------------------------------------------------------------------------
 -- Utility functions
 
 isFileType :: DirectoryEntry -> FileType -> Bool
 isFileType (DirEnt { deType = t }) ft = t == ft
-

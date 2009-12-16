@@ -189,14 +189,14 @@ openFile :: (HalfsCapable b t r l m) =>
          -> Bool          -- ^ Should we create the file if it is not found?
          -> HalfsM m FileHandle 
 openFile fs fp creat = do
-  trace ("openFile: path = " ++ show path ++ ", fname = " ++ show fname) $ do
-  whenOK (openDir fs path) $ \dh -> do 
-    fileExists <- existsInDir dh fname RegularFile
-    if fileExists
-     then do
-       fail "TODO: openFile for existing files not yet implemented"
-     else do
-       if creat
+  whenOK (openDir fs path) $ \dh -> 
+    findInDir dh fname RegularFile >>= maybe noFile foundFile
+  where
+    whenOK act f  = act >>= either (return . Left) f
+    (path, fname) = splitFileName fp
+    -- 
+    noFile =
+      if creat
         then do
           -- TODO/HERE: allocate new inode for file being created, etc.  -->
           -- should probably delegate to Directory.createFile or somesuch; also,
@@ -204,9 +204,10 @@ openFile fs fp creat = do
           fail "TODO: openFile for new files not yet implemented"
         else do
           return $ Left $ HalfsFileNotFound
-  where
-    whenOK act f  = act >>= either (return . Left) f
-    (path, fname) = splitFileName fp
+    --
+    foundFile fileIR = do
+      fail "TODO: openFile for existing files not yet implemented"
+                    
 
 read :: (HalfsCapable b t r l m) =>
         Halfs b r m l -> FileHandle -> Word64 -> Word64 -> HalfsM m ByteString
