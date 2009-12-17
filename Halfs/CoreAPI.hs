@@ -198,9 +198,9 @@ openFile fs fp creat = do
     noFile =
       if creat
         then do
-          -- TODO/HERE: allocate new inode for file being created, etc.  -->
-          -- should probably delegate to Directory.createFile or somesuch; also,
-          -- implement Directory.openDirectory before worrying about this part.
+          -- TODO: allocate new inode for file being created, etc.  --> should
+          -- probably delegate to Directory.createFile or somesuch;
+          -- Directory.openDirectory before worrying about this.
           fail "TODO: openFile for new files not yet implemented"
         else do
           return $ Left $ HalfsFileNotFound
@@ -208,7 +208,6 @@ openFile fs fp creat = do
     foundFile fileIR = do
       fail "TODO: openFile for existing files not yet implemented"
                     
-
 read :: (HalfsCapable b t r l m) =>
         Halfs b r m l -> FileHandle -> Word64 -> Word64 -> HalfsM m ByteString
 read = undefined

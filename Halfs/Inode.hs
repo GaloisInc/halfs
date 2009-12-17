@@ -8,6 +8,7 @@ module Halfs.Inode
   , drefInode
   , inodeRefToBlockAddr
   , nilInodeRef
+  , readStream
   -- * for testing
   , computeNumAddrs
   , minimalInodeSize
@@ -28,14 +29,14 @@ import Halfs.Classes
 import Halfs.Protection
 import System.Device.BlockDevice
 
--- ----------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+-- Inode types, instances, constructors, and geometry calculation functions
 
--- We store Inode reference as simple Word64, newtype'd in case we either
--- decide to do something more fancy or just to make the types a bit more
--- clear.
+-- We store Inode reference as simple Word64, newtype'd in case we either decide
+-- to do something more fancy or just to make the types a bit more clear.
 --
 -- At this point, we assume an Inode reference is equal to its block address,
--- and we fix Inode references as Word64s. Note that if you change the 
+-- and we fix Inode references as Word64s. Note that if you change the
 -- underlying field size of an InodeRef, you really really need to change
 -- 'inodeRefSize', below.
 
@@ -64,8 +65,6 @@ inodeRefSize = 8
 nilInodeRef :: InodeRef
 nilInodeRef = IR 0
 
--- ----------------------------------------------------------------------------
-
 -- The structure of an Inode. Pretty standard, except that we use the
 -- continuation field to allow multiple runs of block addresses within the
 -- file. We serialize Nothing as nilInodeRef, an invalid continuation.
@@ -88,9 +87,9 @@ data (Eq t, Ord t, Serialize t) => Inode t = Inode {
   , group         :: GroupID
   , numAddrs      :: Word64          -- ^ number of total block addresses
                                      -- that this inode covers
-  , blockCnt      :: Word64          -- ^ current number of active blocks (equal
-                                     -- to the number of inode references held
-                                     -- in the blocks list)
+  , blockCount    :: Word64          -- ^ current number of active blocks (equal
+                                     -- to the number of (sequential) inode
+                                     -- references held in the blocks list)
   , blocks        :: [InodeRef]
   }
   deriving (Show, Eq)
@@ -109,7 +108,7 @@ instance (Eq t, Ord t, Serialize t) => Serialize (Inode t) where
              put $ user n
              put $ group n
              putWord64be $ numAddrs n
-             putWord64be $ blockCnt n
+             putWord64be $ blockCount n
              putByteString magic3
              let blocks'    = blocks n
                  numAddrs'  = fromIntegral $ numAddrs n
@@ -212,25 +211,126 @@ emptyInode :: (Ord t, Serialize t) =>
            -> Inode t
 emptyInode nAddrs createTm modTm me mommy usr grp =
   Inode {
-    address       = me
-  , parent        = mommy
-  , continuation  = Nothing
-  , createTime    = createTm
-  , modifyTime    = modTm
-  , user          = usr
-  , group         = grp
-  , numAddrs      = nAddrs
-  , blockCnt      = 0
-  , blocks        = []
+    address      = me
+  , parent       = mommy
+  , continuation = Nothing
+  , createTime   = createTm
+  , modifyTime   = modTm
+  , user         = usr
+  , group        = grp
+  , numAddrs     = nAddrs
+  , blockCount   = 0
+  , blocks       = []
   }
+
+--------------------------------------------------------------------------------
+-- Inode utility functions
+
+assertValidIR :: InodeRef -> InodeRef
+assertValidIR ir = assert (ir /= nilInodeRef) ir
+
+-- | Reads the contents of the given inode's ith block
+inodeReadBlock :: (Ord t, Serialize t, Monad m) =>
+                  BlockDevice m -> Inode t -> Word64 -> m ByteString
+inodeReadBlock dev inode i =
+  assert (i < blockCount inode) $ do
+  let IR addr = assertValidIR (blocks inode !! fromIntegral i)
+  bdReadBlock dev addr      
+
+expandConts :: (Serialize t, Timed t m, Functor m) =>
+               BlockDevice m -> Inode t -> m [Inode t]
+expandConts _   inode@Inode{ continuation = Nothing      } = return [inode]
+expandConts dev inode@Inode{ continuation = Just nextRef } = 
+  (inode:) `fmap` (drefInode dev nextRef >>= expandConts dev)
 
 drefInode :: (Serialize t, Timed t m, Functor m) =>
              BlockDevice m -> InodeRef -> m (Inode t)
 drefInode dev (IR addr) = 
   decode `fmap` bdReadBlock dev addr >>=
-  either (fail . (++) "drefInode decode failure: ") return 
+  either (fail . (++) "drefInode decode failure: ") return
 
--- ----------------------------------------------------------------------------
+readStream ::
+  (Serialize t, Timed t m, Functor m) => 
+     BlockDevice m -- ^ Block device
+  -> Inode t       -- ^ Starting inode
+  -> Word64        -- ^ Starting stream (byte) offset
+  -> Maybe Word64  -- ^ Stream length (Nothing => until end)
+  -> m ByteString  -- ^ Stream contents
+readStream dev startInode start mlen = do
+  -- Compute bytes per inode (bpi) and decompose the starting byte offset
+  bpi <- (*bs) `fmap` (computeNumAddrs bs =<< minimalInodeSize =<< getTime)
+  (sInodeIdx, sBlkOff, sByteOff) <- decompParanoid dev bs bpi start startInode
+    -- ^^^ XXX: Replace w/ decompStreamOffset once inode growth etc. is working
+  inodes <- expandConts dev startInode
+
+  case mlen of
+    Nothing  -> case drop (fromIntegral sInodeIdx) inodes of
+      [] -> fail "Inode.readStream internal error: invalid start inode index"
+      (inode:rest) -> do
+        -- The 'header' is just the partial first block and all remaining blocks
+        -- in the first inode
+        header <- do
+          let blkCnt = blockCount inode 
+              range  = assert (sBlkOff < blkCnt) $ [sBlkOff..blkCnt - 1]
+          (blk:blks) <- mapM (getBlock inode) range
+          return $ BS.drop (fromIntegral sByteOff) blk
+                   `BS.append` BS.concat blks
+
+        -- 'fullBlocks' is the remaining content from all remaining inodes
+        fullBlocks <- foldM
+          (\acc inode' -> do
+             blks <- mapM (getBlock inode') [0..blockCount inode' - 1]
+             return $ BS.concat blks `BS.append` acc
+          )
+          BS.empty rest
+        return $ header `BS.append` fullBlocks
+
+    Just len -> do
+      (_eInodeIdx, _eBlk, _eByte) <-
+        decompParanoid dev bs bpi (start + len - 1) startInode
+      fail "NYI: Upper bound inode stream creation"
+  where
+    getBlock = inodeReadBlock dev
+    bs       = bdBlockSize dev
+
+-- | Decompose the given absolute byte offset into an inode data stream into
+-- inode index (i.e., 0-based index into sequence of Inode continuations), block
+-- offset within that inode, and byte offset within that block.
+decompStreamOffset :: (Ord t, Serialize t) =>
+                      Word64  -- ^ Block size, in bytes
+                   -> Word64  -- ^ Maximum number of bytes "stored" by an inode 
+                   -> Word64  -- ^ Offset into the inode data stream
+                   -> Inode t -- ^ The inode (for important sanity checks)
+                   -> (Word64, Word64, Word64)
+decompStreamOffset blkSizeBytes numBytesPerInode streamOff inode =
+  assert (streamOff <= numAddrs inode) (inodeIdx, blkOff, byteOff)
+  where
+    (inodeIdx, inodeByteIdx) = streamOff `divMod` numBytesPerInode
+    (blkOff, byteOff)        = inodeByteIdx `divMod` blkSizeBytes
+
+-- | Same as decompStreamOffset, but performs additional "heavyweight" checks
+-- (e.g., reading persisted inodes from disk) on the inode structure to ensure
+-- that the computed stream offset decomp is valid; use of this function can be
+-- discontinued after we're sure inodes are growing correctly and the simple
+-- check of numAddrs in decompStreamOffset is sufficient.
+decompParanoid ::
+  (Serialize t, Timed t m, Functor m) =>
+     BlockDevice m 
+  -> Word64  -- ^ Block size, in bytes
+  -> Word64  -- ^ Maximum number of bytes "stored" by an inode 
+  -> Word64  -- ^ Offset into the inode data stream
+  -> Inode t -- ^ The inode (for important sanity checks)
+  -> m (Word64, Word64, Word64)
+decompParanoid dev blkSizeBytes numBytesPerInode streamOff inode = do 
+  let (inodeIdx, blkOff, byteOff) =
+        decompStreamOffset blkSizeBytes numBytesPerInode streamOff inode
+  inodes <- expandConts dev inode
+  assert (inodeIdx < fromIntegral (length inodes)) $ do
+  assert (blkOff < blockCount (inodes !! fromIntegral inodeIdx)) $ do 
+  return (inodeIdx, blkOff, byteOff)
+
+--------------------------------------------------------------------------------
+-- Magic numbers
 
 magicStr :: String
 magicStr = "This is a halfs Inode structure!"
