@@ -31,8 +31,8 @@ import Data.Word
 -- ----------------------------------------------------------------------------
 
 -- |A monad implementing Timed implements a monotonic clock that can be read
--- from. One obvious implementation is using the system clock. Another might
--- be a step counter.
+-- from. One obvious implementation is using the system clock. Another might be
+-- a step counter.
 class (Monad m, Eq t, Ord t) => Timed t m | m -> t where
   getTime :: m t
 
@@ -86,7 +86,6 @@ class Monad m => Reffable r m | m -> r where
   readRef  :: r a -> m a
   writeRef :: r a -> a -> m ()
 
-
 instance Reffable (STRef s) (ST s) where
   newRef   = newSTRef
   readRef  = ($!) readSTRef
@@ -119,6 +118,7 @@ instance Lockable IOLock IO where
 
 -- ---------------------------------------------------------------------------
 
+-- | A monad implementing a bitmap
 class Monad m => Bitmapped b m | m -> b where
   newBitmap :: Word64 -> Bool -> m b
   clearBit  :: b -> Word64 -> m ()

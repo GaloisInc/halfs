@@ -5,6 +5,7 @@ module Halfs.Inode
   , InodeRef(..)
   , blockAddrToInodeRef
   , buildEmptyInode
+  , drefInode
   , inodeRefToBlockAddr
   , nilInodeRef
   -- * for testing
@@ -222,6 +223,12 @@ emptyInode nAddrs createTm modTm me mommy usr grp =
   , blockCnt      = 0
   , blocks        = []
   }
+
+drefInode :: (Serialize t, Timed t m, Functor m) =>
+             BlockDevice m -> InodeRef -> m (Inode t)
+drefInode dev (IR addr) = 
+  decode `fmap` bdReadBlock dev addr >>=
+  either (fail . (++) "drefInode decode failure: ") return 
 
 -- ----------------------------------------------------------------------------
 

@@ -24,7 +24,12 @@ import Data.Word
 import System.FilePath
 
 import Halfs.Classes
-import Halfs.Inode (InodeRef(..), blockAddrToInodeRef, buildEmptyInode)
+import Halfs.Monad
+import Halfs.Inode ( InodeRef(..)
+                   , blockAddrToInodeRef
+                   , buildEmptyInode
+                   , drefInode
+                   )
 import Halfs.Protection
 import System.Device.BlockDevice
 
@@ -82,7 +87,7 @@ data FileStat t = FileStat {
 -- | Given a block address to place the directory, its parent, its owner, and
 -- its group, generate a new, empty directory with the given name (which is
 -- Nothing in the case of the root directory).
-makeDirectory :: (Serialize t, Timed t m) =>
+makeDirectory :: HalfsCapable b t r l m =>
                  BlockDevice m
               -> Word64
               -> InodeRef
@@ -107,19 +112,62 @@ makeDirectory dev addr parentIR mdirname user group = do
   where
     thisIR = blockAddrToInodeRef addr
 
-openDirectory :: (Reffable r m) =>
+-- | Obtains an active directory handle for the directory at the given InodeRef
+openDirectory :: HalfsCapable b t r l m =>
                  BlockDevice m -> InodeRef -> m (DirHandle r)
-openDirectory _dev _inr = do
+openDirectory dev inr = do
+  inode <- drefInode dev inr
+
+  -- Need a "data stream generator" that turns an inode into a lazy bytestring
+  -- representing the underlying data that it covers, reading blocks and
+  -- expanding inode continuations as needed...this will eventually end up being
+  -- used by the file implementation as well
+
   -- TODO: DirHandle cache?  In HalfsState, perhaps?
-  -- TODO/HERE: implement this function
-  fail "NYI: Directory.openDirectory"
+  DirHandle inr `fmap` newRef contents `ap` newRef Clean
+  where
+    contents = undefined
+
+{-
+data (Eq t, Ord t, Serialize t) => Inode t = Inode {
+    address       :: InodeRef        -- ^ block addr of this inode
+  , parent        :: InodeRef        -- ^ block addr of parent directory inode
+  , continuation  :: Maybe InodeRef
+  , createTime    :: t
+  , modifyTime    :: t
+  , user          :: UserID
+  , group         :: GroupID
+  , numAddrs      :: Word64          -- ^ number of total block addresses
+                                     -- that this inode covers
+  , blockCnt      :: Word64          -- ^ current number of active blocks (equal
+                                     -- to the number of inode references held
+                                     -- in the blocks list)
+  , blocks        :: [InodeRef]
+  }
+
+  data DirHandle r = DirHandle {
+    dhInode       :: InodeRef
+  , dhContents    :: r (M.Map FilePath DirectoryEntry)
+  , dhState       :: r DirectoryState
+  }
+
+data DirectoryEntry = DirEnt {
+    deName  :: String
+  , deInode :: InodeRef
+  , deUser  :: UserID
+  , deGroup :: GroupID
+  , deMode  :: Int
+  , deType  :: FileType
+  }
+
+-}
 
 -- | Finds a directory, file, or symlink given a starting inode reference (i.e.,
 -- the directory inode at which to begin the search) and a list of path
 -- components.  Yields Nothing if any of the path components cannot be found in
 -- the recursive descent of the directory hierarchy, otherwise yields the
 -- InodeRef of the final path component.
-find :: Reffable r m =>
+find :: HalfsCapable b t r l m => 
         BlockDevice m -- ^ The block device to search
      -> InodeRef      -- ^ The starting inode reference
      -> FileType      -- ^ A match must be of this filetype
@@ -136,7 +184,7 @@ find dev startINR ftype (pathComp:rest) = do
       (return Nothing)
       (\de -> find dev (deInode de) ftype rest)
 
-findInDir' :: Reffable r m =>
+findInDir' :: HalfsCapable b t r l m =>
              DirHandle r
           -> String
           -> FileType
@@ -148,7 +196,7 @@ findInDir' dh fname ftype =
       (\de -> return $ if de `isFileType` ftype then Just de else Nothing)
 
 -- Exportable version that doesn't expose DirectoryEntry
-findInDir :: Reffable r m =>
+findInDir :: HalfsCapable b t r l m =>
                DirHandle r
             -> String
             -> FileType
