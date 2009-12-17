@@ -29,6 +29,7 @@ import Halfs.Inode ( InodeRef(..)
                    , blockAddrToInodeRef
                    , buildEmptyInode
                    , drefInode
+                   , readStream
                    )
 import Halfs.Protection
 import System.Device.BlockDevice

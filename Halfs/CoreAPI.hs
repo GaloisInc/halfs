@@ -65,8 +65,8 @@ newfs dev = do
    rdirBlks                = 1
    superBlock rdirIR nf nu = SuperBlock {
      version        = 1
-   , blockSize      = bdBlockSize dev
-   , blockCount     = bdNumBlocks dev
+   , devBlockSize   = bdBlockSize dev
+   , devBlockCount  = bdNumBlocks dev
    , unmountClean   = True
    , freeBlocks     = nf 
    , usedBlocks     = nu
@@ -198,8 +198,8 @@ openFile fs fp creat = do
     noFile =
       if creat
         then do
-          -- TODO: allocate new inode for file being created, etc.  --> should
-          -- probably delegate to Directory.createFile or somesuch;
+          -- TODO: allocate new inode for file being created, etc. Should
+          -- probably delegate to Directory.createFile or somesuch; finish
           -- Directory.openDirectory before worrying about this.
           fail "TODO: openFile for new files not yet implemented"
         else do

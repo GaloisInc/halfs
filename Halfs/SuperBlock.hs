@@ -18,8 +18,8 @@ import Halfs.Inode
 
 data SuperBlock = SuperBlock {
        version       :: !Word64   -- ^ Version of this superblock
-     , blockSize     :: !Word64   -- ^ Block size of underlying blkdev
-     , blockCount    :: !Word64   -- ^ Number of blocks on underlying blkdev
+     , devBlockSize  :: !Word64   -- ^ Block size of underlying blkdev
+     , devBlockCount :: !Word64   -- ^ Number of blocks on underlying blkdev
      , unmountClean  :: !Bool     -- ^ Was this filesystem unmounted cleanly?
      , freeBlocks    :: !Word64   -- ^ Number of free blocks
      , usedBlocks    :: !Word64   -- ^ Number of blocks in use
@@ -33,8 +33,8 @@ data SuperBlock = SuperBlock {
 instance Serialize SuperBlock where
   put sb = do putByteString magic1
               putWord64be $ version sb
-              putWord64be $ blockSize sb
-              putWord64be $ blockCount sb
+              putWord64be $ devBlockSize sb
+              putWord64be $ devBlockCount sb
               putByteString magic2
               putWord64be $ if unmountClean sb then cleanMark else 0
               putWord64be $ freeBlocks sb
