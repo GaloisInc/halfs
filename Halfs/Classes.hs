@@ -32,11 +32,20 @@ import Data.Word
 -- ----------------------------------------------------------------------------
 
 -- Any monad used in Halfs must implement the following interface:
-class (Bitmapped b m, Timed t m, Reffable r m, Lockable l m, Serialize t, Functor m, Monad m) =>
-   HalfsCapable b t r l m | m -> b t r l
+class ( Bitmapped b m
+      , Timed t m
+      , Reffable r m
+      , Lockable l m
+      , Serialize t
+      , Functor m
+      , Monad m
+      ) =>
+  HalfsCapable b t r l m | m -> b t r l
 
 instance HalfsCapable (IOUArray Word64 Bool)   UTCTime IORef     IOLock IO
 instance HalfsCapable (STUArray s Word64 Bool) Word64  (STRef s) ()     (ST s)
+
+-- ----------------------------------------------------------------------------
 
 -- |A monad implementing Timed implements a monotonic clock that can be read
 -- from. One obvious implementation is using the system clock. Another might be
@@ -134,7 +143,6 @@ class Monad m => Bitmapped b m | m -> b where
   setBit    :: b -> Word64 -> m ()
   checkBit  :: b -> Word64 -> m Bool
   toList    :: b -> m [Bool]
-
 
 instance Bitmapped (IOUArray Word64 Bool) IO where
   newBitmap s e = newArray (0, s - 1) e
