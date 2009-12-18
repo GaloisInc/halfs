@@ -31,6 +31,8 @@ import Halfs.Classes
 import Halfs.Protection
 import System.Device.BlockDevice
 
+import Debug.Trace
+
 
 --------------------------------------------------------------------------------
 -- Inode types, instances, constructors, and geometry calculation functions
@@ -193,6 +195,11 @@ computeNumAddrs blockSize minSize = do
     fail "computeNumAddrs: Inexplicably bad block size"
   return $ blockSize' `div` fromIntegral inodeRefSize
 
+computeNumAddrsM :: (Serialize t, Timed t m) =>
+                    Word64 -> m Word64
+computeNumAddrsM blockSize =
+  computeNumAddrs blockSize =<< minimalInodeSize =<< getTime
+
 buildEmptyInode :: (Serialize t, Timed t m) =>
                    BlockDevice m ->
                    InodeRef -> InodeRef -> UserID -> GroupID ->
@@ -255,19 +262,43 @@ drefInode dev (IR addr) =
   decode `fmap` bdReadBlock dev addr >>=
   either (fail . (++) "drefInode decode failure: ") return
 
-writeStream ::
-  (HalfsCapable b t r l m) =>
-     BlockDevice m -- ^ The block device
-  -> BlockMap b r  -- ^ The block map
-  -> InodeRef      -- ^ Starting inode reference
-  -> Word64        -- ^ Starting stream (byte) offset
-  -> Bool          -- ^ Truncating write?
-  -> ByteString    -- ^ Data to write
-  -> m ()
-writeStream = fail "Inode.writeStream NYI"
+writeStream :: HalfsCapable b t r l m =>
+               BlockDevice m -- ^ The block device
+            -> BlockMap b r  -- ^ The block map
+            -> InodeRef      -- ^ Starting inode reference
+            -> Word64        -- ^ Starting stream (byte) offset
+            -> Bool          -- ^ Truncating write?
+            -> ByteString    -- ^ Data to write
+            -> m ()
+writeStream dev bm startIR start trunc bytes = do
+  if 0 == BS.length bytes then return () else do 
+  startInode <- drefInode dev startIR
 
--- | Provides a stream view over the bytes governed by a given Inode and
--- its continuations.
+  -- Compute bytes per inode (bpi) and decompose the start byte offset
+  bpi <- (*bs) `fmap` computeNumAddrsM bs
+  (sInodeIdx, sBlkOff, sByteOff) <- decompParanoid dev bs bpi start startInode
+    -- ^^^ XXX: Replace w/ decompStreamOffset once inode growth etc. is working
+  trace ("sInodeIdx, sBlkOff, sByteOff = " ++ show (sInodeIdx, sBlkOff, sByteOff)) $ do
+  inodes <- expandConts dev startInode
+  trace ("inodes = " ++ show inodes) $ do
+
+  -- Determine if we need to allocate space for the data
+  -- HERE!
+
+  -- NB: we'll probably have to change inodes to hold onto BlockGroups...has
+  -- indexing scheme implications.
+
+  if trunc
+   then do fail "Inode.writeStream: truncating write NYI"
+   else do
+  fail "Inode.writeStream: non-trunc write NYI"   
+
+  return ()
+  where
+    bs = bdBlockSize dev
+
+-- | Provides a stream over the bytes governed by a given Inode and its
+-- continuations.
 -- 
 -- NB: This is a pretty primitive way to go about this, but it's probably
 -- worthwhile to get something working before revisiting it.  In particular, if
@@ -275,18 +306,17 @@ writeStream = fail "Inode.writeStream NYI"
 -- specific to the particulars of way that the Inode tracks its block addresses,
 -- counts, continuations, etc., and perhaps build enumerators for
 -- inode/block/byte sequences over inodes.
-readStream ::
-  (Serialize t, Timed t m, Functor m) => 
-     BlockDevice m -- ^ Block device
-  -> InodeRef      -- ^ Starting inode reference
-  -> Word64        -- ^ Starting stream (byte) offset
-  -> Maybe Word64  -- ^ Stream length (Nothing => until end)
-  -> m ByteString  -- ^ Stream contents
+readStream :: HalfsCapable b t r l m => 
+              BlockDevice m -- ^ Block device
+           -> InodeRef      -- ^ Starting inode reference
+           -> Word64        -- ^ Starting stream (byte) offset
+           -> Maybe Word64  -- ^ Stream length (Nothing => until end)
+           -> m ByteString  -- ^ Stream contents
 readStream dev startIR start mlen = do
   startInode <- drefInode dev startIR
   if 0 == blockCount startInode then return BS.empty else do 
   -- Compute bytes per inode (bpi) and decompose the starting byte offset
-  bpi <- (*bs) `fmap` (computeNumAddrs bs =<< minimalInodeSize =<< getTime)
+  bpi <- (*bs) `fmap` computeNumAddrsM bs
   (sInodeIdx, sBlkOff, sByteOff) <- decompParanoid dev bs bpi start startInode
     -- ^^^ XXX: Replace w/ decompStreamOffset once inode growth etc. is working
   inodes <- expandConts dev startInode
@@ -354,7 +384,8 @@ decompParanoid dev blkSizeBytes numBytesPerInode streamOff inode = do
         decompStreamOffset blkSizeBytes numBytesPerInode streamOff inode
   inodes <- expandConts dev inode
   assert (inodeIdx < fromIntegral (length inodes)) $ do
-  assert (blkOff < blockCount (inodes !! fromIntegral inodeIdx)) $ do 
+  let blkCnt = blockCount (inodes !! fromIntegral inodeIdx)
+  assert (blkCnt == 0 && blkOff == 0 || blkOff < blkCnt) $ do
   return (inodeIdx, blkOff, byteOff)
 
 

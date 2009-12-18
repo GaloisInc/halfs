@@ -39,6 +39,7 @@ class ( Bitmapped b m
       , Serialize t
       , Functor m
       , Monad m
+      , Show t -- For debugging
       ) =>
   HalfsCapable b t r l m | m -> b t r l
 

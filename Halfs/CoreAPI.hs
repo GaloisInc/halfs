@@ -367,5 +367,3 @@ defaultDirPerms = FileMode [Read,Write,Execute] [Read, Execute] [Read, Execute]
 -- TODO: Placeholder
 defaultFilePerms :: FileMode
 defaultFilePerms = FileMode [Read,Write] [Read] [Read]
-
-                  

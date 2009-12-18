@@ -142,9 +142,11 @@ makeDirectory fs addr parentIR dname user group perms = do
 -- | Syncs contents referred to by a directory handle to the disk
 
 -- NB: This should probably be modified to use the DirHandle cache when it
--- exists, in which case this function will not take an explicit DirHandle to
--- sync.  block device and DirHandle.  Expected behavior in that scenario would
--- be to sync all non-Clean DirHandles.
+-- exists, in which case this function may not take an explicit DirHandle to
+-- sync.  Expected behavior in that scenario would be to sync all non-Clean
+-- DirHandles.  Alternately, this might stay the same as a primitive op for
+-- CoreAPI.syncDir, which might manage the set of DirHandles that need to be
+-- sync'd...
 syncDirectory :: HalfsCapable b t r l m =>
                  Halfs b r m l -> DirHandle r -> HalfsM m ()
 syncDirectory fs dh = do 
