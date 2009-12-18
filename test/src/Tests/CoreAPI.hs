@@ -30,21 +30,25 @@ import Tests.Utils
 
 -- import Debug.Trace
 
+
 --------------------------------------------------------------------------------
 -- CoreAPI properties
 
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [
-    exec 50  "Init and mount" propM_initAndMountOK
-  ,
-    exec 50  "Mount/unmount"  propM_mountUnmountOK
-  ,
-    exec 50  "Unmount mutex"  propM_unmountMutexOK
+--     exec 50  "Init and mount" propM_initAndMountOK
+--   ,
+--     exec 50  "Mount/unmount"  propM_mountUnmountOK
+--   ,
+--     exec 50  "Unmount mutex"  propM_unmountMutexOK
+--   ,
+     exec 1 "Directory construction" propM_dirConstructionOK
   ]
   where
     exec = mkMemDevExec quick "CoreAPI"
 
+
 --------------------------------------------------------------------------------
 -- Property Implementations
 
@@ -67,15 +71,6 @@ propM_initAndMountOK _g dev = do
       assert $ not $ unmountClean sb'
       assert $ sb' == sb{ unmountClean = False }
       assert $ freeBlocks sb' == freeBlks
-
-      -- Check that the root directory is empty
-      run (openDir fs [pathSeparator]) >>= \edh -> case edh of
-        Left  err -> fail $ "openDir on root directory failed: " ++ show err
-        Right dh  -> do
-          dirState <- sreadRef $ dhState dh
-          contents <- sreadRef $ dhContents dh
-          assert $ dirState == Clean
-          assert $ M.null contents
 
   -- Mount the filesystem again and ensure "dirty unmount" failure
   run (mount dev) >>= \efs -> case efs of
@@ -149,6 +144,34 @@ propM_unmountMutexOK _g dev = do
     threadTest fs ch =
       unmount fs >>= either (\_ -> writeChan ch False) (\_ -> writeChan ch True)
 
+-- | Ensure that a new filesystem has the expected root directory intact
+-- and that various directory operations work as expected.
+propM_dirConstructionOK :: HalfsCapable b t r l m =>
+                        BDGeom
+                     -> BlockDevice m
+                     -> PropertyM m ()
+propM_dirConstructionOK _g dev = do
+  fs <- run (newfs dev) >> mountOK dev
+
+  -- Check that the root directory is present but empty
+  exec "openDir on root directory" (openDir fs rootPath) >>= \dh -> do
+    dirState <- sreadRef $ dhState dh
+    contents <- sreadRef $ dhContents dh
+    assert $ dirState == Clean
+    assert $ M.null contents
+    
+  exec "mkdir in root directory" $ mkdir fs (rootPath </> "foo") perms
+
+  where
+    rootPath       = [pathSeparator]
+    perms          = FileMode [Read,Write,Execute] [Read,Execute] [Read,Execute]
+    exec descrip f = run f >>= \ea -> case ea of
+                     Left e  ->
+                       fail $ "Unexpected error in propM_dirConstructionOK ("
+                              ++ descrip ++ "):" ++ show e
+                     Right x -> return x
+
+
 --------------------------------------------------------------------------------
 -- Misc
 

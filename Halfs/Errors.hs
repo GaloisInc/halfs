@@ -3,6 +3,7 @@ where
 
 data HalfsError =
     HalfsFileNotFound
+  | HalfsDirectoryExists
   | HalfsPathComponentNotFound String
   | HalfsAbsolutePathExpected
   | HalfsUnmountFailed 

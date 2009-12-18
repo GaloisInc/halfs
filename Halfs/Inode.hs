@@ -9,6 +9,7 @@ module Halfs.Inode
   , inodeRefToBlockAddr
   , nilInodeRef
   , readStream
+  , writeStream
   -- * for testing
   , computeNumAddrs
   , minimalInodeSize
@@ -25,6 +26,7 @@ import Data.Serialize.Get
 import Data.Serialize.Put
 import Data.Word
 
+import Halfs.BlockMap
 import Halfs.Classes
 import Halfs.Protection
 import System.Device.BlockDevice
@@ -252,6 +254,17 @@ drefInode :: (Serialize t, Timed t m, Functor m) =>
 drefInode dev (IR addr) = 
   decode `fmap` bdReadBlock dev addr >>=
   either (fail . (++) "drefInode decode failure: ") return
+
+writeStream ::
+  (HalfsCapable b t r l m) =>
+     BlockDevice m -- ^ The block device
+  -> BlockMap b r  -- ^ The block map
+  -> InodeRef      -- ^ Starting inode reference
+  -> Word64        -- ^ Starting stream (byte) offset
+  -> Bool          -- ^ Truncating write?
+  -> ByteString    -- ^ Data to write
+  -> m ()
+writeStream = fail "Inode.writeStream NYI"
 
 -- | Provides a stream view over the bytes governed by a given Inode and
 -- its continuations.

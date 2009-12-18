@@ -59,7 +59,15 @@ newfs dev = do
   rdirExt  <- alloc1 blockMap
   let rdirAddr  = extBase rdirExt
       rdirInode = blockAddrToInodeRef rdirAddr
-  makeDirectory dev rdirAddr rdirInode Nothing rootUser rootGroup
+
+  -- Build the root directory inode and persist it; note that we do not use
+  -- Directory.makeDirectory here because this is a special case where we have
+  -- no parent directory.
+  dirInode <- buildEmptyInode dev rdirInode nilInodeRef rootUser rootGroup
+  assert (BS.length dirInode == fromIntegral (bdBlockSize dev)) $ do
+  bdWriteBlock dev rdirAddr dirInode
+
+  -- Persist the remaining data structures
   writeBlockMap dev blockMap
   writeSB       dev $ superBlock rdirInode (numFree - rdirBlks) rdirBlks
  where
@@ -140,8 +148,9 @@ mkdir fs fp fm = do
   grp       <- getGroup
   dirAddr   <- extBase `fmap` alloc1 (hsBlockMap fs)
   withAbsPathIR fs path Directory $ \parentIR -> do
-    makeDirectory (hsBlockDev fs) dirAddr parentIR (Just dirName) usr grp
-    chmod fs fp fm
+    trace ("mkdir: parentIR = " ++ show parentIR) $ do               
+    makeDirectory fs dirAddr parentIR dirName usr grp defaultDirPerms
+    >>= either (return . Left) (const $ chmod fs fp fm)
   where
     (path, dirName) = splitFileName fp
 
@@ -350,3 +359,13 @@ getUser = return rootUser
 -- TODO: Placeholder
 getGroup :: Monad m => m GroupID
 getGroup = return rootGroup
+
+-- TODO: Placeholder
+defaultDirPerms :: FileMode
+defaultDirPerms = FileMode [Read,Write,Execute] [Read, Execute] [Read, Execute]
+
+-- TODO: Placeholder
+defaultFilePerms :: FileMode
+defaultFilePerms = FileMode [Read,Write] [Read] [Read]
+
+                  

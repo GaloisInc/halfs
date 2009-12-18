@@ -2,14 +2,15 @@
              FunctionalDependencies, FlexibleContexts,
              FlexibleInstances #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
-module Halfs.Classes(
-         Lockable(..)
-       , Reffable(..)
-       , TimedT(..)
-       , Timed(..)
-       , Bitmapped(..)
-       , IOLock
-       )
+module Halfs.Classes
+  ( HalfsCapable
+  , Lockable(..)
+  , Reffable(..)
+  , TimedT(..)
+  , Timed(..)
+  , Bitmapped(..)
+  , IOLock
+  )
  where
 
 import Control.Applicative
@@ -29,6 +30,13 @@ import Data.Time.Clock
 import Data.Word
 
 -- ----------------------------------------------------------------------------
+
+-- Any monad used in Halfs must implement the following interface:
+class (Bitmapped b m, Timed t m, Reffable r m, Lockable l m, Serialize t, Functor m, Monad m) =>
+   HalfsCapable b t r l m | m -> b t r l
+
+instance HalfsCapable (IOUArray Word64 Bool)   UTCTime IORef     IOLock IO
+instance HalfsCapable (STUArray s Word64 Bool) Word64  (STRef s) ()     (ST s)
 
 -- |A monad implementing Timed implements a monotonic clock that can be read
 -- from. One obvious implementation is using the system clock. Another might be
