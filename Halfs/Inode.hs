@@ -237,6 +237,8 @@ inodeReadBlock dev inode i =
   let IR addr = assertValidIR (blocks inode !! fromIntegral i)
   bdReadBlock dev addr      
 
+-- | Expands the given inode into an inode list containing itself followed by
+-- all of its continuation inodes
 expandConts :: (Serialize t, Timed t m, Functor m) =>
                BlockDevice m -> Inode t -> m [Inode t]
 expandConts _   inode@Inode{ continuation = Nothing      } = return [inode]
@@ -249,14 +251,25 @@ drefInode dev (IR addr) =
   decode `fmap` bdReadBlock dev addr >>=
   either (fail . (++) "drefInode decode failure: ") return
 
+-- | Provides a stream view over the bytes governed by a given Inode and
+-- its continuations.
+-- 
+-- NB: This is a pretty primitive way to go about this, but it's probably
+-- worthwhile to get something working before revisiting it.  In particular, if
+-- this works well enough we might want to consider making this a little less
+-- specific to the particulars of way that the Inode tracks its block addresses,
+-- counts, continuations, etc., and perhaps build enumerators for
+-- inode/block/byte sequences over inodes.
 readStream ::
   (Serialize t, Timed t m, Functor m) => 
      BlockDevice m -- ^ Block device
-  -> Inode t       -- ^ Starting inode
+  -> InodeRef      -- ^ Starting inode reference
   -> Word64        -- ^ Starting stream (byte) offset
   -> Maybe Word64  -- ^ Stream length (Nothing => until end)
   -> m ByteString  -- ^ Stream contents
-readStream dev startInode start mlen = do
+readStream dev startIR start mlen = do
+  startInode <- drefInode dev startIR
+  if 0 == blockCount startInode then return BS.empty else do 
   -- Compute bytes per inode (bpi) and decompose the starting byte offset
   bpi <- (*bs) `fmap` (computeNumAddrs bs =<< minimalInodeSize =<< getTime)
   (sInodeIdx, sBlkOff, sByteOff) <- decompParanoid dev bs bpi start startInode
@@ -288,7 +301,7 @@ readStream dev startInode start mlen = do
     Just len -> do
       (_eInodeIdx, _eBlk, _eByte) <-
         decompParanoid dev bs bpi (start + len - 1) startInode
-      fail "NYI: Upper bound inode stream creation"
+      fail "NYI: Upper-bounded inode stream creation"
   where
     getBlock = inodeReadBlock dev
     bs       = bdBlockSize dev

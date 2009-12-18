@@ -36,7 +36,6 @@ import Data.Word
 class (Monad m, Eq t, Ord t) => Timed t m | m -> t where
   getTime :: m t
 
-
 -- |This is a monad transformer for the Timed monad, which will work for 2^64
 -- steps of an arbitrary underlying monad.
 newtype TimedT m a = TimedT { runTimerT :: Word64 -> m a }

@@ -10,13 +10,13 @@ import qualified Tests.CoreAPI     as CA
 import qualified Tests.Serdes      as SD
 
 qcProps :: [(Args, Property)]
-qcProps = -- BD.qcProps True -- run in "quick" mode for Block Devices
---           ++
---           BM.qcProps True -- run in "quick" mode for Block Map
---           ++
---           SD.qcProps True -- run in "quick" mode for Serdes
---           ++
-             CA.qcProps True -- run in "quick" mode for CoreAPI
+qcProps = BD.qcProps True -- run in "quick" mode for Block Devices
+          ++
+          BM.qcProps True -- run in "quick" mode for Block Map
+          ++
+          SD.qcProps True -- run in "quick" mode for Serdes
+          ++
+          CA.qcProps True -- run in "quick" mode for CoreAPI
 
 main :: IO ()
 main = do

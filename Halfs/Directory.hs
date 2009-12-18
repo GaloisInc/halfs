@@ -9,14 +9,16 @@ module Halfs.Directory
   , find
   , makeDirectory
   , openDirectory
-  --
-  , DirectoryEntry(..) -- FIXME! (don't export)
-  , DirectoryState(..) -- FIXME! (don't export)
+  -- * for testing
+  , DirectoryEntry(..)
+  , DirectoryState(..)
   )
  where
 
+import Control.Applicative
 import Control.Monad
 import Control.Exception(assert)
+import Data.Bits
 import qualified Data.ByteString as BS
 import qualified Data.Map as M
 import Data.Serialize
@@ -28,23 +30,38 @@ import Halfs.Monad
 import Halfs.Inode ( InodeRef(..)
                    , blockAddrToInodeRef
                    , buildEmptyInode
-                   , drefInode
                    , readStream
                    )
 import Halfs.Protection
 import System.Device.BlockDevice
 
--- NB: These comments are not necc. up-to-date (FIXME)
---
--- Directories are stored like normal files, with a format of:
---   topLevelInode :: InodeRef
---   filename      :: String
---
--- In which file names are arbitrary-length, null-terminated strings. Valid file
--- names are guaranteed to not include null or the System.FilePath.pathSeparator
--- character. If a filename in the directory list contains
--- System.FilePath.pathSeparator as the first character, that means that the
--- file has been deleted but the directory itself hasn't been compressed.
+import Debug.Trace
+
+--------------------------------------------------------------------------------
+-- Types & instances
+
+-- File names are arbitrary-length, null-terminated strings.  Valid file names
+-- are guaranteed to not include null or the System.FilePath.pathSeparator
+-- character.
+
+instance Serialize DirectoryEntry where
+  put de = do
+    put $ deName  de
+    put $ deInode de
+    put $ deUser  de
+    put $ deGroup de
+    put $ deMode  de
+    put $ deType  de
+  get = DirEnt <$> get <*> get <*> get <*> get <*> get <*> get
+
+data DirectoryEntry = DirEnt {
+    deName  :: String
+  , deInode :: InodeRef
+  , deUser  :: UserID
+  , deGroup :: GroupID
+  , deMode  :: FileMode
+  , deType  :: FileType
+  }
 
 data DirHandle r = DirHandle {
     dhInode       :: InodeRef
@@ -52,24 +69,53 @@ data DirHandle r = DirHandle {
   , dhState       :: r DirectoryState
   }
 
-data DirectoryEntry = DirEnt {
-    deName  :: String
-  , deInode :: InodeRef
-  , deUser  :: UserID
-  , deGroup :: GroupID
-  , deMode  :: Int
-  , deType  :: FileType
-  }
-
 data AccessRight    = Read | Write | Execute
-data FileType       = RegularFile | Directory | Symlink deriving (Show, Eq)
+  deriving (Show, Eq)
+
 data DirectoryState = Clean | OnlyAdded | OnlyDeleted | VeryDirty
+  deriving (Show, Eq)
+
+instance Serialize FileMode where
+  put FileMode{ fmOwnerPerms = op, fmGroupPerms = gp, fmUserPerms = up } = do
+    when (any (>3) $ map length [op, gp, up]) $
+      fail "Fixed-length check failed in FileMode serialization"
+    putWord8 $ perms op
+    putWord8 $ perms gp
+    putWord8 $ perms up
+    where
+      perms ps  = foldr (.|.) 0x0 $ flip map ps $ \x -> -- toBit
+                  case x of Read -> 0x4 ; Write -> 0x2; Execute -> 0x1
+  --
+  get = 
+    FileMode <$> gp <*> gp <*> gp 
+    where
+      gp         = fromBits `fmap` getWord8
+      fromBits x = let x0 = if testBit x 0 then [Execute] else []
+                       x1 = if testBit x 1 then Write:x0  else x0
+                       x2 = if testBit x 2 then Read:x1   else x1
+                   in x2
 
 data FileMode = FileMode {
     fmOwnerPerms :: [AccessRight]
   , fmGroupPerms :: [AccessRight]
   , fmUserPerms  :: [AccessRight]
   }
+
+
+instance Serialize FileType where
+  put RegularFile = putWord8 0x0
+  put Directory   = putWord8 0x1
+  put Symlink     = putWord8 0x2
+  --
+  get =
+    getWord8 >>= \x -> case x of
+      0x0 -> return RegularFile
+      0x1 -> return Directory
+      0x2 -> return Symlink
+      _   -> fail "Invalid FileType during deserialize"
+
+data FileType = RegularFile | Directory | Symlink
+  deriving (Show, Eq)
 
 data FileStat t = FileStat {
     fsInode      :: InodeRef
@@ -84,6 +130,9 @@ data FileStat t = FileStat {
   , fsModTime    :: t
   , fsChangeTime :: t
   }
+
+--------------------------------------------------------------------------------
+-- Directory manipulation and query functions
 
 -- | Given a block address to place the directory, its parent, its owner, and
 -- its group, generate a new, empty directory with the given name (which is
@@ -117,51 +166,18 @@ makeDirectory dev addr parentIR mdirname user group = do
 openDirectory :: HalfsCapable b t r l m =>
                  BlockDevice m -> InodeRef -> m (DirHandle r)
 openDirectory dev inr = do
-  inode <- drefInode dev inr
-
   -- Need a "data stream generator" that turns an inode into a lazy bytestring
   -- representing the underlying data that it covers, reading blocks and
   -- expanding inode continuations as needed...this will eventually end up being
   -- used by the file implementation as well
 
+  rawDir <- readStream dev inr 0 Nothing
+  -- HERE: decode rawDir after testing DirectoryEntry serialization instance
+
   -- TODO: DirHandle cache?  In HalfsState, perhaps?
   DirHandle inr `fmap` newRef contents `ap` newRef Clean
   where
-    contents = undefined
-
-{-
-data (Eq t, Ord t, Serialize t) => Inode t = Inode {
-    address       :: InodeRef        -- ^ block addr of this inode
-  , parent        :: InodeRef        -- ^ block addr of parent directory inode
-  , continuation  :: Maybe InodeRef
-  , createTime    :: t
-  , modifyTime    :: t
-  , user          :: UserID
-  , group         :: GroupID
-  , numAddrs      :: Word64          -- ^ number of total block addresses
-                                     -- that this inode covers
-  , blockCnt      :: Word64          -- ^ current number of active blocks (equal
-                                     -- to the number of inode references held
-                                     -- in the blocks list)
-  , blocks        :: [InodeRef]
-  }
-
-  data DirHandle r = DirHandle {
-    dhInode       :: InodeRef
-  , dhContents    :: r (M.Map FilePath DirectoryEntry)
-  , dhState       :: r DirectoryState
-  }
-
-data DirectoryEntry = DirEnt {
-    deName  :: String
-  , deInode :: InodeRef
-  , deUser  :: UserID
-  , deGroup :: GroupID
-  , deMode  :: Int
-  , deType  :: FileType
-  }
-
--}
+    contents = M.empty
 
 -- | Finds a directory, file, or symlink given a starting inode reference (i.e.,
 -- the directory inode at which to begin the search) and a list of path
@@ -210,3 +226,4 @@ findInDir dh fname ftype =
 
 isFileType :: DirectoryEntry -> FileType -> Bool
 isFileType (DirEnt { deType = t }) ft = t == ft
+

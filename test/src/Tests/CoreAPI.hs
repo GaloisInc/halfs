@@ -7,14 +7,17 @@ where
 
 import Control.Concurrent
 import qualified Data.ByteString as BS
+import qualified Data.Map as M
 import Data.Serialize
 import Prelude hiding (read)
+import System.FilePath
 import Test.QuickCheck hiding (numTests)
 import Test.QuickCheck.Monadic
 
 import Halfs.BlockMap
 import Halfs.Classes
 import Halfs.CoreAPI
+import Halfs.Directory
 import Halfs.Errors
 import Halfs.Inode
 import Halfs.Monad
@@ -64,6 +67,15 @@ propM_initAndMountOK _g dev = do
       assert $ not $ unmountClean sb'
       assert $ sb' == sb{ unmountClean = False }
       assert $ freeBlocks sb' == freeBlks
+
+      -- Check that the root directory is empty
+      run (openDir fs [pathSeparator]) >>= \edh -> case edh of
+        Left  err -> fail $ "openDir on root directory failed: " ++ show err
+        Right dh  -> do
+          dirState <- sreadRef $ dhState dh
+          contents <- sreadRef $ dhContents dh
+          assert $ dirState == Clean
+          assert $ M.null contents
 
   -- Mount the filesystem again and ensure "dirty unmount" failure
   run (mount dev) >>= \efs -> case efs of
