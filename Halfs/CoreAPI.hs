@@ -33,6 +33,7 @@ data FileSystemStats = FSS {
   , fssMaxNameLength :: Integer
   }
 
+
 --------------------------------------------------------------------------------
 -- Filesystem init, teardown, and check functions
 
@@ -121,6 +122,7 @@ unmount fs@HalfsState{hsBlockDev = dev, hsSuperBlock = sbRef} = do
 fsck :: Int
 fsck = undefined
 
+
 --------------------------------------------------------------------------------
 -- Directory manipulation
 
@@ -205,7 +207,7 @@ openFile fs fp creat = do
         else do
           return $ Left $ HalfsFileNotFound
     --
-    foundFile fileIR = do
+    foundFile _fileIR = do
       fail "TODO: openFile for existing files not yet implemented"
                     
 read :: (HalfsCapable b t r l m) =>
@@ -245,6 +247,7 @@ rename :: (HalfsCapable b t r l m) =>
           Halfs b r m l -> FilePath -> FilePath -> HalfsM m ()
 rename = undefined
 
+
 --------------------------------------------------------------------------------
 -- Access control
 
@@ -261,6 +264,7 @@ access :: (HalfsCapable b t r l m) =>
           Halfs b r m l -> FilePath -> [AccessRight] -> HalfsM m ()
 access = undefined
 
+
 --------------------------------------------------------------------------------
 -- Link manipulation
 
@@ -280,6 +284,7 @@ readSymLink :: (HalfsCapable b t r l m) =>
                Halfs b r m l -> FilePath -> HalfsM m FilePath
 readSymLink = undefined
 
+
 --------------------------------------------------------------------------------
 -- Filesystem stats
 
@@ -291,6 +296,7 @@ fsstat :: (HalfsCapable b t r l m) =>
           Halfs b r m l -> HalfsM m FileSystemStats
 fsstat = undefined
 
+
 --------------------------------------------------------------------------------
 -- Utility functions
 

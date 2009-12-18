@@ -12,6 +12,7 @@ import Data.Serialize
 import Data.Time.Clock
 import Test.QuickCheck hiding (numTests)
   
+import Halfs.Directory
 import Halfs.Inode
 import Halfs.SuperBlock
 
@@ -22,9 +23,10 @@ import Tests.Instances ()
 
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
-  [ serdes 100 "SuperBlock"    (arbitrary :: Gen SuperBlock)
-  , serdes 100 "UTCTime"       (arbitrary :: Gen UTCTime) 
-  , serdes 100 "Inode UTCTime" (arbitrary :: Gen (Inode UTCTime))
+  [ serdes 100 "SuperBlock"     (arbitrary :: Gen SuperBlock)
+  , serdes 100 "UTCTime"        (arbitrary :: Gen UTCTime) 
+  , serdes 100 "Inode UTCTime"  (arbitrary :: Gen (Inode UTCTime))
+  , serdes 100 "DirectoryEntry" (arbitrary :: Gen DirectoryEntry)
   ]
   where
     numTests n    = (,) $ if quick then stdArgs{maxSuccess = n} else stdArgs

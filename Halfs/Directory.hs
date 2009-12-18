@@ -17,9 +17,10 @@ module Halfs.Directory
 
 import Control.Applicative
 import Control.Monad
-import Control.Exception(assert)
+import Control.Exception (assert)
 import Data.Bits
 import qualified Data.ByteString as BS
+import Data.List (sort)
 import qualified Data.Map as M
 import Data.Serialize
 import Data.Word
@@ -35,24 +36,15 @@ import Halfs.Inode ( InodeRef(..)
 import Halfs.Protection
 import System.Device.BlockDevice
 
-import Debug.Trace
+-- import Debug.Trace
 
+
 --------------------------------------------------------------------------------
--- Types & instances
+-- Types
 
 -- File names are arbitrary-length, null-terminated strings.  Valid file names
 -- are guaranteed to not include null or the System.FilePath.pathSeparator
 -- character.
-
-instance Serialize DirectoryEntry where
-  put de = do
-    put $ deName  de
-    put $ deInode de
-    put $ deUser  de
-    put $ deGroup de
-    put $ deMode  de
-    put $ deType  de
-  get = DirEnt <$> get <*> get <*> get <*> get <*> get <*> get
 
 data DirectoryEntry = DirEnt {
     deName  :: String
@@ -62,6 +54,7 @@ data DirectoryEntry = DirEnt {
   , deMode  :: FileMode
   , deType  :: FileType
   }
+  deriving (Show, Eq)
 
 data DirHandle r = DirHandle {
     dhInode       :: InodeRef
@@ -69,50 +62,18 @@ data DirHandle r = DirHandle {
   , dhState       :: r DirectoryState
   }
 
-data AccessRight    = Read | Write | Execute
-  deriving (Show, Eq)
+data AccessRight = Read | Write | Execute
+  deriving (Show, Eq, Ord)
 
 data DirectoryState = Clean | OnlyAdded | OnlyDeleted | VeryDirty
   deriving (Show, Eq)
-
-instance Serialize FileMode where
-  put FileMode{ fmOwnerPerms = op, fmGroupPerms = gp, fmUserPerms = up } = do
-    when (any (>3) $ map length [op, gp, up]) $
-      fail "Fixed-length check failed in FileMode serialization"
-    putWord8 $ perms op
-    putWord8 $ perms gp
-    putWord8 $ perms up
-    where
-      perms ps  = foldr (.|.) 0x0 $ flip map ps $ \x -> -- toBit
-                  case x of Read -> 0x4 ; Write -> 0x2; Execute -> 0x1
-  --
-  get = 
-    FileMode <$> gp <*> gp <*> gp 
-    where
-      gp         = fromBits `fmap` getWord8
-      fromBits x = let x0 = if testBit x 0 then [Execute] else []
-                       x1 = if testBit x 1 then Write:x0  else x0
-                       x2 = if testBit x 2 then Read:x1   else x1
-                   in x2
 
 data FileMode = FileMode {
     fmOwnerPerms :: [AccessRight]
   , fmGroupPerms :: [AccessRight]
   , fmUserPerms  :: [AccessRight]
   }
-
-
-instance Serialize FileType where
-  put RegularFile = putWord8 0x0
-  put Directory   = putWord8 0x1
-  put Symlink     = putWord8 0x2
-  --
-  get =
-    getWord8 >>= \x -> case x of
-      0x0 -> return RegularFile
-      0x1 -> return Directory
-      0x2 -> return Symlink
-      _   -> fail "Invalid FileType during deserialize"
+  deriving (Show)
 
 data FileType = RegularFile | Directory | Symlink
   deriving (Show, Eq)
@@ -131,6 +92,7 @@ data FileStat t = FileStat {
   , fsChangeTime :: t
   }
 
+
 --------------------------------------------------------------------------------
 -- Directory manipulation and query functions
 
@@ -154,7 +116,7 @@ makeDirectory dev addr parentIR mdirname user group = do
   case mdirname of
     Nothing    -> assert (thisIR == parentIR) $ return ()
     Just dname -> do
-      -- TODO: Add dname to parent directory's contents
+      -- TODO: Add the directory 'dname' to parent directory's contents
       -- i.e.: dh <- openDirectory dev parentIR
       --       (update contents and writeback and/or closeDir etc.)
       fail $ "TODO/NYI: makeDirectory add dirname="++dname++" to parent dir"
@@ -201,6 +163,7 @@ find dev startINR ftype (pathComp:rest) = do
       (return Nothing)
       (\de -> find dev (deInode de) ftype rest)
 
+-- | Locate the given typed file by filename in the dirhandle's content map
 findInDir' :: HalfsCapable b t r l m =>
              DirHandle r
           -> String
@@ -212,7 +175,7 @@ findInDir' dh fname ftype =
       (return Nothing)
       (\de -> return $ if de `isFileType` ftype then Just de else Nothing)
 
--- Exportable version that doesn't expose DirectoryEntry
+-- Exportable version of findInDir; doesn't expose DirectoryEntry to caller
 findInDir :: HalfsCapable b t r l m =>
                DirHandle r
             -> String
@@ -221,9 +184,61 @@ findInDir :: HalfsCapable b t r l m =>
 findInDir dh fname ftype = 
   findInDir' dh fname ftype >>= return . maybe Nothing (Just . deInode)
 
+
 --------------------------------------------------------------------------------
 -- Utility functions
 
 isFileType :: DirectoryEntry -> FileType -> Bool
 isFileType (DirEnt { deType = t }) ft = t == ft
 
+
+--------------------------------------------------------------------------------
+-- Instances
+
+instance Serialize DirectoryEntry where
+  put de = do
+    put $ deName  de
+    put $ deInode de
+    put $ deUser  de
+    put $ deGroup de
+    put $ deMode  de
+    put $ deType  de
+  get = DirEnt <$> get <*> get <*> get <*> get <*> get <*> get
+
+instance Serialize FileType where
+  put RegularFile = putWord8 0x0
+  put Directory   = putWord8 0x1
+  put Symlink     = putWord8 0x2
+  --
+  get =
+    getWord8 >>= \x -> case x of
+      0x0 -> return RegularFile
+      0x1 -> return Directory
+      0x2 -> return Symlink
+      _   -> fail "Invalid FileType during deserialize"
+
+instance Serialize FileMode where
+  put FileMode{ fmOwnerPerms = op, fmGroupPerms = gp, fmUserPerms = up } = do
+    when (any (>3) $ map length [op, gp, up]) $
+      fail "Fixed-length check failed in FileMode serialization"
+    putWord8 $ perms op
+    putWord8 $ perms gp
+    putWord8 $ perms up
+    where
+      perms ps  = foldr (.|.) 0x0 $ flip map ps $ \x -> -- toBit
+                  case x of Read -> 4 ; Write -> 2; Execute -> 1
+  --
+  get = 
+    FileMode <$> gp <*> gp <*> gp 
+    where
+      gp         = fromBits `fmap` getWord8
+      fromBits x = let x0 = if testBit x 0 then [Execute] else []
+                       x1 = if testBit x 1 then Write:x0  else x0
+                       x2 = if testBit x 2 then Read:x1   else x1
+                   in x2
+
+instance Eq FileMode where
+  fm1 == fm2 =
+    sort (fmOwnerPerms fm1) == sort (fmOwnerPerms fm2) &&
+    sort (fmGroupPerms fm1) == sort (fmGroupPerms fm2) &&
+    sort (fmUserPerms  fm1) == sort (fmUserPerms  fm2)

@@ -24,10 +24,12 @@ import Halfs.Inode               ( Inode(..)
                                  , computeNumAddrs
                                  , minimalInodeSize
                                  )
+import Halfs.Directory
 import Halfs.Protection          (UserID(..), GroupID(..))
 import Halfs.SuperBlock          (SuperBlock(..))
 import Tests.Types
 
+
 --------------------------------------------------------------------------------
 -- Block Device generators and helpers
 
@@ -84,6 +86,7 @@ arbBlockData (BDGeom _cnt sz) =
 byte :: Gen Word8
 byte = fromIntegral `fmap` choose (0 :: Int, 255)
 
+
 --------------------------------------------------------------------------------
 -- BlockMap generators and helpers
 
@@ -136,6 +139,7 @@ permute xs = do
       return $ let (l,r) = splitAt i xs'
                in l ++ [x] ++ r
 
+
 --------------------------------------------------------------------------------
 -- Instances and helpers
 
@@ -187,6 +191,32 @@ instance (Arbitrary a, Ord a, Serialize a) => Arbitrary (Inode a) where
       <*> return (fromIntegral numBlocks)            -- blockCount
       <*> replicateM numBlocks (IR `fmap` arbitrary) -- blocks
                                              
+-- Generate an arbitrary directory entry
+instance Arbitrary DirectoryEntry where
+  arbitrary = 
+    DirEnt
+      <$> (listOf1 arbitrary :: Gen String)          -- deName
+      <*> IR `fmap` arbitrary                        -- deInode
+      <*> UID `fmap` arbitrary                       -- deUser
+      <*> GID `fmap` arbitrary                       -- deGroup
+      <*> (arbitrary :: Gen FileMode)                -- deMode
+      <*> elements [RegularFile, Directory, Symlink] -- deType
+    
+instance Arbitrary FileMode where
+  arbitrary = 
+    FileMode <$> gp <*> gp <*> gp
+    where
+      gp          = validAccess >>= permute
+      validAccess = elements [ []
+                             , [Read]
+                             , [Write]
+                             , [Execute]
+                             , [Read,Write]
+                             , [Read,Execute]
+                             , [Write,Execute]
+                             , [Read,Write,Execute]
+                             ]
+
 instance Arbitrary UTCTime where
   arbitrary = UTCTime <$> arbitrary <*> arbitrary
 

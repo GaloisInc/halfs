@@ -29,6 +29,7 @@ import Halfs.Classes
 import Halfs.Protection
 import System.Device.BlockDevice
 
+
 --------------------------------------------------------------------------------
 -- Inode types, instances, constructors, and geometry calculation functions
 
@@ -223,6 +224,7 @@ emptyInode nAddrs createTm modTm me mommy usr grp =
   , blocks       = []
   }
 
+
 --------------------------------------------------------------------------------
 -- Inode utility functions
 
@@ -342,6 +344,7 @@ decompParanoid dev blkSizeBytes numBytesPerInode streamOff inode = do
   assert (blkOff < blockCount (inodes !! fromIntegral inodeIdx)) $ do 
   return (inodeIdx, blkOff, byteOff)
 
+
 --------------------------------------------------------------------------------
 -- Magic numbers
 
