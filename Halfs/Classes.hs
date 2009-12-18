@@ -89,9 +89,11 @@ instance Monad m => Timed Word64 (TimedT m) where
 -- |A monad implementing Reffable implements a reference type that allows for
 -- mutable state.
 class Monad m => Reffable r m | m -> r where
-  newRef   :: a -> m (r a)
-  readRef  :: r a -> m a
-  writeRef :: r a -> a -> m ()
+  newRef    :: a -> m (r a)
+  readRef   :: r a -> m a
+  writeRef  :: r a -> a -> m ()
+  modifyRef :: r a -> (a -> a) -> m ()
+  modifyRef r f = readRef r >>= writeRef r . f
 
 instance Reffable (STRef s) (ST s) where
   newRef   = newSTRef
