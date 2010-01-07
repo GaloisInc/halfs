@@ -27,6 +27,7 @@ import Data.Serialize.Get
 import Data.Serialize.Put
 import Data.STRef
 import Data.Time.Clock
+import Data.Time.LocalTime () -- for Show UTCTime instance
 import Data.Word
 
 -- ----------------------------------------------------------------------------
