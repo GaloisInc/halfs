@@ -29,6 +29,7 @@ import Data.Word
 import Halfs.BlockMap
 import Halfs.Classes
 import Halfs.Protection
+import Halfs.Utils
 import System.Device.BlockDevice
 
 import Debug.Trace
@@ -271,19 +272,65 @@ writeStream :: HalfsCapable b t r l m =>
             -> ByteString    -- ^ Data to write
             -> m ()
 writeStream dev bm startIR start trunc bytes = do
-  if 0 == BS.length bytes then return () else do 
+  let len = fromIntegral $ BS.length bytes
+  trace ("writeStream: len = " ++ show len) $ do
+  if 0 == len then return () else do 
   startInode <- drefInode dev startIR
 
-  -- Compute bytes per inode (bpi) and decompose the start byte offset
-  bpi <- (*bs) `fmap` computeNumAddrsM bs
-  (sInodeIdx, sBlkOff, sByteOff) <- decompParanoid dev bs bpi start startInode
+  -- TODO: Error handling: the start offset can be after the end of the
+  -- stream, but only immediately beyond it so as not to introduce
+  -- "gaps" -- this is currently an assertion in decompParanoid but it
+  -- should be a proper error.
+
+  -- Compute (block) addrs per inode (api) and decompose the start byte offset
+  api <- computeNumAddrsM bs
+  (sInodeIdx, sBlkOff, sByteOff)
+    <- decompParanoid dev bs (bs * api) start startInode
     -- ^^^ XXX: Replace w/ decompStreamOffset once inode growth etc. is working
   trace ("sInodeIdx, sBlkOff, sByteOff = " ++ show (sInodeIdx, sBlkOff, sByteOff)) $ do
   inodes <- expandConts dev startInode
   trace ("inodes = " ++ show inodes) $ do
+  trace ("addrs per inode = " ++ show api) $ do                                                 
 
   -- Determine if we need to allocate space for the data
-  -- HERE!
+  let
+    availBlocks n = api - blockCount n
+    -- # of already-allocated bytes from the start to the end of stream 
+    alreadyAllocd =
+      let
+        -- # of already-allocated bytes in the start inode's start block
+        allocdInBlk   = if sBlkOff < blockCount startInode
+                        then bs - sByteOff
+                        else 0 
+        -- # of already-alloc'd bytes in the start inode after the start block
+        allocdInNode  = if sBlkOff + 1 < blockCount startInode
+                        then blockCount startInode - sBlkOff - 1
+                        else 0
+        -- # of already-alloc'd bytes in the rest of the inodes
+        allocdInConts = sum $ map ((*bs) . blockCount) $
+                         drop (fromIntegral $ sInodeIdx + 1) inodes
+      in
+        trace ("allocdInBlk   = " ++ show allocdInBlk)   $ 
+        trace ("allocdInNode  = " ++ show allocdInNode)  $ 
+        trace ("allocdInConts = " ++ show allocdInConts) $ 
+        allocdInBlk + allocdInNode + allocdInConts
+
+  trace ("alreadyAllocd = " ++ show alreadyAllocd) $ do
+
+  let bytesToAlloc = if alreadyAllocd > len then 0 else len - alreadyAllocd
+      blksToAlloc  = divCeil bytesToAlloc bs
+
+  trace ("bytesToAlloc = " ++ show bytesToAlloc) $ do
+  trace ("blksToAlloc = " ++ show blksToAlloc) $ do
+  trace ("availBlockSlots startInode = " ++ show (availBlocks startInode)) $ do
+
+  -- allocate blocks here, but then distribute them over the inode's block
+  -- lists, creating new inodes as needed...actually, should probably allocate &
+  -- init any additional inodes needed before creating the storage blocks
+  -- themselves for what's being written.
+
+  -- HERE: determine how many new inodes, if any will be needed, alloc & init
+  -- them, and form inodes'.
 
   -- NB: we'll probably have to change inodes to hold onto BlockGroups...has
   -- indexing scheme implications.

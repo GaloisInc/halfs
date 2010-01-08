@@ -305,5 +305,3 @@ blkGroupSz :: BlockGroup -> Word64
 blkGroupSz (Contig ext)     = extSz ext
 blkGroupSz (Discontig exts) = foldr (\e -> (extSz e +)) 0 exts
 
-divCeil :: Integral a => a -> a -> a
-divCeil a b = (a + (b - 1)) `div` b

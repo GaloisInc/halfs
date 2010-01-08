@@ -154,8 +154,10 @@ syncDirectory fs dh = do
   state <- readRef $ dhState dh
   case state of
     Clean       -> return $ Right ()
-    OnlyAdded   -> do 
+    OnlyAdded   -> do
       toWrite <- (encode . M.elems) `fmap` readRef (dhContents dh)
+      trace ("syncDirectory: toWrite length = " ++ show (BS.length toWrite)
+             ++ ", toWrite = " ++ show toWrite) $ do
       -- Overwrite the entire DirectoryEntry list, truncating the directory's
       -- inode data stream
       writeStream (hsBlockDev fs) (hsBlockMap fs) (dhInode dh) 0 True toWrite
