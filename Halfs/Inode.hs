@@ -277,10 +277,9 @@ writeStream dev bm startIR start trunc bytes = do
   if 0 == len then return () else do 
   startInode <- drefInode dev startIR
 
-  -- TODO: Error handling: the start offset can be after the end of the
-  -- stream, but only immediately beyond it so as not to introduce
-  -- "gaps" -- this is currently an assertion in decompParanoid but it
-  -- should be a proper error.
+  -- TODO: Error handling: the start offset can be exactly at the end of the
+  -- stream, but not beyond it so as not to introduce "gaps" -- this is
+  -- currently an assertion in decompParanoid but it should be a proper error.
 
   -- Compute (block) addrs per inode (api) and decompose the start byte offset
   api <- computeNumAddrsM bs
@@ -290,7 +289,7 @@ writeStream dev bm startIR start trunc bytes = do
   trace ("sInodeIdx, sBlkOff, sByteOff = " ++ show (sInodeIdx, sBlkOff, sByteOff)) $ do
   inodes <- expandConts dev startInode
   trace ("inodes = " ++ show inodes) $ do
-  trace ("addrs per inode = " ++ show api) $ do                                                 
+  trace ("addrs per inode = " ++ show api) $ do
 
   -- Determine if we need to allocate space for the data
   let
@@ -324,7 +323,7 @@ writeStream dev bm startIR start trunc bytes = do
   trace ("blksToAlloc = " ++ show blksToAlloc) $ do
   trace ("availBlockSlots startInode = " ++ show (availBlocks startInode)) $ do
 
-  -- allocate blocks here, but then distribute them over the inode's block
+  -- Allocate blocks here, but then distribute them over the inode's block
   -- lists, creating new inodes as needed...actually, should probably allocate &
   -- init any additional inodes needed before creating the storage blocks
   -- themselves for what's being written.
