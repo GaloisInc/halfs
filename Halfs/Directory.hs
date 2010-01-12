@@ -31,7 +31,7 @@ import Halfs.Errors
 import Halfs.Monad
 import Halfs.Inode ( InodeRef(..)
                    , blockAddrToInodeRef
-                   , buildEmptyInode
+                   , buildEmptyInodeEnc
                    , readStream
                    , writeStream
                    )
@@ -113,7 +113,7 @@ makeDirectory :: HalfsCapable b t r l m =>
               -> HalfsM m InodeRef
 makeDirectory fs addr parentIR dname user group perms = do
   -- Build the directory inode and persist it
-  bstr <- buildEmptyInode dev thisIR parentIR user group
+  bstr <- buildEmptyInodeEnc dev thisIR parentIR user group
   assert (BS.length bstr == fromIntegral (bdBlockSize dev)) $ do 
   bdWriteBlock dev addr bstr
 

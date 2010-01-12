@@ -12,6 +12,7 @@ module Halfs.BlockMap
   , writeBlockMap
   , numFreeBlocks
   -- * Block Map allocation/unallocation functions
+  , alloc1
   , allocBlocks
   , unallocBlocks
   -- * Utility functions
@@ -227,6 +228,15 @@ allocBlocks bm numBlocks = do
       writeRef (bmFreeTree bm) freeTree'
       writeRef (bmNumFree bm) (available - numBlocks)
       return $ Just blkGroup
+
+-- | Allocate a single block
+alloc1 :: (Bitmapped b m, Reffable r m) =>
+          BlockMap b r -> m (Maybe Word64)
+alloc1 bm = do 
+  res <- allocBlocks bm 1
+  case res of
+    Just (Contig ext) -> return $ Just $ extBase ext
+    _                 -> return Nothing
 
 -- | Mark a given block group as unused
 unallocBlocks :: (Monad m, Reffable r m, Bitmapped b m) =>

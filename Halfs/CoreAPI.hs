@@ -56,14 +56,14 @@ newfs dev = do
 
   blockMap <- newBlockMap dev
   numFree  <- readRef (bmNumFree blockMap)
-  rdirExt  <- alloc1 blockMap
-  let rdirAddr  = extBase rdirExt
-      rdirInode = blockAddrToInodeRef rdirAddr
+  rdirAddr <- maybe (fail "Unable to allocate block for rdir inode") return
+              =<< alloc1 blockMap
 
   -- Build the root directory inode and persist it; note that we do not use
   -- Directory.makeDirectory here because this is a special case where we have
   -- no parent directory.
-  dirInode <- buildEmptyInode dev rdirInode nilInodeRef rootUser rootGroup
+  let rdirInode = blockAddrToInodeRef rdirAddr
+  dirInode <- buildEmptyInodeEnc dev rdirInode nilInodeRef rootUser rootGroup
   assert (BS.length dirInode == fromIntegral (bdBlockSize dev)) $ do
   bdWriteBlock dev rdirAddr dirInode
 
@@ -146,11 +146,15 @@ mkdir :: (HalfsCapable b t r l m) =>
 mkdir fs fp fm = do
   usr       <- getUser
   grp       <- getGroup
-  dirAddr   <- extBase `fmap` alloc1 (hsBlockMap fs)
-  withAbsPathIR fs path Directory $ \parentIR -> do
-    trace ("mkdir: parentIR = " ++ show parentIR) $ do               
-    makeDirectory fs dirAddr parentIR dirName usr grp defaultDirPerms
-    >>= either (return . Left) (const $ chmod fs fp fm)
+  alloc1 (hsBlockMap fs) >>=
+    maybe (return $ Left HalfsAllocFailed)
+          (\dirAddr -> do
+             mdirAddr  <- alloc1 $ hsBlockMap fs
+             withAbsPathIR fs path Directory $ \parentIR -> do
+               trace ("mkdir: parentIR = " ++ show parentIR) $ do               
+               makeDirectory fs dirAddr parentIR dirName usr grp defaultDirPerms
+               >>= either (return . Left) (const $ chmod fs fp fm)
+          )
   where
     (path, dirName) = splitFileName fp
 
@@ -326,14 +330,6 @@ withAbsPathIR fs fp ftype f = do
        maybe (return $ Left $ HalfsPathComponentNotFound fp) f
    else do
      return $ Left $ HalfsAbsolutePathExpected
-
-alloc1 :: (Bitmapped b m, Reffable r m) =>
-          BlockMap b r -> m Extent
-alloc1 bm = do 
-  res <- allocBlocks bm 1
-  case res of
-    Just (Contig ext) -> return ext
-    _                 -> fail "Could not allocate single block"
 
 writeSB :: (HalfsCapable b t r l m) =>
            BlockDevice m -> SuperBlock -> m SuperBlock

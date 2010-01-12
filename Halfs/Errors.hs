@@ -8,6 +8,7 @@ data HalfsError =
   | HalfsAbsolutePathExpected
   | HalfsUnmountFailed 
   | HalfsMountFailed   RsnHalfsMountFail
+  | HalfsAllocFailed
   deriving Show
 
 data RsnHalfsMountFail = 
