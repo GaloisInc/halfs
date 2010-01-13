@@ -327,7 +327,6 @@ writeStream dev bm startIR start trunc bytes = do
   -- as needed, but we'll leave this as a TODO for now.
 
   let
-    availBlocks n = api - blockCount n
     -- # of already-allocated bytes from the start to the end of stream 
     alreadyAllocd =
       let
@@ -350,7 +349,9 @@ writeStream dev bm startIR start trunc bytes = do
 
   trace ("alreadyAllocd = " ++ show alreadyAllocd) $ do
 
-  let bytesToAlloc  = if alreadyAllocd > len then 0 else len - alreadyAllocd
+  let availBlocks :: forall t. (Ord t, Serialize t) => Inode t -> Word64
+      availBlocks n = api - blockCount n
+      bytesToAlloc  = if alreadyAllocd > len then 0 else len - alreadyAllocd
       blksToAlloc   = bytesToAlloc `divCeil` bs
       inodesToAlloc = fromIntegral $
                       (blksToAlloc - availBlocks (last origInodes))
@@ -362,47 +363,59 @@ writeStream dev bm startIR start trunc bytes = do
   trace ("inodesToAlloc = " ++ show inodesToAlloc) $ do
   trace ("availBlocks startInode = " ++ show (availBlocks startInode)) $ do
 
-  -- Allocate the required number of blocks, and fill them into the inodes'
-  -- block lists; creates new inodes as needed.  The result is the final inode
-  -- chain to write into.
-  inodes <- allocAndFill blksToAlloc inodesToAlloc usr grp origInodes
+  inodes <- allocAndFill availBlocks blksToAlloc inodesToAlloc usr grp origInodes 
   trace ("inodes = " ++ show inodes) $ do
   if trunc
    then do fail "Inode.writeStream: truncating write NYI"
    else do fail "Inode.writeStream: non-trunc write NYI"   
 
   where
-    whenOK act f = act >>= either (return . Left) f
-    bs           = bdBlockSize dev
+    whenOK act f      = act >>= either (return . Left) f
+    bs                = bdBlockSize dev
     -- 
-    allocBlocks n =
+    allocBlocks n = -- currently flatten BlockGroup; see above comment
       BM.allocBlocks bm n >>=
       maybe (return $ Left HalfsAllocFailed)
-            (return . Right . BM.blkRangeBG) -- flatten group; see above comment
-    --
-    allocAndFill blksToAlloc inodesToAlloc usr grp existingInodes = 
+            (return . Right . map blockAddrToInodeRef . BM.blkRangeBG)
+    -- 
+    -- Allocate the given number of blocks, and fill them into the inodes' block
+    -- lists, allocating new inodes as needed.  The result is the final inode
+    -- chain to write data into.
+    allocAndFill avail blksToAlloc inodesToAlloc usr grp existingInodes = 
       -- TODO: numAddrs adjustments
       if blksToAlloc == 0
        then return (Right existingInodes)
        else do
          whenOK (allocInodes inodesToAlloc usr grp) $ \newInodes -> do
-         trace ("newInodes = " ++ show newInodes) $ do              
-         -- Allocate blocks and add them to the inodes' block lists.
+         -- trace ("newInodes = " ++ show newInodes) $ do              
+         -- Allocate blocks and add them to the block lists of the inodes
          whenOK (allocBlocks blksToAlloc) $ \blks -> do
-         trace ("blks = " ++ show blks) $ do
-           -- TODO/tmp: Fold over (last origInodes : newInodes), taking/dropping the
-           -- appropriate number of blocks from the new blocks list.  Result is new tail of
-           -- inode chain and remaining blocks to distribute, the latter which must be [].
-           -- 
-           -- Sketch:
-           -- 
-           -- addToLast  = min availLast blksToAlloc_remaining
-           -- lastInode' = lastInode { blockCount = blockCount lastInode + addtoLast
-           --                        , blocks     = blocks lastInode ++ take addToLast blks
-           --                        }
-           -- ... etc.
-         return (Right (error "correct inode chain tail construction NYI"))
-    --
+         -- trace ("allocated blks = " ++ show blks) $ do
+
+         -- Fixup continuation fields and form the region that we'll fill with
+         -- the newly allocated blocks (i.e., starting at the last inode but
+         -- including the just-allocated inodes as well).
+         let (_, region) = foldr (\inode (cont, acc) ->
+                                    ( Just $ address inode
+                                    , inode{ continuation = cont } : acc
+                                    )
+                                 )
+                                 (Nothing, [])
+                                 (last existingInodes : newInodes)
+         -- trace ("region = " ++ show region) $ do 
+
+         -- "Spill" the allocated blocks into the empty region
+         let (blks', k)                   = foldl fillBlks (blks, id) region
+             inodes'                      = init existingInodes ++ k []
+             fillBlks (remBlks, k') inode =
+               let cnt    = min (fromIntegral $ avail inode) (length remBlks)
+                   inode' =
+                     inode { blockCount = blockCount inode + fromIntegral cnt
+                           , blocks     = blocks inode ++ take cnt remBlks
+                           }
+               in (drop cnt remBlks, k' . (inode':))
+         assert (null blks') $ return (Right inodes')
+    -- 
     allocInodes n u g =
       if 0 == n
       then return $ Right []
@@ -413,8 +426,6 @@ writeStream dev bm startIR start trunc bytes = do
                      (\ir -> Just `fmap` buildEmptyInode dev ir nilInodeRef u g)
                    =<< (fmap . fmap) blockAddrToInodeRef (BM.alloc1 bm)
         maybe (return $ Left HalfsAllocFailed) (return . Right) minodes
-    --
-
 
 -- | Provides a stream over the bytes governed by a given Inode and its
 -- continuations.

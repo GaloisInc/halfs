@@ -144,17 +144,16 @@ fsck = undefined
 mkdir :: (HalfsCapable b t r l m) =>
          Halfs b r m l -> FilePath -> FileMode -> HalfsM m ()
 mkdir fs fp fm = do
-  usr       <- getUser
-  grp       <- getGroup
-  alloc1 (hsBlockMap fs) >>=
-    maybe (return $ Left HalfsAllocFailed)
-          (\dirAddr -> do
-             mdirAddr  <- alloc1 $ hsBlockMap fs
-             withAbsPathIR fs path Directory $ \parentIR -> do
-               trace ("mkdir: parentIR = " ++ show parentIR) $ do               
-               makeDirectory fs dirAddr parentIR dirName usr grp defaultDirPerms
-               >>= either (return . Left) (const $ chmod fs fp fm)
-          )
+  usr <- getUser
+  grp <- getGroup
+  alloc1 (hsBlockMap fs) >>= do
+  maybe (return $ Left HalfsAllocFailed)
+        (\dirAddr -> do
+           withAbsPathIR fs path Directory $ \parentIR -> do
+             trace ("mkdir: parentIR = " ++ show parentIR) $ do               
+             makeDirectory fs dirAddr parentIR dirName usr grp defaultDirPerms
+             >>= either (return . Left) (const $ chmod fs fp fm)
+        )
   where
     (path, dirName) = splitFileName fp
 

@@ -160,7 +160,13 @@ propM_dirConstructionOK _g dev = do
     assert $ dirState == Clean
     assert $ M.null contents
     
-  exec "mkdir in root directory" $ mkdir fs (rootPath </> "foo") perms
+  -- TEMP/XXX: beg hacky tests for fixed device geometry BDGeom 512 512
+  rdirIR <- rootDir `fmap` sreadRef (hsSuperBlock fs)
+  exec "tmp test" $ writeStream dev (hsBlockMap fs) rdirIR 0 True (BS.replicate (49*512+1) 0xFF)
+  -- TEMP/XXX: end hacky tests for fixed device geometry BDGeom 512 512
+
+  -- TODO: re-enable!
+  -- exec "mkdir in root directory" $ mkdir fs (rootPath </> "foo") perms
 
   where
     rootPath       = [pathSeparator]
