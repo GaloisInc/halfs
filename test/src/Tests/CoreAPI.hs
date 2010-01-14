@@ -6,6 +6,7 @@ module Tests.CoreAPI
 where
 
 import Control.Concurrent
+import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.Map as M
 import Data.Serialize
@@ -28,7 +29,7 @@ import Tests.Instances ()
 import Tests.Types
 import Tests.Utils
 
--- import Debug.Trace
+import Debug.Trace
 
 
 --------------------------------------------------------------------------------
@@ -147,9 +148,9 @@ propM_unmountMutexOK _g dev = do
 -- | Ensure that a new filesystem has the expected root directory intact
 -- and that various directory operations work as expected.
 propM_dirConstructionOK :: HalfsCapable b t r l m =>
-                        BDGeom
-                     -> BlockDevice m
-                     -> PropertyM m ()
+                           BDGeom
+                        -> BlockDevice m
+                        -> PropertyM m ()
 propM_dirConstructionOK _g dev = do
   fs <- run (newfs dev) >> mountOK dev
 
@@ -162,7 +163,20 @@ propM_dirConstructionOK _g dev = do
     
   -- TEMP/XXX: beg hacky tests for fixed device geometry BDGeom 512 512
   rdirIR <- rootDir `fmap` sreadRef (hsSuperBlock fs)
-  exec "tmp test" $ writeStream dev (hsBlockMap fs) rdirIR 0 True (BS.replicate (49*512+1) 0xFF)
+--  let testData = BS.replicate (49*512+2) 0x65
+  let testData = BS.replicate (49*512+1) 0x65
+  exec "tmp test write" $ writeStream dev (hsBlockMap fs) rdirIR 0 False testData
+  testData' <- BS.drop 511 `fmap` -- cull excess bytes from last block (because we read until end of stream)
+               exec "tmp test read"
+                 ((Right :: ByteString -> Either String ByteString)
+                  `fmap` readStream dev rdirIR 0 Nothing
+                 )
+  trace ("length testData = " ++ show (BS.length testData)) $ do
+  trace ("length testData' = " ++ show (BS.length testData')) $ do
+  trace ("first inode equality: " ++ show (BS.take 25088 testData == BS.take 25088 testData')) $ do
+  trace ("testData' = " ++ show testData') $ do
+  trace ("x = " ++ show (BS.length (BS.dropWhile (== 0x65) testData'))) $ do 
+  assert (testData == testData')
   -- TEMP/XXX: end hacky tests for fixed device geometry BDGeom 512 512
 
   -- TODO: re-enable!
