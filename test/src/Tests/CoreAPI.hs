@@ -162,20 +162,17 @@ propM_dirConstructionOK _g dev = do
     assert $ M.null contents
     
   -- TEMP/XXX: beg hacky tests for fixed device geometry BDGeom 512 512
+  let dsize = 49*512+1
+  let testData = BS.replicate dsize 0x65
   rdirIR <- rootDir `fmap` sreadRef (hsSuperBlock fs)
---  let testData = BS.replicate (49*512+2) 0x65
-  let testData = BS.replicate (49*512+1) 0x65
   exec "tmp test write" $ writeStream dev (hsBlockMap fs) rdirIR 0 False testData
-  testData' <- BS.drop 511 `fmap` -- cull excess bytes from last block (because we read until end of stream)
+  testData' <- BS.take dsize `fmap` -- ignore trailing bytes up to
+                                    -- block boundary, since we did
+                                    -- read-to-end
                exec "tmp test read"
                  ((Right :: ByteString -> Either String ByteString)
                   `fmap` readStream dev rdirIR 0 Nothing
                  )
-  trace ("length testData = " ++ show (BS.length testData)) $ do
-  trace ("length testData' = " ++ show (BS.length testData')) $ do
-  trace ("first inode equality: " ++ show (BS.take 25088 testData == BS.take 25088 testData')) $ do
---  trace ("testData' = " ++ show testData') $ do
-  trace ("x = " ++ show (BS.length (BS.dropWhile (== 0x65) testData'))) $ do 
   assert (testData == testData')
   -- TEMP/XXX: end hacky tests for fixed device geometry BDGeom 512 512
 
