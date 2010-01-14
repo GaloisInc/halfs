@@ -35,7 +35,7 @@ import Halfs.Protection
 import Halfs.Utils
 import System.Device.BlockDevice
 
-import Debug.Trace
+-- import Debug.Trace
 
 
 --------------------------------------------------------------------------------
@@ -281,7 +281,6 @@ writeInodeBlock dev n i bytes =
 writeInode :: (Ord t, Serialize t, Monad m, Show t) =>
               BlockDevice m -> Inode t -> m ()
 writeInode dev n =
-  trace ("Writing inode: " ++ show n) $ do
   bdWriteBlock dev (inodeRefToBlockAddr $ address n) (encode n)
 
 -- | Expands the given inode into an inode list containing itself followed by
@@ -309,7 +308,6 @@ writeStream :: HalfsCapable b t r l m =>
             -> m (Either HalfsError ())
 writeStream dev bm startIR start trunc bytes = do
   let len = fromIntegral $ BS.length bytes
-  trace ("writeStream: len = " ++ show len) $ do
   if 0 == len then return $ Right () else do 
   startInode <- drefInode dev startIR
 
@@ -324,15 +322,10 @@ writeStream dev bm startIR start trunc bytes = do
   (sInodeIdx, sBlkOff, sByteOff) <- decompParanoid dev bs bpi start startInode
     -- ^^^ XXX: Replace w/ decompStreamOffset once inode growth etc. is working
 
-  trace ("sInodeIdx, sBlkOff, sByteOff = " ++ show (sInodeIdx, sBlkOff, sByteOff)) $ do
-
   -- NB: expandConts is probably not viable once inode chains get large, but
   -- neither is the continuation scheme in general.  Revisit after stuff is
   -- working.
   origInodes <- expandConts dev startInode
-
-  trace ("origInodes = " ++ show origInodes) $ do
-  trace ("addrs per inode = " ++ show api) $ do
 
   -- Determine if we need to allocate space for the data
 
@@ -358,12 +351,7 @@ writeStream dev bm startIR start trunc bytes = do
         allocdInConts = sum $ map ((*bs) . blockCount) $
                          drop (fromIntegral $ sInodeIdx + 1) origInodes
       in
-        trace ("allocdInBlk   = " ++ show allocdInBlk)   $ 
-        trace ("allocdInNode  = " ++ show allocdInNode)  $ 
-        trace ("allocdInConts = " ++ show allocdInConts) $ 
         allocdInBlk + allocdInNode + allocdInConts
-
-  trace ("alreadyAllocd = " ++ show alreadyAllocd) $ do
 
   let availBlocks :: forall t. (Ord t, Serialize t) => Inode t -> Word64
       availBlocks n = api - blockCount n
@@ -374,15 +362,9 @@ writeStream dev bm startIR start trunc bytes = do
                       `divCeil` api
       (usr, grp)    = (user startInode, group startInode)
 
-  trace ("bytesToAlloc           = " ++ show bytesToAlloc)             $ do
-  trace ("blksToAlloc            = " ++ show blksToAlloc)              $ do
-  trace ("inodesToAlloc          = " ++ show inodesToAlloc)            $ do
-  trace ("availBlocks startInode = " ++ show (availBlocks startInode)) $ do
-
   whenOK (allocAndFill availBlocks blksToAlloc inodesToAlloc
                        usr grp origInodes
          ) $ \inodes -> do 
-  trace ("inodes = " ++ show inodes) $ do
   
   -- Write the start block, preserving the region before the start byte offset
   let stInode         = inodes !! fromIntegral sInodeIdx
@@ -390,7 +372,6 @@ writeStream dev bm startIR start trunc bytes = do
   preserve <- BS.take (fromIntegral sByteOff)
               `fmap` readInodeBlock dev stInode sBlkOff
   writeInodeBlock dev stInode sBlkOff (preserve `BS.append` sData)
-  trace ("Wrote start block @ addr " ++ show (blocks stInode !! fromIntegral sBlkOff)) $ do
 
   let
     -- Destination block addresses after the start block
@@ -415,10 +396,6 @@ writeStream dev bm startIR start trunc bytes = do
               )
               bytes'
   assert (all ((== fromIntegral bs) . BS.length) chunks) $ do
-  trace ("chunks = " ++ show chunks) $ do
-  trace ("blkAddrs = " ++ show blkAddrs) $ do                                               
-  trace ("len blkAddrs = " ++ show (length blkAddrs)) $ do    
-  trace ("len chunks = " ++ show (length chunks)) $ do
   -- Write the remaining blocks
   mapM_ (uncurry $ bdWriteBlock dev) (blkAddrs `zip` chunks)
                
@@ -426,7 +403,6 @@ writeStream dev bm startIR start trunc bytes = do
   mapM_ (writeInode dev) $
     let inodesUpdated = fromIntegral $ len `divCeil` bpi
     in
-      trace ("inodesUpdated = " ++ show inodesUpdated) $ 
       take inodesUpdated $ drop (fromIntegral sInodeIdx) inodes
 
   when trunc $ do fail "Inode.writeStream: truncating write NYI" -- TODO
@@ -450,8 +426,6 @@ writeStream dev bm startIR start trunc bytes = do
        else do
          whenOK (allocInodes inodesToAlloc usr grp) $ \newInodes -> do
          whenOK (allocBlocks blksToAlloc)           $ \blks      -> do
-         -- trace ("newInodes = " ++ show newInodes) $ do              
-         -- trace ("allocated blks = " ++ show blks) $ do
 
          -- Fixup continuation fields and form the region that we'll fill with
          -- the newly allocated blocks (i.e., starting at the last inode but
@@ -512,8 +486,6 @@ readStream dev startIR start mlen = do
     -- ^^^ XXX: Replace w/ decompStreamOffset once inode growth etc. is working
   inodes <- expandConts dev startInode
 
-  trace ("readStream: inodes = " ++ show inodes) $ do
-
   case mlen of
     Nothing  -> case drop (fromIntegral sInodeIdx) inodes of
       [] -> fail "Inode.readStream internal error: invalid start inode index"
@@ -527,8 +499,6 @@ readStream dev startIR start mlen = do
           return $ BS.drop (fromIntegral sByteOff) blk
                    `BS.append` BS.concat blks
 
-        trace ("readStream: length header = " ++ show (BS.length header)) $ do
-
         -- 'fullBlocks' is the remaining content from all remaining inodes
         fullBlocks <- foldM
           (\acc inode' -> do
@@ -536,8 +506,6 @@ readStream dev startIR start mlen = do
              return $ BS.concat blks `BS.append` acc
           )
           BS.empty rest
-        trace ("readStream: length fullBlocks = " ++ show (BS.length fullBlocks)) $ do
-
         return $ header `BS.append` fullBlocks
 
     Just len -> do

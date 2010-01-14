@@ -174,7 +174,7 @@ propM_dirConstructionOK _g dev = do
   trace ("length testData = " ++ show (BS.length testData)) $ do
   trace ("length testData' = " ++ show (BS.length testData')) $ do
   trace ("first inode equality: " ++ show (BS.take 25088 testData == BS.take 25088 testData')) $ do
-  trace ("testData' = " ++ show testData') $ do
+--  trace ("testData' = " ++ show testData') $ do
   trace ("x = " ++ show (BS.length (BS.dropWhile (== 0x65) testData'))) $ do 
   assert (testData == testData')
   -- TEMP/XXX: end hacky tests for fixed device geometry BDGeom 512 512
