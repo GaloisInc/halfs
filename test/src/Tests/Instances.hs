@@ -192,7 +192,7 @@ instance (Arbitrary a, Ord a, Serialize a) => Arbitrary (Inode a) where
       <*> GID `fmap` arbitrary                       -- group
       <*> return addrCnt                             -- numAddrs
       <*> return (fromIntegral numBlocks)            -- blockCount
-      <*> replicateM numBlocks (IR `fmap` arbitrary) -- blocks
+      <*> replicateM numBlocks arbitrary             -- blocks
                                              
 -- Generate an arbitrary directory entry
 instance Arbitrary DirectoryEntry where

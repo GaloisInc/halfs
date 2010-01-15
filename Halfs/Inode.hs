@@ -102,7 +102,8 @@ data (Eq t, Ord t, Serialize t) => Inode t = Inode {
   , blockCount    :: Word64          -- ^ current number of active blocks (equal
                                      -- to the number of (sequential) inode
                                      -- references held in the blocks list)
-  , blocks        :: [InodeRef]
+
+  , blocks        :: [Word64]
   }
   deriving (Show, Eq)
 
@@ -155,7 +156,7 @@ instance (Eq t, Ord t, Serialize t) => Serialize (Inode t) where
                fail "Incorrect number of bytes left for block list."
              unless (numBlocks >= minimumNumberOfBlocks) $
                fail "Not enough space left for minimum number of blocks."
-             blks <- filter (/= nilInodeRef) `fmap` replicateM numBlocks get
+             blks <- filter (/= 0) `fmap` replicateM numBlocks get
              checkMagic magic4
              return $ Inode addr par cont ctm mtm u grp na lsb blks
    where
@@ -181,7 +182,7 @@ minimalInodeSize t = do
               rootUser
               rootGroup
     in
-      e{ blocks = replicate minimumNumberOfBlocks nilInodeRef }
+      e{ blocks = replicate minimumNumberOfBlocks 0 }
 
 -- | Computes the number of block addresses storable by an inode
 computeNumAddrs :: Monad m => 
@@ -258,26 +259,19 @@ emptyInode nAddrs createTm modTm me mommy usr grp =
 --------------------------------------------------------------------------------
 -- Inode utility functions
 
-assertValidIR :: InodeRef -> InodeRef
-assertValidIR ir = assert (ir /= nilInodeRef) ir
-
 -- | Reads the contents of the given inode's ith block
 readInodeBlock :: (Ord t, Serialize t, Monad m) =>
                   BlockDevice m -> Inode t -> Word64 -> m ByteString
-readInodeBlock dev n i =
-  assert (i < blockCount n) $ do
-  let addr = inodeRefToBlockAddr $ assertValidIR (blocks n !! fromIntegral i)
-  t <- bdReadBlock dev addr
---  trace ("\nReading inode @ block addr " ++ show addr ++ ": " ++ show t) $ do
-  return t
+readInodeBlock dev n i = do 
+  assert (i < blockCount n) $ return ()
+  bdReadBlock dev (blocks n !! fromIntegral i)
 
 -- | Writes to the given inode's ith block
 writeInodeBlock :: (Ord t, Serialize t, Monad m) =>
                    BlockDevice m -> Inode t -> Word64 -> ByteString -> m ()
-writeInodeBlock dev n i bytes =
-  assert (BS.length bytes == fromIntegral (bdBlockSize dev)) $ do
-  let addr = inodeRefToBlockAddr $ assertValidIR (blocks n !! fromIntegral i)
-  bdWriteBlock dev addr bytes
+writeInodeBlock dev n i bytes = do 
+  assert (BS.length bytes == fromIntegral (bdBlockSize dev)) $ return ()
+  bdWriteBlock dev (blocks n !! fromIntegral i) bytes
 
 -- Writes the given inode to its block address
 writeInode :: (Ord t, Serialize t, Monad m, Show t) =>
@@ -398,8 +392,7 @@ writeStream dev bm startIR start trunc bytes = do
 
   let
     -- Destination block addresses after the start block
-    blkAddrs = map inodeRefToBlockAddr $
-               drop (fromIntegral $ sBlkOff + 1) (blocks stInode)
+    blkAddrs = drop (fromIntegral $ sBlkOff + 1) (blocks stInode)
                ++ concatMap blocks (drop (fromIntegral $ sInodeIdx + 1) inodes)
     -- Block-sized chunks
     chunks =
@@ -443,7 +436,7 @@ writeStream dev bm startIR start trunc bytes = do
       mbg <- BM.allocBlocks bm n
       case mbg of
         Nothing -> return $ Left HalfsAllocFailed
-        Just bg -> return $ Right $ map blockAddrToInodeRef $ BM.blkRangeBG bg
+        Just bg -> return $ Right $ BM.blkRangeBG bg
     -- 
     -- Allocate the given number of blocks, and fill them into the inodes' block
     -- lists, allocating new inodes as needed.  The result is the final inode
