@@ -56,12 +56,13 @@ newfs dev = do
 
   blockMap <- newBlockMap dev
   numFree  <- readRef (bmNumFree blockMap)
-  rdirAddr <- maybe (fail "Unable to allocate block for rdir inode") return
-              =<< alloc1 blockMap
+  rdirAddr <- alloc1 blockMap >>=
+              maybe (fail "Unable to allocate block for rdir inode") return
 
   -- Build the root directory inode and persist it; note that we do not use
   -- Directory.makeDirectory here because this is a special case where we have
   -- no parent directory.
+
   let rdirInode = blockAddrToInodeRef rdirAddr
   dirInode <- buildEmptyInodeEnc dev rdirInode nilInodeRef rootUser rootGroup
   assert (BS.length dirInode == fromIntegral (bdBlockSize dev)) $ do
@@ -88,44 +89,43 @@ newfs dev = do
 -- completes, the superblock will have its unmountClean flag set to False.
 mount :: (HalfsCapable b t r l m) =>
          BlockDevice m -> HalfsM m (Halfs b r m l)
-mount dev = 
-  decode `fmap` bdReadBlock dev 0 >>=
-  either
-    (return . Left . HalfsMountFailed . BadSuperBlock)
-    (\sb -> do
-       if unmountClean sb
-        then do
-          sb' <- writeSB dev sb{ unmountClean = False }
-          Right `fmap`
-            (HalfsState dev
-             `fmap` readBlockMap dev       
-             `ap`   newRef sb'
-             `ap`   newLock
-            )
-        else do 
-          return $ Left $ HalfsMountFailed DirtyUnmount
-    )
+mount dev = do
+  esb <- decode `fmap` bdReadBlock dev 0
+  case esb of
+    Left msg -> return $ Left $ HalfsMountFailed $ BadSuperBlock msg
+    Right sb -> do
+      if unmountClean sb
+       then do
+         sb' <- writeSB dev sb{ unmountClean = False }
+         Right `fmap`
+           (HalfsState dev
+            `fmap` readBlockMap dev       
+            `ap`   newRef sb'
+            `ap`   newLock
+           )
+       else do 
+         return $ Left $ HalfsMountFailed DirtyUnmount
 
 -- | Unmounts the given filesystem.  After this operation completes, the
 -- superblock will have its unmountClean flag set to True.
 unmount :: (HalfsCapable b t r l m) =>
            Halfs b r m l -> HalfsM m ()
-unmount fs@HalfsState{hsBlockDev = dev, hsSuperBlock = sbRef} = do
+unmount fs@HalfsState{hsBlockDev = dev, hsSuperBlock = sbRef} = 
   locked fs $ do
-    sb <- readRef sbRef
-    if (unmountClean sb)
-     then do
-       return $ Left HalfsUnmountFailed
-     else do
-       -- TODO:
-       -- * Persist any dirty data structures (dirents, files w/ buffered IO, etc)
-       bdFlush dev
-     
-       -- Finalize the superblock
-       let sb' = sb{ unmountClean = True }
-       writeRef sbRef sb'
-       writeSB dev sb'
-       return $ Right $ ()
+  sb <- readRef sbRef
+  if (unmountClean sb)
+   then do
+     return $ Left HalfsUnmountFailed
+   else do
+     -- TODO:
+     -- * Persist any dirty data structures (dirents, files w/ buffered IO, etc)
+     bdFlush dev
+   
+     -- Finalize the superblock
+     let sb' = sb{ unmountClean = True }
+     writeRef sbRef sb'
+     writeSB dev sb'
+     return $ Right $ ()
   
 fsck :: Int
 fsck = undefined
@@ -144,16 +144,18 @@ fsck = undefined
 mkdir :: (HalfsCapable b t r l m) =>
          Halfs b r m l -> FilePath -> FileMode -> HalfsM m ()
 mkdir fs fp fm = do
-  usr <- getUser
-  grp <- getGroup
-  alloc1 (hsBlockMap fs) >>= do
-  maybe (return $ Left HalfsAllocFailed)
-        (\dirAddr -> do
-           withAbsPathIR fs path Directory $ \parentIR -> do
-             trace ("mkdir: parentIR = " ++ show parentIR) $ do               
-             makeDirectory fs dirAddr parentIR dirName usr grp defaultDirPerms
-             >>= either (return . Left) (const $ chmod fs fp fm)
-        )
+  u        <- getUser
+  g        <- getGroup
+  mdirAddr <- alloc1 (hsBlockMap fs)
+  case mdirAddr of
+    Nothing      -> return $ Left HalfsAllocFailed
+    Just dirAddr -> do
+      withAbsPathIR fs path Directory $ \parentIR -> do
+      trace ("mkdir: parentIR = " ++ show parentIR) $ do               
+      e <- makeDirectory fs dirAddr parentIR dirName u g defaultDirPerms
+      case e of
+        Left e'-> return $ Left e'
+        _      -> chmod fs fp fm
   where
     (path, dirName) = splitFileName fp
 
@@ -164,8 +166,8 @@ rmdir = undefined
 openDir :: (HalfsCapable b t r l m) =>
            Halfs b r m l -> FilePath -> HalfsM m (DirHandle r)
 openDir fs fp =
-  withAbsPathIR fs fp Directory $ \dirIR ->
-    Right `fmap` openDirectory (hsBlockDev fs) dirIR
+  withAbsPathIR fs fp Directory $ \dirIR -> do
+  Right `fmap` openDirectory (hsBlockDev fs) dirIR
 
 closeDir :: (HalfsCapable b t r l m) =>
             Halfs b r m l -> DirHandle r -> HalfsM m ()
@@ -203,8 +205,8 @@ openFile :: (HalfsCapable b t r l m) =>
          -> Bool          -- ^ Should we create the file if it is not found?
          -> HalfsM m FileHandle 
 openFile fs fp creat = do
-  whenOK (openDir fs path) $ \dh -> 
-    findInDir dh fname RegularFile >>= maybe noFile foundFile
+  whenOK (openDir fs path) $ \dh -> do
+  findInDir dh fname RegularFile >>= maybe noFile foundFile
   where
     whenOK act f  = act >>= either (return . Left) f
     (path, fname) = splitFileName fp
@@ -325,19 +327,23 @@ withAbsPathIR fs fp ftype f = do
   if isAbsolute fp
    then do
      rdirIR <- rootDir `fmap` readRef (hsSuperBlock fs)
-     find (hsBlockDev fs) rdirIR ftype (drop 1 $ splitDirectories fp) >>= 
-       maybe (return $ Left $ HalfsPathComponentNotFound fp) f
+     mir    <- find (hsBlockDev fs) rdirIR ftype
+                 (drop 1 $ splitDirectories fp)
+     case mir of
+       Nothing -> return $ Left $ HalfsPathComponentNotFound fp
+       Just ir -> f ir
    else do
      return $ Left $ HalfsAbsolutePathExpected
 
 writeSB :: (HalfsCapable b t r l m) =>
            BlockDevice m -> SuperBlock -> m SuperBlock
-writeSB dev sb =
-  let sbdata = encode sb in 
-  assert (BS.length sbdata <= fromIntegral (bdBlockSize dev)) $ do
-    bdWriteBlock dev 0 sbdata
-    bdFlush dev
-    return sb
+writeSB dev sb = do 
+  assert (BS.length sbdata <= fromIntegral (bdBlockSize dev)) $ return ()
+  bdWriteBlock dev 0 sbdata
+  bdFlush dev
+  return sb
+  where
+    sbdata = encode sb
 
 locked :: (HalfsCapable b t r l m) =>
           Halfs b r m l -> HalfsM m a -> HalfsM m a

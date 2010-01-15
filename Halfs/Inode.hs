@@ -271,7 +271,6 @@ readInodeBlock dev n i =
 --  trace ("\nReading inode @ block addr " ++ show addr ++ ": " ++ show t) $ do
   return t
 
-
 -- | Writes to the given inode's ith block
 writeInodeBlock :: (Ord t, Serialize t, Monad m) =>
                    BlockDevice m -> Inode t -> Word64 -> ByteString -> m ()
@@ -368,25 +367,27 @@ writeStream dev bm startIR start trunc bytes = do
 
   trace ("alreadyAllocd = " ++ show alreadyAllocd) $ do
 
-  let availBlocks :: forall t. (Ord t, Serialize t) => Inode t -> Word64
-      availBlocks n = api - blockCount n
+  let availBlks :: forall t. (Ord t, Serialize t) => Inode t -> Word64
+      availBlks n = api - blockCount n
       bytesToAlloc  = if alreadyAllocd > len then 0 else len - alreadyAllocd
       blksToAlloc   = bytesToAlloc `divCeil` bs
       inodesToAlloc = fromIntegral $
-                      (blksToAlloc - availBlocks (last origInodes))
+                      (blksToAlloc - availBlks (last origInodes))
                       `divCeil` api
-      (usr, grp)    = (user startInode, group startInode)
+      (u, g)        = (user startInode, group startInode)
 
   trace ("bytesToAlloc           = " ++ show bytesToAlloc)             $ do
   trace ("blksToAlloc            = " ++ show blksToAlloc)              $ do
   trace ("inodesToAlloc          = " ++ show inodesToAlloc)            $ do
-  trace ("availBlocks startInode = " ++ show (availBlocks startInode)) $ do
+  trace ("availBlks startInode = " ++ show (availBlks startInode)) $ do
 
-  whenOK (allocAndFill availBlocks blksToAlloc inodesToAlloc
-                       usr grp origInodes
-         ) $ \inodes -> do 
+  let doAllocs = allocAndFill availBlks blksToAlloc inodesToAlloc u g origInodes
+  whenOK doAllocs $ \inodes -> do 
   trace ("inodes = " ++ show inodes) $ do
   
+  -- TODO: create the first chunk and roll it in with chunks down below;
+  -- same for blkAddr
+
   -- Write the start block, preserving the region before the start byte offset
   let stInode         = inodes !! fromIntegral sInodeIdx
       (sData, bytes') = BS.splitAt (fromIntegral $ bs - sByteOff) bytes 
@@ -438,10 +439,11 @@ writeStream dev bm startIR start trunc bytes = do
     whenOK act f      = act >>= either (return . Left) f
     bs                = bdBlockSize dev
     -- 
-    allocBlocks n = -- currently "flattens" BlockGroup; see above comment
-      BM.allocBlocks bm n >>=
-      maybe (return $ Left HalfsAllocFailed)
-            (return . Right . map blockAddrToInodeRef . BM.blkRangeBG)
+    allocBlocks n = do -- currently "flattens" BlockGroup; see above comment
+      mbg <- BM.allocBlocks bm n
+      case mbg of
+        Nothing -> return $ Left HalfsAllocFailed
+        Just bg -> return $ Right $ map blockAddrToInodeRef $ BM.blkRangeBG bg
     -- 
     -- Allocate the given number of blocks, and fill them into the inodes' block
     -- lists, allocating new inodes as needed.  The result is the final inode
@@ -477,18 +479,21 @@ writeStream dev bm startIR start trunc bytes = do
                            }
                in
                  (drop cnt remBlks, k' . (inode':))
-         assert (null blks' && length inodes' >= length existingInodes) $ do 
+
+         assert (null blks') $ return ()
+         assert (length inodes' >= length existingInodes) $ return ()
          return (Right inodes')
     -- 
     allocInodes n u g =
       if 0 == n
       then return $ Right []
       else do
-        minodes <- fmap sequence $ replicateM n $ 
-                   maybe
-                     (return Nothing)
-                     (\ir -> Just `fmap` buildEmptyInode dev ir nilInodeRef u g)
-                   =<< (fmap . fmap) blockAddrToInodeRef (BM.alloc1 bm)
+        minodes <- fmap sequence $ replicateM n $ do
+                     mir <- (fmap . fmap) blockAddrToInodeRef (BM.alloc1 bm)
+                     case mir of
+                       Nothing -> return Nothing
+                       Just ir -> Just
+                                  `fmap` buildEmptyInode dev ir nilInodeRef u g
         maybe (return $ Left HalfsAllocFailed) (return . Right) minodes
 
 -- | Provides a stream over the bytes governed by a given Inode and its

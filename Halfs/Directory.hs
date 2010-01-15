@@ -112,41 +112,39 @@ makeDirectory :: HalfsCapable b t r l m =>
               -> FileMode 
               -> HalfsM m InodeRef
 makeDirectory fs addr parentIR dname user group perms = do
-  -- Build the directory inode and persist it
-  bstr <- buildEmptyInodeEnc dev thisIR parentIR user group
-  assert (BS.length bstr == fromIntegral (bdBlockSize dev)) $ do 
-  bdWriteBlock dev addr bstr
-
-  -- Add the new directory 'dname' to the parent diretory's contents
   -- TODO: Locking
-
   dh       <- openDirectory dev parentIR
   contents <- readRef (dhContents dh)
   if M.member dname contents
-   then return $ Left HalfsDirectoryExists
+   then do return $ Left HalfsDirectoryExists
    else do 
-  let newDE = DirEnt dname thisIR user group perms Directory
-  writeRef (dhContents dh) $ M.insert dname newDE contents
-  modifyRef (dhState dh) dirStTransAdd
-
-  -- NB/TODO: We write this back to disk immediately for now (via the explicit
-  -- syncDir' invocation below), but presumably modifications to the directory
-  -- state should be sufficient and syncing ought to happen elsewhere.
-
-  syncDirectory fs dh
-  return $ Right thisIR
+     -- Build the directory inode and persist it
+     bstr <- buildEmptyInodeEnc dev thisIR parentIR user group
+     assert (BS.length bstr == fromIntegral (bdBlockSize dev)) $ do 
+     bdWriteBlock dev addr bstr
+   
+     -- Add the new directory 'dname' to the parent dir's contents
+     let newDE = DirEnt dname thisIR user group perms Directory
+     writeRef (dhContents dh) $ M.insert dname newDE contents
+     modifyRef (dhState dh) dirStTransAdd
+   
+     -- NB/TODO: We write this back to disk immediately for now (via the
+     -- explicit syncDir' invocation below), but presumably modifications to the
+     -- directory state should be sufficient and syncing ought to happen
+     -- elsewhere.
+     syncDirectory fs dh
+     return $ Right thisIR
   where
     thisIR = blockAddrToInodeRef addr
     dev    = hsBlockDev fs
 
 -- | Syncs contents referred to by a directory handle to the disk
 
--- NB: This should probably be modified to use the DirHandle cache when it
--- exists, in which case this function may not take an explicit DirHandle to
--- sync.  Expected behavior in that scenario would be to sync all non-Clean
--- DirHandles.  Alternately, this might stay the same as a primitive op for
--- CoreAPI.syncDir, which might manage the set of DirHandles that need to be
--- sync'd...
+-- NB: This should be modified to use the DirHandle cache when it exists, in
+-- which case this function may not take an explicit DirHandle to sync.
+-- Expected behavior in that scenario would be to sync all non-Clean DirHandles.
+-- Alternately, this might stay the same as a primitive op for CoreAPI.syncDir,
+-- which might manage the set of DirHandles that need to be sync'd...
 syncDirectory :: HalfsCapable b t r l m =>
                  Halfs b r m l -> DirHandle r -> HalfsM m ()
 syncDirectory fs dh = do 
@@ -158,13 +156,13 @@ syncDirectory fs dh = do
       toWrite <- (encode . M.elems) `fmap` readRef (dhContents dh)
       trace ("syncDirectory: toWrite length = " ++ show (BS.length toWrite)
              ++ ", toWrite = " ++ show toWrite) $ do
-      -- Overwrite the entire DirectoryEntry list, truncating the directory's
-      -- inode data stream
+      -- Currently, we overwrite the entire DirectoryEntry list, truncating the
+      -- directory's inode data stream -- this is braindead, though, as we
+      -- should be able to simply append to the end of the list.
       writeStream (hsBlockDev fs) (hsBlockMap fs) (dhInode dh) 0 True toWrite
       return $ Right ()
-
-    OnlyDeleted -> fail "syncDirectory for OnlyDeleted DirHandle states NYI"
-    VeryDirty   -> fail "syncDirectory for VeryDirty DirHandle states NYI"
+    OnlyDeleted -> fail "syncDirectory for OnlyDeleted DirHandle state NYI"
+    VeryDirty   -> fail "syncDirectory for VeryDirty DirHandle state NYI"
 
   return $ Right () 
 
@@ -180,20 +178,25 @@ openDirectory dev inr = do
   -- TODO: May want to allocate a block for empty directories and serialize an
   -- empty list so that this null size checking does not need to occur, nor the
   -- special case in readStream.
+
+  -- TODO: revisit this function
+
   rawDirBytes <- readStream dev inr 0 Nothing
   dirEnts     <- if BS.null rawDirBytes
-                 then return []
-                 else decode `fmap` readStream dev inr 0 Nothing >>=
-                      either (fail . (++) "Failed to decode [DirectoryEntry]: ")
-                             (return)
+                 then do return []
+                 else do
+                   edents <- decode `fmap` readStream dev inr 0 Nothing
+                   case edents of
+                     Left msg -> fail $ "Failed to decode [DireectoryEntry]: "
+                                      ++ msg
+                     Right x  -> return x
   trace ("dirEnts = " ++ show (dirEnts :: [DirectoryEntry])) $ do
 
-  -- HERE: Next: Add a single directory to the root level
-
-  -- TODO: DirHandle cache?  In HalfsState, perhaps?
+  -- TODO: Implement a DirHandle cache; creating new references here each time
+  -- will break locking.
   DirHandle inr `fmap` newRef contents `ap` newRef Clean
   where
-    contents = M.empty -- FIXME: 
+    contents = M.empty -- FIXME
 
 -- | Finds a directory, file, or symlink given a starting inode reference (i.e.,
 -- the directory inode at which to begin the search) and a list of path
@@ -213,23 +216,23 @@ find _ startINR _ [] =
 --
 find dev startINR ftype (pathComp:rest) = do
   trace ("Directory.find recursive case, locating: " ++ show pathComp) $ do
-  dh <- openDirectory dev startINR
-  findInDir' dh pathComp ftype >>=
-    maybe
-      (return Nothing)
-      (\de -> find dev (deInode de) ftype rest)
+  dh  <- openDirectory dev startINR
+  mde <- findInDir' dh pathComp ftype
+  case mde of
+    Nothing -> return Nothing
+    Just de -> find dev (deInode de) ftype rest
 
--- | Locate the given typed file by filename in the dirhandle's content map
+-- | Locate the given typed file by filename in the DirHandle's content map
 findInDir' :: HalfsCapable b t r l m =>
-             DirHandle r
-          -> String
-          -> FileType
-          -> m (Maybe DirectoryEntry)
-findInDir' dh fname ftype =
-  liftM (M.lookup fname) (readRef $ dhContents dh) >>= 
-    maybe
-      (return Nothing)
-      (\de -> return $ if de `isFileType` ftype then Just de else Nothing)
+              DirHandle r
+           -> String
+           -> FileType
+           -> m (Maybe DirectoryEntry)
+findInDir' dh fname ftype = do
+  mde <- liftM (M.lookup fname) (readRef $ dhContents dh)
+  case mde of
+    Nothing -> return Nothing
+    Just de -> return $ if de `isFileType` ftype then Just de else Nothing
 
 -- Exportable version of findInDir; doesn't expose DirectoryEntry to caller
 findInDir :: HalfsCapable b t r l m =>
@@ -251,9 +254,9 @@ showDH :: Reffable r m => DirHandle r -> m String
 showDH dh = do
   state    <- readRef $ dhState dh
   contents <- readRef $ dhContents dh
-  return $ "DirHandle { dhInode = " ++ show (dhInode dh)
+  return $ "DirHandle { dhInode    = " ++ show (dhInode dh)
                   ++ ", dhContents = " ++ show contents
-                  ++ ", dhState = " ++ show state
+                  ++ ", dhState    = " ++ show state
 
 dirStTransAdd :: DirectoryState -> DirectoryState
 dirStTransAdd Clean     = OnlyAdded
