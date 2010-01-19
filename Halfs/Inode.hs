@@ -21,7 +21,7 @@ import Control.Monad
 import Data.ByteString(ByteString)
 import qualified Data.ByteString as BS
 import Data.Char
-import Data.List (unfoldr)
+import Data.List (genericDrop, genericTake, unfoldr)
 import Data.Serialize 
 import Data.Serialize.Get
 import Data.Serialize.Put
@@ -259,6 +259,12 @@ emptyInode nAddrs createTm modTm me mommy usr grp =
 --------------------------------------------------------------------------------
 -- Inode utility functions
 
+takeW64 :: Word64 -> [a] -> [a]
+takeW64 = genericTake
+
+dropW64 :: Word64 -> [a] -> [a]
+dropW64 = genericDrop
+
 -- | Reads the contents of the given inode's ith block
 readInodeBlock :: (Ord t, Serialize t, Monad m) =>
                   BlockDevice m -> Inode t -> Word64 -> m ByteString
@@ -305,7 +311,6 @@ writeStream :: HalfsCapable b t r l m =>
             -> m (Either HalfsError ())
 writeStream dev bm startIR start trunc bytes = do
   let len = fromIntegral $ BS.length bytes
-  trace ("writeStream: len = " ++ show len) $ do
   if 0 == len then return $ Right () else do 
   startInode <- drefInode dev startIR
 
@@ -352,7 +357,7 @@ writeStream dev bm startIR start trunc bytes = do
                         else 0
         -- # of already-alloc'd bytes in the rest of the existing inodes
         allocdInConts = sum $ map ((*bs) . blockCount) $
-                         drop (fromIntegral $ sInodeIdx + 1) origInodes
+                        dropW64 (sInodeIdx + 1) origInodes
       in
         trace ("allocdInBlk   = " ++ show allocdInBlk)   $ 
         trace ("allocdInNode  = " ++ show allocdInNode)  $ 
@@ -362,7 +367,7 @@ writeStream dev bm startIR start trunc bytes = do
   trace ("alreadyAllocd = " ++ show alreadyAllocd) $ do
 
   let availBlks :: forall t. (Ord t, Serialize t) => Inode t -> Word64
-      availBlks n = api - blockCount n
+      availBlks n   = api - blockCount n
       bytesToAlloc  = if alreadyAllocd > len then 0 else len - alreadyAllocd
       blksToAlloc   = bytesToAlloc `divCeil` bs
       inodesToAlloc = fromIntegral $
@@ -370,9 +375,9 @@ writeStream dev bm startIR start trunc bytes = do
                       `divCeil` api
       (u, g)        = (user startInode, group startInode)
 
-  trace ("bytesToAlloc           = " ++ show bytesToAlloc)             $ do
-  trace ("blksToAlloc            = " ++ show blksToAlloc)              $ do
-  trace ("inodesToAlloc          = " ++ show inodesToAlloc)            $ do
+  trace ("bytesToAlloc         = " ++ show bytesToAlloc)           $ do
+  trace ("blksToAlloc          = " ++ show blksToAlloc)            $ do
+  trace ("inodesToAlloc        = " ++ show inodesToAlloc)          $ do
   trace ("availBlks startInode = " ++ show (availBlks startInode)) $ do
 
   let doAllocs = allocAndFill availBlks blksToAlloc inodesToAlloc u g origInodes
@@ -392,8 +397,8 @@ writeStream dev bm startIR start trunc bytes = do
 
   let
     -- Destination block addresses after the start block
-    blkAddrs = drop (fromIntegral $ sBlkOff + 1) (blocks stInode)
-               ++ concatMap blocks (drop (fromIntegral $ sInodeIdx + 1) inodes)
+    blkAddrs = dropW64 (sBlkOff + 1) (blocks stInode)
+               ++ concatMap blocks (dropW64 (sInodeIdx + 1) inodes)
     -- Block-sized chunks
     chunks =
       unfoldr (\s -> if BS.null s
@@ -421,10 +426,10 @@ writeStream dev bm startIR start trunc bytes = do
                
   -- Update persisted inodes from the start inode to end of write region
   mapM_ (writeInode dev) $
-    let inodesUpdated = fromIntegral $ len `divCeil` bpi
+    let inodesUpdated = len `divCeil` bpi
     in
       trace ("inodesUpdated = " ++ show inodesUpdated) $ 
-      take inodesUpdated $ drop (fromIntegral sInodeIdx) inodes
+      takeW64 inodesUpdated $ dropW64 sInodeIdx inodes
 
   when trunc $ do fail "Inode.writeStream: truncating write NYI" -- TODO
   return $ Right ()
