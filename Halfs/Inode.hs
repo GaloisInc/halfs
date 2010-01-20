@@ -65,7 +65,7 @@ inodeRefToBlockAddr :: InodeRef -> Word64
 inodeRefToBlockAddr (IR x) = x
 
 -- The size of an Inode reference in bytes
-inodeRefSize :: Int
+inodeRefSize :: Word64
 inodeRefSize = 8
 
 -- The nil Inode reference.  With the current Word64 representation and the
@@ -83,7 +83,7 @@ nilInodeRef = IR 0
 -- bytes (in the IO monad variant, which uses the our Serialize instance for the
 -- UTCTime when writing the createTime and modifyTime fields).
 --
-minimumNumberOfBlocks :: Int
+minimumNumberOfBlocks :: Word64
 minimumNumberOfBlocks = 49
 
 data (Eq t, Ord t, Serialize t) => Inode t = Inode {
@@ -124,7 +124,7 @@ instance (Eq t, Ord t, Serialize t) => Serialize (Inode t) where
              putWord64be $ blockCount n
              putByteString magic3
              let blocks'    = blocks n
-                 numAddrs'  = fromIntegral $ numAddrs n
+                 numAddrs'  = safeToInt $ numAddrs n
                  numBlocks  = length blocks'
                  fillBlocks = numAddrs' - numBlocks
              unless (numBlocks <= numAddrs') $
@@ -149,14 +149,14 @@ instance (Eq t, Ord t, Serialize t) => Serialize (Inode t) where
              na   <- getWord64be
              lsb  <- getWord64be
              checkMagic magic3
-             remb <- remaining
+             remb <- fromIntegral `fmap` remaining
              let numBlockBytes      = remb - 8 -- account for trailing magic4
                  (numBlocks, check) = numBlockBytes `divMod` inodeRefSize
              unless (check == 0) $ 
                fail "Incorrect number of bytes left for block list."
              unless (numBlocks >= minimumNumberOfBlocks) $
                fail "Not enough space left for minimum number of blocks."
-             blks <- filter (/= 0) `fmap` replicateM numBlocks get
+             blks <- filter (/= 0) `fmap` replicateM (safeToInt numBlocks) get
              checkMagic magic4
              return $ Inode addr par cont ctm mtm u grp na lsb blks
    where
@@ -182,7 +182,7 @@ minimalInodeSize t = do
               rootUser
               rootGroup
     in
-      e{ blocks = replicate minimumNumberOfBlocks 0 }
+      e{ blocks = replicate (safeToInt minimumNumberOfBlocks) 0 }
 
 -- | Computes the number of block addresses storable by an inode
 computeNumAddrs :: Monad m => 
@@ -194,14 +194,14 @@ computeNumAddrs blockSize minSize = do
     fail "computeNumAddrs: Block size too small to accomodate minimal inode"
   let
     -- # bytes required for the blocks region of the minimal inode
-    padding       = fromIntegral $ minimumNumberOfBlocks * inodeRefSize 
+    padding       = minimumNumberOfBlocks * inodeRefSize 
     -- # bytes of the inode excluding the blocks region
     notBlocksSize = minSize - padding
     -- # bytes available for storing the blocks region
     blockSize'    = blockSize - notBlocksSize
-  unless (0 == blockSize' `mod` fromIntegral inodeRefSize) $
+  unless (0 == blockSize' `mod` inodeRefSize) $
     fail "computeNumAddrs: Inexplicably bad block size"
-  return $ blockSize' `div` fromIntegral inodeRefSize
+  return $ blockSize' `div` inodeRefSize
 
 computeNumAddrsM :: (Serialize t, Timed t m) =>
                     Word64 -> m Word64
@@ -259,25 +259,19 @@ emptyInode nAddrs createTm modTm me mommy usr grp =
 --------------------------------------------------------------------------------
 -- Inode utility functions
 
-takeW64 :: Word64 -> [a] -> [a]
-takeW64 = genericTake
-
-dropW64 :: Word64 -> [a] -> [a]
-dropW64 = genericDrop
-
 -- | Reads the contents of the given inode's ith block
 readInodeBlock :: (Ord t, Serialize t, Monad m) =>
                   BlockDevice m -> Inode t -> Word64 -> m ByteString
 readInodeBlock dev n i = do 
   assert (i < blockCount n) $ return ()
-  bdReadBlock dev (blocks n !! fromIntegral i)
+  bdReadBlock dev (blocks n !! safeToInt i)
 
 -- | Writes to the given inode's ith block
 writeInodeBlock :: (Ord t, Serialize t, Monad m) =>
                    BlockDevice m -> Inode t -> Word64 -> ByteString -> m ()
 writeInodeBlock dev n i bytes = do 
-  assert (BS.length bytes == fromIntegral (bdBlockSize dev)) $ return ()
-  bdWriteBlock dev (blocks n !! fromIntegral i) bytes
+  assert (BS.length bytes == safeToInt (bdBlockSize dev)) $ return ()
+  bdWriteBlock dev (blocks n !! safeToInt i) bytes
 
 -- Writes the given inode to its block address
 writeInode :: (Ord t, Serialize t, Monad m, Show t) =>
@@ -370,9 +364,7 @@ writeStream dev bm startIR start trunc bytes = do
       availBlks n   = api - blockCount n
       bytesToAlloc  = if alreadyAllocd > len then 0 else len - alreadyAllocd
       blksToAlloc   = bytesToAlloc `divCeil` bs
-      inodesToAlloc = fromIntegral $
-                      (blksToAlloc - availBlks (last origInodes))
-                      `divCeil` api
+      inodesToAlloc = (blksToAlloc - availBlks (last origInodes)) `divCeil` api
       (u, g)        = (user startInode, group startInode)
 
   trace ("bytesToAlloc         = " ++ show bytesToAlloc)           $ do
@@ -388,12 +380,11 @@ writeStream dev bm startIR start trunc bytes = do
   -- same for blkAddr
 
   -- Write the start block, preserving the region before the start byte offset
-  let stInode         = inodes !! fromIntegral sInodeIdx
-      (sData, bytes') = BS.splitAt (fromIntegral $ bs - sByteOff) bytes 
-  preserve <- BS.take (fromIntegral sByteOff)
-              `fmap` readInodeBlock dev stInode sBlkOff
+  let stInode         = inodes !! safeToInt sInodeIdx
+      (sData, bytes') = bsSplitAt (bs - sByteOff) bytes 
+  preserve <- bsTake sByteOff `fmap` readInodeBlock dev stInode sBlkOff
   writeInodeBlock dev stInode sBlkOff (preserve `BS.append` sData)
-  trace ("Wrote start block @ addr " ++ show (blocks stInode !! fromIntegral sBlkOff)) $ do
+  trace ("Wrote start block @ addr " ++ show (blocks stInode !! safeToInt sBlkOff)) $ do
 
   let
     -- Destination block addresses after the start block
@@ -405,12 +396,11 @@ writeStream dev bm startIR start trunc bytes = do
                      then Nothing
                      else
                        -- Pad last chunk up to the block size
-                       let n              = fromIntegral bs
-                           p@(rslt, rest) = BS.splitAt n s
+                       let p@(rslt, rest) = bsSplitAt bs s
                        in
                          Just $
                          if BS.null rest
-                         then ( BS.take n $ rslt `BS.append` BS.replicate n 0
+                         then ( bsTake bs $ rslt `BS.append` bsReplicate bs 0
                               , rest
                               )
                          else p
@@ -486,7 +476,7 @@ writeStream dev bm startIR start trunc bytes = do
       if 0 == n
       then return $ Right []
       else do
-        minodes <- fmap sequence $ replicateM n $ do
+        minodes <- fmap sequence $ replicateM (safeToInt n) $ do
                      mir <- (fmap . fmap) blockAddrToInodeRef (BM.alloc1 bm)
                      case mir of
                        Nothing -> return Nothing
@@ -521,7 +511,7 @@ readStream dev startIR start mlen = do
   trace ("readStream: inodes = " ++ show inodes) $ do
 
   case mlen of
-    Nothing  -> case drop (fromIntegral sInodeIdx) inodes of
+    Nothing  -> case dropW64 sInodeIdx inodes of
       [] -> fail "Inode.readStream internal error: invalid start inode index"
       (inode:rest) -> do
         -- The 'header' is just the partial first block and all remaining blocks
@@ -530,8 +520,7 @@ readStream dev startIR start mlen = do
           let blkCnt = blockCount inode 
               range  = assert (sBlkOff < blkCnt) $ [sBlkOff..blkCnt - 1]
           (blk:blks) <- mapM (getBlock inode) range
-          return $ BS.drop (fromIntegral sByteOff) blk
-                   `BS.append` BS.concat blks
+          return $ bsDrop sByteOff blk `BS.append` BS.concat blks
 
         trace ("readStream: length header = " ++ show (BS.length header)) $ do
 
@@ -588,9 +577,49 @@ decompParanoid dev blkSizeBytes numBytesPerInode streamOff inode = do
         decompStreamOffset blkSizeBytes numBytesPerInode streamOff inode
   inodes <- expandConts dev inode
   assert (inodeIdx < fromIntegral (length inodes)) $ do
-  let blkCnt = blockCount (inodes !! fromIntegral inodeIdx)
+  let blkCnt = blockCount (inodes !! safeToInt inodeIdx)
   assert (blkCnt == 0 && blkOff == 0 || blkOff < blkCnt) $ do
   return (inodeIdx, blkOff, byteOff)
+
+
+--------------------------------------------------------------------------------
+-- Misc utility
+
+takeW64 :: Word64 -> [a] -> [a]
+takeW64 = genericTake
+
+dropW64 :: Word64 -> [a] -> [a]
+dropW64 = genericDrop
+
+-- "Safe" (i.e., emits runtime assertions on overflow) versions of
+-- BS.{take,drop,replicate}.  We want the efficiency of these functions
+-- without the danger of an unguarded fromIntegral on the Word64 types
+-- we use throughout this module, as this could overflow for absurdly
+-- large device geometries).  We may need to revisit some implementation
+-- decisions should this occur (e.g., because many Prelude and
+-- Data.ByteString functions yield values of type Int)
+
+safeToInt :: Integral a => a -> Int
+safeToInt n =
+  assert (toInteger n <= toInteger (maxBound :: Int)) $ fromIntegral n
+
+makeSafeIntF :: Integral a =>  (Int -> b) -> a -> b
+makeSafeIntF f n = f $ safeToInt n
+
+-- | "Safe" version of Data.ByteString.take
+bsTake :: Integral a => a -> ByteString -> ByteString
+bsTake = makeSafeIntF BS.take
+
+-- | "Safe" version of Data.ByteString.drop
+bsDrop :: Integral a => a -> ByteString -> ByteString
+bsDrop = makeSafeIntF BS.drop
+
+-- | "Safe" version of Data.ByteString.replicate
+bsReplicate :: Integral a => a -> Word8 -> ByteString
+bsReplicate = makeSafeIntF BS.replicate
+
+bsSplitAt :: Integral a => a -> ByteString -> (ByteString, ByteString)
+bsSplitAt = makeSafeIntF BS.splitAt
 
 
 --------------------------------------------------------------------------------
