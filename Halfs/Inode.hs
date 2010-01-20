@@ -108,60 +108,63 @@ data (Eq t, Ord t, Serialize t) => Inode t = Inode {
   deriving (Show, Eq)
 
 instance (Eq t, Ord t, Serialize t) => Serialize (Inode t) where
-  put n = do putByteString magic1
-             put $ address n
-             put $ parent n
-             let contVal = case continuation n of
-                             Nothing -> nilInodeRef
-                             Just x  -> x
-             put contVal
-             put $ createTime n
-             put $ modifyTime n
-             putByteString magic2
-             put $ user n
-             put $ group n
-             putWord64be $ numAddrs n
-             putWord64be $ blockCount n
-             putByteString magic3
-             let blocks'    = blocks n
-                 numAddrs'  = safeToInt $ numAddrs n
-                 numBlocks  = length blocks'
-                 fillBlocks = numAddrs' - numBlocks
-             unless (numBlocks <= numAddrs') $
-               fail $ "Corrupted Inode structure: too many blocks"
-             forM_ blocks' put
-             replicateM_ fillBlocks $ put nilInodeRef
-             putByteString magic4
-  get   = do checkMagic magic1
-             addr <- get
-             par  <- get
-             cntI <- get
-             let cont = if inodeRefToBlockAddr cntI == 0 
-                          then Nothing
-                          else Just cntI
-             ctm  <- get
-             mtm  <- get
-             unless (mtm >= ctm) $
-               fail "Incoherent modified / creation times."
-             checkMagic magic2
-             u    <- get
-             grp  <- get
-             na   <- getWord64be
-             lsb  <- getWord64be
-             checkMagic magic3
-             remb <- fromIntegral `fmap` remaining
-             let numBlockBytes      = remb - 8 -- account for trailing magic4
-                 (numBlocks, check) = numBlockBytes `divMod` inodeRefSize
-             unless (check == 0) $ 
-               fail "Incorrect number of bytes left for block list."
-             unless (numBlocks >= minimumNumberOfBlocks) $
-               fail "Not enough space left for minimum number of blocks."
-             blks <- filter (/= 0) `fmap` replicateM (safeToInt numBlocks) get
-             checkMagic magic4
-             return $ Inode addr par cont ctm mtm u grp na lsb blks
+  put n = do
+    putByteString magic1
+    put $ address n
+    put $ parent n
+    let contVal = case continuation n of
+                    Nothing -> nilInodeRef
+                    Just x  -> x
+    put contVal
+    put $ createTime n
+    put $ modifyTime n
+    putByteString magic2
+    put $ user n
+    put $ group n
+    putWord64be $ numAddrs n
+    putWord64be $ blockCount n
+    putByteString magic3
+    let blocks'    = blocks n
+        numAddrs'  = safeToInt $ numAddrs n
+        numBlocks  = length blocks'
+        fillBlocks = numAddrs' - numBlocks
+    unless (numBlocks <= numAddrs') $
+      fail $ "Corrupted Inode structure: too many blocks"
+    forM_ blocks' put
+    replicateM_ fillBlocks $ put nilInodeRef
+    putByteString magic4
+  get = do
+    checkMagic magic1
+    addr <- get
+    par  <- get
+    cntI <- get
+    let cont = if inodeRefToBlockAddr cntI == 0 
+                 then Nothing
+                 else Just cntI
+    ctm  <- get
+    mtm  <- get
+    unless (mtm >= ctm) $
+      fail "Incoherent modified / creation times."
+    checkMagic magic2
+    u    <- get
+    grp  <- get
+    na   <- getWord64be
+    lsb  <- getWord64be
+    checkMagic magic3
+    remb <- fromIntegral `fmap` remaining
+    let numBlockBytes      = remb - 8 -- account for trailing magic4
+        (numBlocks, check) = numBlockBytes `divMod` inodeRefSize
+    unless (check == 0) $ 
+      fail "Incorrect number of bytes left for block list."
+    unless (numBlocks >= minimumNumberOfBlocks) $
+      fail "Not enough space left for minimum number of blocks."
+    blks <- filter (/= 0) `fmap` replicateM (safeToInt numBlocks) get
+    checkMagic magic4
+    return $ Inode addr par cont ctm mtm u grp na lsb blks
    where
-    checkMagic x = do magic <- getBytes 8
-                      unless (magic == x) $ fail "Invalid superblock."
+    checkMagic x = do
+      magic <- getBytes 8
+      unless (magic == x) $ fail "Invalid superblock."
 
 -- | Size of a minimal inode structure when serialized, in bytes.  This will
 -- vary based on the space required for type t when serialized.  Note that
@@ -304,27 +307,26 @@ writeStream :: HalfsCapable b t r l m =>
             -> ByteString    -- ^ Data to write
             -> m (Either HalfsError ())
 writeStream dev bm startIR start trunc bytes = do
-  let len = fromIntegral $ BS.length bytes
-  if 0 == len then return $ Right () else do 
+  if 0 == len then return $ Right () else do
   startInode <- drefInode dev startIR
 
-  -- TODO: Error handling: the start offset can be exactly at the end of the
-  -- stream, but not beyond it so as not to introduce "gaps" -- this is
-  -- currently an assertion in decompParanoid but it should be a proper error
-  -- here.
+  -- TODO: Error handling: the start offset can be exactly at the end of
+  -- the stream, but not beyond it so as not to introduce "gaps" -- this
+  -- is currently an assertion in decompParanoid but it should be a
+  -- proper error here.
 
   -- Compute (block) addrs per inode (api) and decompose the start byte offset
   api <- computeNumAddrsM bs
   let bpi = bs * api
-  (sInodeIdx, sBlkOff, sByteOff) <- decompParanoid dev bs bpi start startInode
-    -- ^^^ XXX: Replace w/ decompStreamOffset once inode growth etc. is working
-
-  trace ("sInodeIdx, sBlkOff, sByteOff = " ++ show (sInodeIdx, sBlkOff, sByteOff)) $ do
 
   -- NB: expandConts is probably not viable once inode chains get large, but
   -- neither is the continuation scheme in general.  Revisit after stuff is
   -- working.
-  origInodes <- expandConts dev startInode
+  origInodes                     <- expandConts dev startInode
+  (sInodeIdx, sBlkOff, sByteOff) <- decompStreamOffset bs bpi start origInodes
+    -- ^^^ XXX: Replace w/ decompStreamOffset once inode growth etc. is working
+
+  trace ("sInodeIdx, sBlkOff, sByteOff = " ++ show (sInodeIdx, sBlkOff, sByteOff)) $ do
 
   trace ("origInodes = " ++ show origInodes) $ do
   trace ("addrs per inode = " ++ show api) $ do
@@ -426,6 +428,7 @@ writeStream dev bm startIR start trunc bytes = do
   where
     whenOK act f      = act >>= either (return . Left) f
     bs                = bdBlockSize dev
+    len               = fromIntegral $ BS.length bytes
     -- 
     allocBlocks n = do -- currently "flattens" BlockGroup; see above comment
       mbg <- BM.allocBlocks bm n
@@ -437,7 +440,6 @@ writeStream dev bm startIR start trunc bytes = do
     -- lists, allocating new inodes as needed.  The result is the final inode
     -- chain to write data into.
     allocAndFill avail blksToAlloc inodesToAlloc usr grp existingInodes = 
-      -- TODO: numAddrs adjustments
       if blksToAlloc == 0
        then return (Right existingInodes)
        else do
@@ -503,10 +505,10 @@ readStream dev startIR start mlen = do
   startInode <- drefInode dev startIR
   if 0 == blockCount startInode then return BS.empty else do 
   -- Compute bytes per inode (bpi) and decompose the starting byte offset
-  bpi <- (*bs) `fmap` computeNumAddrsM bs
-  (sInodeIdx, sBlkOff, sByteOff) <- decompParanoid dev bs bpi start startInode
-    -- ^^^ XXX: Replace w/ decompStreamOffset once inode growth etc. is working
+  bpi    <- (*bs) `fmap` computeNumAddrsM bs
   inodes <- expandConts dev startInode
+  (sInodeIdx, sBlkOff, sByteOff) <- decompStreamOffset bs bpi start inodes
+    -- ^^^ XXX: Replace w/ decompStreamOffset once inode growth etc. is working
 
   trace ("readStream: inodes = " ++ show inodes) $ do
 
@@ -536,8 +538,6 @@ readStream dev startIR start mlen = do
         return $ header `BS.append` fullBlocks
 
     Just len -> do
-      (_eInodeIdx, _eBlk, _eByte) <-
-        decompParanoid dev bs bpi (start + len - 1) startInode
       fail "NYI: Upper-bounded inode stream read"
   where
     getBlock = readInodeBlock dev
@@ -546,40 +546,23 @@ readStream dev startIR start mlen = do
 -- | Decompose the given absolute byte offset into an inode data stream into
 -- inode index (i.e., 0-based index into sequence of Inode continuations), block
 -- offset within that inode, and byte offset within that block.
-decompStreamOffset :: (Ord t, Serialize t) =>
-                      Word64  -- ^ Block size, in bytes
-                   -> Word64  -- ^ Maximum number of bytes "stored" by an inode 
-                   -> Word64  -- ^ Offset into the inode data stream
-                   -> Inode t -- ^ The inode (for important sanity checks)
-                   -> (Word64, Word64, Word64)
-decompStreamOffset blkSizeBytes numBytesPerInode streamOff inode =
-  -- HERE: get rid of numAddrs field?
-  assert (streamOff <= numAddrs inode) (inodeIdx, blkOff, byteOff)
+decompStreamOffset ::
+  (Serialize t, Timed t m, Monad m) =>
+     Word64    -- ^ Block size, in bytes
+  -> Word64    -- ^ Maximum number of bytes "stored" by an inode 
+  -> Word64    -- ^ Offset into the inode data stream
+  -> [Inode t] -- ^ The inode chain, for sanity checks
+  -> m (Word64, Word64, Word64)
+decompStreamOffset blkSizeBytes numBytesPerInode streamOff inodes =
+  check $ return (inodeIdx, blkOff, byteOff)
   where
     (inodeIdx, inodeByteIdx) = streamOff `divMod` numBytesPerInode
     (blkOff, byteOff)        = inodeByteIdx `divMod` blkSizeBytes
-
--- | Same as decompStreamOffset, but performs additional "heavyweight" checks
--- (e.g., reading persisted inodes from disk) on the inode structure to ensure
--- that the computed stream offset decomp is valid; use of this function can be
--- discontinued after we're sure inodes are growing correctly and the simple
--- check of numAddrs in decompStreamOffset is sufficient.
-decompParanoid ::
-  (Serialize t, Timed t m, Functor m) =>
-     BlockDevice m 
-  -> Word64  -- ^ Block size, in bytes
-  -> Word64  -- ^ Maximum number of bytes "stored" by an inode 
-  -> Word64  -- ^ Offset into the inode data stream
-  -> Inode t -- ^ The inode (for important sanity checks)
-  -> m (Word64, Word64, Word64)
-decompParanoid dev blkSizeBytes numBytesPerInode streamOff inode = do 
-  let (inodeIdx, blkOff, byteOff) =
-        decompStreamOffset blkSizeBytes numBytesPerInode streamOff inode
-  inodes <- expandConts dev inode
-  assert (inodeIdx < fromIntegral (length inodes)) $ do
-  let blkCnt = blockCount (inodes !! safeToInt inodeIdx)
-  assert (blkCnt == 0 && blkOff == 0 || blkOff < blkCnt) $ do
-  return (inodeIdx, blkOff, byteOff)
+    check rslt               =
+      assert (inodeIdx < fromIntegral (length inodes)) $
+      let blkCnt = blockCount (inodes !! safeToInt inodeIdx) in
+      assert (blkCnt == 0 && blkOff == 0 || blkOff < blkCnt) $
+      rslt
 
 
 --------------------------------------------------------------------------------
