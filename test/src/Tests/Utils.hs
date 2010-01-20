@@ -11,6 +11,10 @@ import System.Directory
 import Test.QuickCheck hiding (numTests)
 import Test.QuickCheck.Monadic
 
+import Halfs.Classes
+import Halfs.CoreAPI (mount)
+import Halfs.Monad
+  
 import System.Device.BlockDevice
 import System.Device.File
 import System.Device.Memory
@@ -89,3 +93,13 @@ mkMemDevExec quick pfx =
       numTests n $ label (pfx ++ ": " ++ s) $ monadicIO $
         forAllM arbBDGeom $ \g ->
           run (memDev g) >>= doProp (pr g)
+
+mountOK :: HalfsCapable b t r l m =>
+           BlockDevice m
+        -> PropertyM m (Halfs b r m l)
+mountOK dev =
+  run (mount dev)
+  >>= either (fail . (++) "Unexpected mount failure: " . show) (return)
+
+sreadRef :: HalfsCapable b t r l m => r a -> PropertyM m a
+sreadRef = ($!) (run . readRef)

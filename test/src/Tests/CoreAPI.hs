@@ -38,13 +38,15 @@ import Debug.Trace
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [
---     exec 50  "Init and mount" propM_initAndMountOK
---   ,
---     exec 50  "Mount/unmount"  propM_mountUnmountOK
---   ,
---     exec 50  "Unmount mutex"  propM_unmountMutexOK
---   ,
-     exec 1 "Directory construction" propM_dirConstructionOK
+    exec 50  "Init and mount" propM_initAndMountOK
+  , exec 50  "Mount/unmount"  propM_mountUnmountOK
+  , exec 50  "Unmount mutex"  propM_unmountMutexOK
+  , exec 1 "Directory construction" propM_dirConstructionOK -- FIXME: currently
+                                                            -- fails with
+                                                            -- "truncating write
+                                                            -- NYI" exception
+                                                            -- (Inode.writeStream
+                                                            -- limitation)
   ]
   where
     exec = mkMemDevExec quick "CoreAPI"
@@ -161,23 +163,7 @@ propM_dirConstructionOK _g dev = do
     assert $ dirState == Clean
     assert $ M.null contents
     
-  -- TEMP/XXX: beg hacky tests for fixed device geometry BDGeom 512 512
-  let dsize = 49*512+1
-  let testData = BS.replicate dsize 0x65
-  rdirIR <- rootDir `fmap` sreadRef (hsSuperBlock fs)
-  exec "tmp test write" $ writeStream dev (hsBlockMap fs) rdirIR 0 False testData
-  testData' <- BS.take dsize `fmap` -- ignore trailing bytes up to
-                                    -- block boundary, since we did
-                                    -- read-to-end
-               exec "tmp test read"
-                 ((Right :: ByteString -> Either String ByteString)
-                  `fmap` readStream dev rdirIR 0 Nothing
-                 )
-  assert (testData == testData')
-  -- TEMP/XXX: end hacky tests for fixed device geometry BDGeom 512 512
-
-  -- TODO: re-enable!
-  -- exec "mkdir in root directory" $ mkdir fs (rootPath </> "foo") perms
+  exec "mkdir in root directory" $ mkdir fs (rootPath </> "foo") perms
 
   where
     rootPath       = [pathSeparator]
@@ -198,12 +184,3 @@ ok = return ()
 unexpectedErr :: (Monad m, Show a) => a -> PropertyM m ()
 unexpectedErr = fail . (++) "Expected failure, but not: " . show
 
-sreadRef :: HalfsCapable b t r l m => r a -> PropertyM m a
-sreadRef = ($!) (run . readRef)
-
-mountOK :: HalfsCapable b t r l m =>
-           BlockDevice m
-        -> PropertyM m (Halfs b r m l)
-mountOK dev =
-  run (mount dev)
-  >>= either (fail . (++) "Unexpected mount failure: " . show) (return)

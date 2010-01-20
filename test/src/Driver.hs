@@ -7,6 +7,7 @@ import System.Exit (ExitCode(..), exitFailure, exitWith)
 import qualified Tests.BlockDevice as BD
 import qualified Tests.BlockMap    as BM
 import qualified Tests.CoreAPI     as CA  
+import qualified Tests.Inode       as IN
 import qualified Tests.Serdes      as SD
 
 qcProps :: [(Args, Property)]
@@ -16,7 +17,9 @@ qcProps = -- BD.qcProps True -- run in "quick" mode for Block Devices
 --           ++
 --          SD.qcProps True -- run in "quick" mode for Serdes
 --          ++
-          CA.qcProps True -- run in "quick" mode for CoreAPI
+            IN.qcProps True -- run in "quick" mode for Inode
+--          ++
+--          CA.qcProps True -- run in "quick" mode for CoreAPI
 
 main :: IO ()
 main = do

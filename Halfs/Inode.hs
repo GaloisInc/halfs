@@ -369,33 +369,34 @@ writeStream dev bm startIR start trunc bytes       = do
   let (sData, bytes') = bsSplitAt (bs - sByteOff) bytes
       -- The first block-sized chunk to write is the region in the start block
       -- prior to the start byte offset, followed by the first bytes of the
-      -- data.
-      firstChunk = preserve `BS.append` sData
+      -- data and padding up to the block size.
+      firstChunk = bsTake bs $
+                   preserve `BS.append` sData `BS.append` bsReplicate bs 0
       -- Destination block addresses starting at the the start block
       blkAddrs = genericDrop sBlkOff (blocks stInode)
                  ++ concatMap blocks (genericDrop (sInodeIdx + 1) inodes')
       -- Block-sized chunks
-      chunks =
-        firstChunk : 
-        unfoldr (\s -> if BS.null s
-                       then Nothing
-                       else
-                         -- Pad last chunk up to the block size
-                         let p@(rslt, rest) = bsSplitAt bs s
-                         in
-                           Just $
-                           if BS.null rest
-                           then ( bsTake bs $ rslt `BS.append` bsReplicate bs 0
-                                , rest
-                                )
-                           else p
-                )
-                bytes'
+      chunks = firstChunk : 
+               unfoldr (\s -> if BS.null s
+                              then Nothing
+                              else
+                                -- Pad last chunk up to the block size
+                                let p@(rslt, rest) = bsSplitAt bs s
+                                in
+                                  Just $
+                                  if BS.null rest
+                                  then ( bsTake bs $
+                                         rslt `BS.append` bsReplicate bs 0
+                                       , rest
+                                       )
+                                  else p
+                       )
+                       bytes'
+--   trace ("chunks       = " ++ show chunks)            $ do
+--   trace ("blkAddrs     = " ++ show blkAddrs)          $ do
+--   trace ("len blkAddrs = " ++ show (length blkAddrs)) $ do
+--   trace ("len chunks   = " ++ show (length chunks))   $ do
   assert (all ((== safeToInt bs) . BS.length) chunks) $ do
-  trace ("chunks       = " ++ show chunks)            $ do
-  trace ("blkAddrs     = " ++ show blkAddrs)          $ do                                               
-  trace ("len blkAddrs = " ++ show (length blkAddrs)) $ do    
-  trace ("len chunks   = " ++ show (length chunks))   $ do
   -- Write the remaining blocks
   mapM_ (uncurry $ bdWriteBlock dev) (blkAddrs `zip` chunks)
                
@@ -456,7 +457,7 @@ writeStream dev bm startIR start trunc bytes       = do
          let (blks', k)                   = foldl fillBlks (blks, id) region
              inodes'                      = init existingInodes ++ k []
              fillBlks (remBlks, k') inode =
-               let cnt    = min (fromIntegral $ avail inode) (length remBlks)
+               let cnt    = min (safeToInt $ avail inode) (length remBlks)
                    inode' =
                      inode { blockCount = blockCount inode + fromIntegral cnt
                            , blocks     = blocks inode ++ take cnt remBlks
@@ -506,7 +507,7 @@ readStream dev startIR start mlen = do
           (blk:blks) <- mapM (getBlock inode) range
           return $ bsDrop sByteOff blk `BS.append` BS.concat blks
 
-        trace ("readStream: length header = " ++ show (BS.length header)) $ do
+        trace ("readStream: length header     = " ++ show (BS.length header)) $ do
 
         -- 'fullBlocks' is the remaining content from all remaining inodes
         fullBlocks <- foldM
