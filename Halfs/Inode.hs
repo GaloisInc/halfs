@@ -13,6 +13,7 @@ module Halfs.Inode
   -- * for testing
   , computeNumAddrs
   , minimalInodeSize
+  , decodeInode
   )
  where
 
@@ -79,12 +80,12 @@ nilInodeRef = IR 0
 -- file. We serialize Nothing as nilInodeRef, an invalid continuation.
 --
 -- We semi-arbitrarily state that an Inode must be capable of maintaining a
--- minimum of 49 block addresses, which gives us a minimum inode size of 512
+-- minimum of 50 block addresses, which gives us a minimum inode size of 512
 -- bytes (in the IO monad variant, which uses the our Serialize instance for the
 -- UTCTime when writing the createTime and modifyTime fields).
 --
 minimumNumberOfBlocks :: Word64
-minimumNumberOfBlocks = 49
+minimumNumberOfBlocks = 50
 
 data (Eq t, Ord t, Serialize t) => Inode t = Inode {
     address       :: InodeRef        -- ^ block addr of this inode
@@ -97,18 +98,26 @@ data (Eq t, Ord t, Serialize t) => Inode t = Inode {
   , modifyTime    :: t
   , user          :: UserID
   , group         :: GroupID
-  , numAddrs      :: Word64          -- ^ number of total block addresses
-                                     -- that this inode covers (DELETE_ME)
   , blockCount    :: Word64          -- ^ current number of active blocks (equal
                                      -- to the number of (sequential) inode
                                      -- references held in the blocks list)
 
   , blocks        :: [Word64]
+
+  -- Fields below here are not persisted, and are populated via decodeInode
+
+  , numAddrs      :: Word64          -- ^ Maximum number of blocks addressable
+                                     -- by this inode.  NB: Does not include any
+                                     -- continuation inodes, and is only used
+                                     -- for sanity checking.
   }
   deriving (Show, Eq)
 
 instance (Eq t, Ord t, Serialize t) => Serialize (Inode t) where
   put n = do
+    unless (numBlocks <= numAddrs') $
+      fail $ "Corrupted Inode structure put: too many blocks"
+
     putByteString magic1
     put $ address n
     put $ parent n
@@ -121,18 +130,18 @@ instance (Eq t, Ord t, Serialize t) => Serialize (Inode t) where
     putByteString magic2
     put $ user n
     put $ group n
-    putWord64be $ numAddrs n
+--    putWord64be $ numAddrs n
     putWord64be $ blockCount n
     putByteString magic3
-    let blocks'    = blocks n
-        numAddrs'  = safeToInt $ numAddrs n
-        numBlocks  = length blocks'
-        fillBlocks = numAddrs' - numBlocks
-    unless (numBlocks <= numAddrs') $
-      fail $ "Corrupted Inode structure: too many blocks"
     forM_ blocks' put
     replicateM_ fillBlocks $ put nilInodeRef
     putByteString magic4
+    where
+      blocks'    = blocks n
+      numAddrs'  = safeToInt $ numAddrs n
+      numBlocks  = length blocks'
+      fillBlocks = numAddrs' - numBlocks
+
   get = do
     checkMagic magic1
     addr <- get
@@ -148,7 +157,7 @@ instance (Eq t, Ord t, Serialize t) => Serialize (Inode t) where
     checkMagic magic2
     u    <- get
     grp  <- get
-    na   <- getWord64be
+--    na   <- getWord64be
     lsb  <- getWord64be
     checkMagic magic3
     remb <- fromIntegral `fmap` remaining
@@ -160,7 +169,10 @@ instance (Eq t, Ord t, Serialize t) => Serialize (Inode t) where
       fail "Not enough space left for minimum number of blocks."
     blks <- filter (/= 0) `fmap` replicateM (safeToInt numBlocks) get
     checkMagic magic4
-    return $ Inode addr par cont ctm mtm u grp na lsb blks
+    let na = error $ "numAddrs has not been populated via Data.Serialize.get "
+                  ++ "for Inode; did you forget to use the " 
+                  ++ "Inode.decodeInode wrapper?"
+    return $ Inode addr par cont ctm mtm u grp lsb blks na
    where
     checkMagic x = do
       magic <- getBytes 8
@@ -293,9 +305,11 @@ expandConts dev inode@Inode{ continuation = Just nextRef } =
 
 drefInode :: (Serialize t, Timed t m, Functor m) =>
              BlockDevice m -> InodeRef -> m (Inode t)
-drefInode dev (IR addr) = 
-  decode `fmap` bdReadBlock dev addr >>=
-  either (fail . (++) "drefInode decode failure: ") return
+drefInode dev (IR addr) = do
+  einode <- bdReadBlock dev addr >>= decodeInode (bdBlockSize dev)
+  case einode of
+    Left s  -> fail $ "drefInode decode failure: " ++ s
+    Right r -> return r
 
 -- | Returns Nothing on success
 writeStream :: HalfsCapable b t r l m =>
@@ -550,6 +564,19 @@ decompStreamOffset blkSizeBytes numBytesPerInode streamOff inodes =
 
 --------------------------------------------------------------------------------
 -- Misc utility
+
+-- | A wrapper around Data.Serialize.decode that populates transient fields.  We
+-- do this to avoid occupying valuable on-disk inode space where possible.  Bare
+-- applications of 'decode' should not occur when deserializing inodes.
+decodeInode :: (Serialize t, Timed t m, Monad m) =>
+               Word64
+            -> ByteString
+            -> m (Either String (Inode t))
+decodeInode blkSize bs = do
+  numAddrs' <- computeNumAddrsM blkSize
+  case decode bs of
+    Left s  -> return $ Left  $ s
+    Right n -> return $ Right $ n { numAddrs = numAddrs' }
 
 -- "Safe" (i.e., emits runtime assertions on overflow) versions of
 -- BS.{take,drop,replicate}.  We want the efficiency of these functions

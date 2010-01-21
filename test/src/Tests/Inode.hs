@@ -63,5 +63,4 @@ propM_singleWR _g dev = do
     Right _ -> do
       testData' <- run $ readStream dev rdirIR 0 Nothing
       assert (testData == BS.take dsize testData')
-
   

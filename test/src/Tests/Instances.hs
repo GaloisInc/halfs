@@ -190,9 +190,10 @@ instance (Arbitrary a, Ord a, Serialize a) => Arbitrary (Inode a) where
       <*> arbitrary `suchThat` (>= createTm)         -- modifyTime
       <*> UID `fmap` arbitrary                       -- user
       <*> GID `fmap` arbitrary                       -- group
-      <*> return addrCnt                             -- numAddrs
       <*> return (fromIntegral numBlocks)            -- blockCount
       <*> replicateM numBlocks arbitrary             -- blocks
+      -- Transient:
+      <*> return addrCnt                             -- numAddrs
                                              
 -- Generate an arbitrary directory entry
 instance Arbitrary DirectoryEntry where
