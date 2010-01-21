@@ -14,6 +14,7 @@ module Halfs.Inode
   , computeNumAddrs
   , minimalInodeSize
   , decodeInode
+  , safeToInt
   )
  where
 
@@ -496,7 +497,8 @@ readStream :: HalfsCapable b t r l m =>
               BlockDevice m -- ^ Block device
            -> InodeRef      -- ^ Starting inode reference
            -> Word64        -- ^ Starting stream (byte) offset
-           -> Maybe Word64  -- ^ Stream length (Nothing => until end)
+           -> Maybe Word64  -- ^ Stream length (Nothing => until end of stream,
+                            -- including entire last block)
            -> m ByteString  -- ^ Stream contents
 readStream dev startIR start mlen = do
   startInode <- drefInode dev startIR
@@ -527,7 +529,7 @@ readStream dev startIR start mlen = do
         fullBlocks <- foldM
           (\acc inode' -> do
              blks <- mapM (getBlock inode') [0..blockCount inode' - 1]
-             return $ BS.concat blks `BS.append` acc
+             return $ acc `BS.append` BS.concat blks
           )
           BS.empty rest
         trace ("readStream: length fullBlocks = " ++ show (BS.length fullBlocks)) $ do
