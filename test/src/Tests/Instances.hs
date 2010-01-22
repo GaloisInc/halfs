@@ -80,11 +80,19 @@ arbBlockAddr (BDGeom cnt _sz) =
     where ub = fromIntegral $ cnt - 1
 
 arbBlockData :: BDGeom -> Gen ByteString
-arbBlockData (BDGeom _cnt sz) =
-  BS.pack `fmap` replicateM (fromIntegral sz) byte
+arbBlockData (BDGeom _cnt sz) = bytes (fromIntegral sz)
 
 byte :: Gen Word8
 byte = fromIntegral `fmap` choose (0 :: Int, 255)
+
+bytes :: Int -> Gen ByteString
+bytes n = BS.pack `fmap` replicateM n byte
+
+printableBytes :: Int -> Gen ByteString
+printableBytes n = BS.pack `fmap` replicateM n printableByte
+
+printableByte :: Gen Word8
+printableByte = fromIntegral `fmap` choose (33 :: Int, 126)
 
 
 --------------------------------------------------------------------------------
@@ -146,15 +154,17 @@ permute xs = do
 instance Arbitrary UnallocDecision where
   arbitrary = UnallocDecision `fmap` arbitrary
 
--- instance Arbitrary BDGeom where
---   arbitrary = 
---     BDGeom
---     <$> powTwo 10 13   -- 1024..8192 sectors
---     <*> powTwo  9 12   -- 512b..4K sector size
---                        -- => 512K .. 32M filesystem size
+{-
+instance Arbitrary BDGeom where
+  arbitrary = 
+    BDGeom
+    <$> powTwo 10 13   -- 1024..8192 sectors
+    <*> powTwo  9 12   -- 512b..4K sector size
+                       -- => 512K .. 32M filesystem size
+-}
 
 instance Arbitrary BDGeom where
-  arbitrary = return $ BDGeom 512 512
+ arbitrary = return $ BDGeom 32 512
 
 -- Generate an arbitrary version 1 superblock with coherent free and
 -- used block counts.  Block size and count are constrained by the
