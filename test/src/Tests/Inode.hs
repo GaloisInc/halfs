@@ -87,15 +87,11 @@ propM_basicWR _g dev = do
   trace ("propM_basicWR: Non-truncating overwrite & read-back: ") $ do
 
   -- Non-truncating overwrite & read-back
-  let overwriteSz = 513
-      startByte   = 0
+--  let overwriteSz = 513
+--      startByte   = 1
 
--- HERE 21 Jan 2010: Change startByte to 1 and investigate! t2 is failing below,
--- but furthermore the lengths differ ... also double-check logic of t1, t2, t3
--- below for non-zero start bytes =/
-
---  forAllM (choose (1, dataSz `div` 2))     $ \overwriteSz -> do 
---  forAllM (choose (0, dataSz `div` 2 - 1)) $ \startByte   -> do
+  forAllM (choose (1, dataSz `div` 2))     $ \overwriteSz -> do 
+  forAllM (choose (0, dataSz `div` 2 - 1)) $ \startByte   -> do
   forAllM (printableBytes overwriteSz)     $ \newData     -> do
 
   trace ("propM_basicWR: overwriteSz = " ++ show overwriteSz) $ do
@@ -108,7 +104,7 @@ propM_basicWR _g dev = do
     Left  e -> fail $ "writeStream failure in propM_basicWR: " ++ show e
     Right _ -> do
       readBack <- bsTake dataSz `fmap` (run $ readStream dev rdirIR 0 Nothing)
-      let expected = bsTake (startByte - 1) testData
+      let expected = bsTake startByte testData
                      `BS.append`
                      newData
                      `BS.append`
@@ -116,8 +112,8 @@ propM_basicWR _g dev = do
       trace ("BS.length expected = " ++ show (BS.length expected)) $ do
       trace ("BS.length readBack = " ++ show (BS.length readBack)) $ do
 
-      let t1 = bsTake (startByte - 1) testData           == bsTake (startByte - 1) readBack
-          t2 = newData                                   == bsTake overwriteSz (bsDrop (startByte - 1) readBack)
+      let t1 = bsTake startByte testData                 == bsTake startByte readBack
+          t2 = newData                                   == bsTake overwriteSz (bsDrop (startByte) readBack)
           t3 = bsDrop (startByte + overwriteSz) testData == bsDrop (startByte + overwriteSz) readBack
 
       trace ("Case t1: " ++ show t1) $ do
