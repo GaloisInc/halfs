@@ -440,52 +440,14 @@ writeStream dev bm startIR start trunc bytes       = do
   inodes'' <- if trunc
               then truncUnalloc dev bm api sIdx len inodes'
               else return inodes'
-{-
-    if trunc
-     then do
-       let
-         eIdx@(eInodeIdx, eBlkOff, _) = addOffset api bs (len - 1) sIdx
-         (retain, freeNodes)          = genericSplitAt (eInodeIdx + 1) inodes'
-         term        = last retain 
-         freeBlks    = genericDrop (eBlkOff + 1) $ blocks term
-         term'       = term
-                       { continuation = Nothing
-                       , blockCount   = eBlkOff + 1
-                       , blocks       = genericTake (eBlkOff + 1) $ blocks term
-                       }
-         retain'     = init retain ++ [term']
-         allFreeBlks = freeBlks                      -- from last inode in chain
-                       ++ concatMap blocks freeNodes -- from remaining inodes
-                       ++ map                        -- inode storage
-                            (inodeRefToBlockAddr . address)
-                            freeNodes
-
-       dbug ("eIdx        = " ++ show eIdx)        $ return ()
-       dbug ("retain'     = " ++ show retain')     $ return ()
-       dbug ("freeNodes   = " ++ show freeNodes)   $ return ()
-       dbug ("allFreeBlks = " ++ show allFreeBlks) $ return ()
-
-       -- Free all of the blocks; note that this is ugly and inefficient, but we
-       -- need to be tracking BlockGroups (or reconstitute them here by looking
-       -- for contiguous addresses in allFreeBlks) before we can do better.
-
-       BM.unallocBlocks bm $ BM.Discontig $ map (`BM.Extent` 1) allFreeBlks
-
-       -- We do not do any writes to any of the inodes that were detached from
-       -- the chain & freed; this may have implications for fsck!
-       return retain'
-     else do
-       return inodes'
--}
 
   let inodesUpdated = len `divCeil` bpi
   dbug ("inodesUpdated = " ++ show inodesUpdated) $ return ()
 
-  let inodesToWrite = genericTake inodesUpdated $ genericDrop sInodeIdx inodes''
-  dbug ("inodesToWrite = " ++ show inodesToWrite) $ return ()
-
   -- Update persisted inodes from the start inode to end of write region
-  mapM_ (writeInode dev) $ inodesToWrite
+  mapM_ (writeInode dev) $
+    genericTake inodesUpdated $ genericDrop sInodeIdx inodes''
+
   dbug ("==== writeStream end ===") $ do
   return $ Right ()
   where
@@ -648,15 +610,15 @@ truncUnalloc :: HalfsCapable b t r l m =>
              -> m [Inode t]   -- Truncated inode chain
 truncUnalloc dev bm api sIdx len inodes = do
 
-  -- Free all of the blocks this way is ugly and inefficient, but we need to be
-  -- tracking BlockGroups (or reconstitute them here by looking for contiguous
-  -- addresses in allFreeBlks) before we can do better.
-    
   dbug ("eIdx        = " ++ show eIdx)        $ return ()
   dbug ("retain'     = " ++ show retain')     $ return ()
   dbug ("freeNodes   = " ++ show freeNodes)   $ return ()
   dbug ("allFreeBlks = " ++ show allFreeBlks) $ return ()
 
+  -- Free all of the blocks this way (as unit extents) is ugly and inefficient,
+  -- but we need to be tracking BlockGroups (or reconstitute them here by
+  -- looking for contiguous addresses in allFreeBlks) before we can do better.
+    
   BM.unallocBlocks bm $ BM.Discontig $ map (`BM.Extent` 1) allFreeBlks
     
   -- We do not do any writes to any of the inodes that were detached from

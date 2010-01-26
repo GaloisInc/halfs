@@ -45,7 +45,7 @@ qcProps quick =
 --    exec 1 "Simple WRWR" propM_basicWRWR
     -- Inode stream write/read/(truncating)write/read property
 --  ,
-  exec 100 "Truncating WRWR" propM_truncWRWR
+  exec 10 "Truncating WRWR" propM_truncWRWR
   ]
   where
     exec = mkMemDevExec quick "Inode"
@@ -88,11 +88,11 @@ propM_truncWRWR g dev = do
           trace ("BS.length readBack = " ++ show (BS.length readBack)) $ do
 --          trace ("readBack = " ++ show readBack) $ do
 
---          trace ("p1: " ++ show (bsTake dataSz' readBack == testData')) $ do
+          trace ("p1: " ++ show (bsTake dataSz' readBack == testData')) $ do
           assert (bsTake dataSz' readBack == testData')
 
---          trace ("p2: " ++ show (all (== truncSentinel) $ BS.unpack $ bsDrop dataSz' readBack)) $ do
---          trace ("p2_detail: readBack remainder length = " ++ show (BS.length $ bsDrop dataSz' readBack)) $ do
+          trace ("p2: " ++ show (all (== truncSentinel) $ BS.unpack $ bsDrop dataSz' readBack)) $ do
+          trace ("p2_detail: readBack remainder length = " ++ show (BS.length $ bsDrop dataSz' readBack)) $ do
 --          trace ("p2_detail: readBack remainder = " ++ show (bsDrop dataSz' readBack)) $ do
           assert (all (== truncSentinel) $ BS.unpack $ bsDrop dataSz' readBack)
 
