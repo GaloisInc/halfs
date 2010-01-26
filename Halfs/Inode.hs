@@ -18,6 +18,7 @@ module Halfs.Inode
   , decodeInode
   , minimalInodeSize
   , safeToInt
+  , truncSentinel
   )
  where
 
@@ -26,7 +27,7 @@ import Control.Monad
 import Data.ByteString(ByteString)
 import qualified Data.ByteString as BS
 import Data.Char
-import Data.List (genericDrop, genericTake, unfoldr)
+import Data.List (genericDrop, genericTake, genericSplitAt)
 import Data.Serialize 
 import Data.Serialize.Get
 import Data.Serialize.Put
@@ -40,9 +41,12 @@ import Halfs.Protection
 import Halfs.Utils
 import System.Device.BlockDevice
 
+import Debug.Trace
+
 import System.IO.Unsafe (unsafePerformIO)
+
 dbug :: String -> a -> a
--- dbug = seq . unsafePerformIO . putStrLn
+--dbug   = seq . unsafePerformIO . putStrLn
 dbug _ = id
 
 
@@ -64,25 +68,31 @@ instance Serialize InodeRef where
   put (IR x) = putWord64be x
   get        = IR `fmap` getWord64be
 
--- |Convert a disk block address into an Inode reference.
+type StreamIdx = (Word64, Word64, Word64)
+
+-- | Convert a disk block address into an Inode reference.
 blockAddrToInodeRef :: Word64 -> InodeRef
 blockAddrToInodeRef = IR
 
--- |Convert an inode reference into a block address
+-- | Convert an inode reference into a block address
 inodeRefToBlockAddr :: InodeRef -> Word64
 inodeRefToBlockAddr (IR x) = x
 
--- The size of an Inode reference in bytes
+-- | The size of an Inode reference in bytes
 inodeRefSize :: Word64
 inodeRefSize = 8
 
--- The nil Inode reference.  With the current Word64 representation and the
+-- | The nil Inode reference.  With the current Word64 representation and the
 -- block layout assumptions, block 0 is the superblock, and thus an invalid
 -- inode reference.
 nilInodeRef :: InodeRef
 nilInodeRef = IR 0
 
--- The structure of an Inode. Pretty standard, except that we use the
+-- | The sentinel byte written to partial blocks when doing truncating writes
+truncSentinel :: Word8
+truncSentinel = 0xBA
+
+-- | The structure of an Inode. Pretty standard, except that we use the
 -- continuation field to allow multiple runs of block addresses within the
 -- file. We serialize Nothing as nilInodeRef, an invalid continuation.
 --
@@ -94,8 +104,8 @@ nilInodeRef = IR 0
 minimumNumberOfBlocks :: Word64
 minimumNumberOfBlocks = 50
 
-data (Eq t, Ord t, Serialize t) => Inode t = Inode {
-    address       :: InodeRef        -- ^ block addr of this inode
+data (Eq t, Ord t, Serialize t) => Inode t = Inode
+  { address       :: InodeRef        -- ^ block addr of this inode
   , parent        :: InodeRef        -- ^ block addr of parent directory inode:
                                      --   This is nilInodeRef for the root
                                      --   directory inode and for inodes in the
@@ -137,7 +147,6 @@ instance (Eq t, Ord t, Serialize t) => Serialize (Inode t) where
     putByteString magic2
     put $ user n
     put $ group n
---    putWord64be $ numAddrs n
     putWord64be $ blockCount n
     putByteString magic3
     forM_ blocks' put
@@ -164,7 +173,6 @@ instance (Eq t, Ord t, Serialize t) => Serialize (Inode t) where
     checkMagic magic2
     u    <- get
     grp  <- get
---    na   <- getWord64be
     lsb  <- getWord64be
     checkMagic magic3
     remb <- fromIntegral `fmap` remaining
@@ -264,8 +272,8 @@ emptyInode :: (Ord t, Serialize t) =>
            -> GroupID
            -> Inode t
 emptyInode nAddrs createTm modTm me mommy usr grp =
-  Inode {
-    address      = me
+  Inode
+  { address      = me
   , parent       = mommy
   , continuation = Nothing
   , createTime   = createTm
@@ -289,9 +297,9 @@ readInodeBlock dev n i = do
   bdReadBlock dev (blocks n !! safeToInt i)
 
 -- | Writes to the given inode's ith block
-writeInodeBlock :: (Ord t, Serialize t, Monad m) =>
-                   BlockDevice m -> Inode t -> Word64 -> ByteString -> m ()
-writeInodeBlock dev n i bytes = do 
+_writeInodeBlock :: (Ord t, Serialize t, Monad m) =>
+                    BlockDevice m -> Inode t -> Word64 -> ByteString -> m ()
+_writeInodeBlock dev n i bytes = do 
   assert (BS.length bytes == safeToInt (bdBlockSize dev)) $ return ()
   bdWriteBlock dev (blocks n !! safeToInt i) bytes
 
@@ -299,7 +307,7 @@ writeInodeBlock dev n i bytes = do
 writeInode :: (Ord t, Serialize t, Monad m, Show t) =>
               BlockDevice m -> Inode t -> m ()
 writeInode dev n =
-  dbug ("Writing inode: " ++ show n) $
+--  dbug ("Writing inode: " ++ show n) $
   bdWriteBlock dev (inodeRefToBlockAddr $ address n) (encode n)
 
 -- | Expands the given inode into an inode list containing itself followed by
@@ -318,7 +326,10 @@ drefInode dev (IR addr) = do
     Left s  -> fail $ "drefInode decode failure: " ++ s
     Right r -> return r
 
--- | Returns Nothing on success
+-- | Writes to the inode stream at the given starting inode and starting byte
+-- offset, overwriting data and allocating new space on disk as needed.  If the
+-- write is a truncating write, all resources after the end of the written data
+-- are freed.
 writeStream :: HalfsCapable b t r l m =>
                BlockDevice m -- ^ The block device
             -> BlockMap b r  -- ^ The block map
@@ -329,6 +340,8 @@ writeStream :: HalfsCapable b t r l m =>
             -> m (Either HalfsError ())
 writeStream _ _ _ _ _ bytes | 0 == BS.length bytes = return $ Right ()
 writeStream dev bm startIR start trunc bytes       = do
+  -- TODO: locking
+
   -- TODO: Error handling: the start offset can be exactly at the end of
   -- the stream, but not beyond it so as not to introduce "gaps" -- this
   -- is currently an assertion in decompParanoid but it should be a
@@ -349,8 +362,8 @@ writeStream dev bm startIR start trunc bytes       = do
   -- NB: expandConts is probably not viable once inode chains get large, but
   -- neither is the continuation scheme in general.  Revisit after stuff is
   -- working.
-  inodes                         <- expandConts dev startInode
-  (sInodeIdx, sBlkOff, sByteOff) <- decompStreamOffset bs bpi start inodes
+  inodes                              <- expandConts dev startInode
+  sIdx@(sInodeIdx, sBlkOff, sByteOff) <- decompStreamOffset bs bpi start inodes
 
   dbug ("==== writeStream begin ===") $ do
   dbug ("addrs per inode           = " ++ show api)                            $ do
@@ -379,20 +392,12 @@ writeStream dev bm startIR start trunc bytes       = do
   dbug ("bytesToAlloc         = " ++ show bytesToAlloc)           $ do
   dbug ("blksToAlloc          = " ++ show blksToAlloc)            $ do
   dbug ("inodesToAlloc        = " ++ show inodesToAlloc)          $ do
-  dbug ("availBlks startInode = " ++ show (availBlks startInode)) $ do
 
   let doAllocs = allocAndFill availBlks blksToAlloc inodesToAlloc u g inodes
   whenOK doAllocs $ \inodes' -> do 
-  dbug ("inodes' = " ++ show inodes') $ do
+--  dbug ("inodes' = " ++ show inodes') $ do
   
   let stInode = (inodes' !! safeToInt sInodeIdx)
-
-  -- TMP vvv DELETE_ME
-  dbug ("XXX: reading inode block @ idx " ++ show sBlkOff) $ do
-  blah <- readInodeBlock dev stInode sBlkOff
-  dbug ("XXX: block contents = " ++ show blah) $ do
-  dbug ("XXX: sByteOff = " ++ show sByteOff) $ do
-  -- TMP ^^^ DELETE_ME
 
   sBlk <- readInodeBlock dev stInode sBlkOff
 
@@ -403,57 +408,85 @@ writeStream dev bm startIR start trunc bytes       = do
       -- the data.  The trailer is nonempty and must be included when BS.length
       -- bytes < bs.
       firstChunk =
-        let header  = bsTake sByteOff sBlk
-            trailer = bsDrop (sByteOff + fromIntegral (BS.length sData)) sBlk
-            r       = header `BS.append` sData `BS.append` trailer
+        let header   = bsTake sByteOff sBlk
+            trailLen = sByteOff + fromIntegral (BS.length sData)
+            trailer  = if trunc
+                       then bsReplicate (bs - trailLen) truncSentinel
+                       else bsDrop trailLen sBlk
+            r        = header `BS.append` sData `BS.append` trailer
         in assert (fromIntegral (BS.length r) == bs) r
 
       -- Destination block addresses starting at the the start block
       blkAddrs = genericDrop sBlkOff (blocks stInode)
                  ++ concatMap blocks (genericDrop (sInodeIdx + 1) inodes')
 
-{-
-      -- Block-sized chunks
-      chunks = firstChunk : 
-               unfoldr (\s -> if BS.null s
-                              then Nothing
-                              else
-                                -- Pad last chunk up to the block size
-                                let p@(rslt, rest) = bsSplitAt bs s
-                                in
-                                  Just $
-                                  if BS.null rest
-                                  then ( bsTake bs $
-                                         rslt `BS.append` bsReplicate bs 0
-                                       , rest
-                                       )
-                                  else p
-                       )
-                       bytes'
--}
-
   chunks <- (firstChunk:) `fmap`
             unfoldrM getBlockContents (bytes', drop 1 blkAddrs)
 
+{-
   forM chunks $ \chunk ->
     dbug ("chunk: " ++ show chunk) $ return ()
   dbug ("blkAddrs     = " ++ show blkAddrs)          $ do
   dbug ("len blkAddrs = " ++ show (length blkAddrs)) $ do
   dbug ("len chunks   = " ++ show (length chunks))   $ do
+-}
   assert (all ((== safeToInt bs) . BS.length) chunks) $ do
+
   -- Write the remaining blocks
   mapM_ (uncurry $ bdWriteBlock dev) (blkAddrs `zip` chunks)
                
+  -- If this is a truncating write, fix up the chain terminator & free all
+  -- blocks & inodes in the free region
+  inodes'' <- if trunc
+              then truncUnalloc dev bm api sIdx len inodes'
+              else return inodes'
+{-
+    if trunc
+     then do
+       let
+         eIdx@(eInodeIdx, eBlkOff, _) = addOffset api bs (len - 1) sIdx
+         (retain, freeNodes)          = genericSplitAt (eInodeIdx + 1) inodes'
+         term        = last retain 
+         freeBlks    = genericDrop (eBlkOff + 1) $ blocks term
+         term'       = term
+                       { continuation = Nothing
+                       , blockCount   = eBlkOff + 1
+                       , blocks       = genericTake (eBlkOff + 1) $ blocks term
+                       }
+         retain'     = init retain ++ [term']
+         allFreeBlks = freeBlks                      -- from last inode in chain
+                       ++ concatMap blocks freeNodes -- from remaining inodes
+                       ++ map                        -- inode storage
+                            (inodeRefToBlockAddr . address)
+                            freeNodes
+
+       dbug ("eIdx        = " ++ show eIdx)        $ return ()
+       dbug ("retain'     = " ++ show retain')     $ return ()
+       dbug ("freeNodes   = " ++ show freeNodes)   $ return ()
+       dbug ("allFreeBlks = " ++ show allFreeBlks) $ return ()
+
+       -- Free all of the blocks; note that this is ugly and inefficient, but we
+       -- need to be tracking BlockGroups (or reconstitute them here by looking
+       -- for contiguous addresses in allFreeBlks) before we can do better.
+
+       BM.unallocBlocks bm $ BM.Discontig $ map (`BM.Extent` 1) allFreeBlks
+
+       -- We do not do any writes to any of the inodes that were detached from
+       -- the chain & freed; this may have implications for fsck!
+       return retain'
+     else do
+       return inodes'
+-}
+
+  let inodesUpdated = len `divCeil` bpi
+  dbug ("inodesUpdated = " ++ show inodesUpdated) $ return ()
+
+  let inodesToWrite = genericTake inodesUpdated $ genericDrop sInodeIdx inodes''
+  dbug ("inodesToWrite = " ++ show inodesToWrite) $ return ()
+
   -- Update persisted inodes from the start inode to end of write region
-  mapM_ (writeInode dev) $
-    let inodesUpdated = len `divCeil` bpi
-    in
-      dbug ("inodesUpdated = " ++ show inodesUpdated) $ 
-      genericTake inodesUpdated $ genericDrop sInodeIdx inodes'
-
+  mapM_ (writeInode dev) $ inodesToWrite
   dbug ("==== writeStream end ===") $ do
-
-  when trunc $ do fail "Inode.writeStream: truncating write NYI" -- TODO
   return $ Right ()
   where
     whenOK act f = act >>= either (return . Left) f
@@ -529,11 +562,11 @@ writeStream dev bm startIR start trunc bytes       = do
          -- Last block; retain the relevant portion of its data
          trailer <-
            if trunc
-           then return $ bsReplicate bs 0
+           then return $ bsReplicate bs truncSentinel
            else
-             dbug ("blkAddr for retention is: " ++ show blkAddr) $ 
+--             dbug ("blkAddr for retention is: " ++ show blkAddr) $ 
              bsDrop (BS.length newBlkData) `fmap` bdReadBlock dev blkAddr
-         dbug ("trailer length = " ++ show (BS.length trailer)) $ do
+--         dbug ("trailer length = " ++ show (BS.length trailer)) $ do
          let rslt = bsTake bs $ newBlkData `BS.append` trailer
          return $ Just (rslt, (remBytes, blkAddrs))
        else do
@@ -599,6 +632,59 @@ readStream dev startIR start mlen = do
     getBlock = readInodeBlock dev
     bs       = bdBlockSize dev
 
+
+--------------------------------------------------------------------------------
+-- Inode stream helper functions
+
+-- | Truncates the stream at the given stream index and length offset, and
+-- unallocates all resources in the corresponding free region
+truncUnalloc :: HalfsCapable b t r l m =>
+                BlockDevice m -- the block device
+             -> BlockMap b r  -- the block map
+             -> Word64        -- # of addrs (blocks) per inode 
+             -> StreamIdx     -- starting stream index
+             -> Word64        -- length at which to truncate
+             -> [Inode t]     -- Current inode chain
+             -> m [Inode t]   -- Truncated inode chain
+truncUnalloc dev bm api sIdx len inodes = do
+
+  -- Free all of the blocks this way is ugly and inefficient, but we need to be
+  -- tracking BlockGroups (or reconstitute them here by looking for contiguous
+  -- addresses in allFreeBlks) before we can do better.
+    
+  dbug ("eIdx        = " ++ show eIdx)        $ return ()
+  dbug ("retain'     = " ++ show retain')     $ return ()
+  dbug ("freeNodes   = " ++ show freeNodes)   $ return ()
+  dbug ("allFreeBlks = " ++ show allFreeBlks) $ return ()
+
+  BM.unallocBlocks bm $ BM.Discontig $ map (`BM.Extent` 1) allFreeBlks
+    
+  -- We do not do any writes to any of the inodes that were detached from
+  -- the chain & freed; this may have implications for fsck!
+  return retain'
+  where 
+    eIdx@(eInodeIdx, eBlkOff, _) =
+      addOffset api (bdBlockSize dev) (len - 1) sIdx
+    (retain, freeNodes) = genericSplitAt (eInodeIdx + 1) inodes
+    term                = last retain 
+    freeBlks            = genericDrop (eBlkOff + 1) $ blocks term
+    retain'             = init retain ++ [term']
+    allFreeBlks         = freeBlks                      -- from last inode
+                          ++ concatMap blocks freeNodes -- from remaining inodes
+                          ++ map                        -- inode storage
+                               (inodeRefToBlockAddr . address)
+                               freeNodes
+    term'               =
+      term { continuation = Nothing
+           , blockCount   = eBlkOff + 1
+           , blocks       = genericTake (eBlkOff + 1) $ blocks term
+           }
+    
+
+
+--------------------------------------------------------------------------------
+-- Misc utility
+
 -- | Decompose the given absolute byte offset into an inode data stream into
 -- inode index (i.e., 0-based index into sequence of Inode continuations), block
 -- offset within that inode, and byte offset within that block.
@@ -608,7 +694,7 @@ decompStreamOffset ::
   -> Word64    -- ^ Maximum number of bytes "stored" by an inode 
   -> Word64    -- ^ Offset into the inode data stream
   -> [Inode t] -- ^ The inode chain, for sanity checks
-  -> m (Word64, Word64, Word64)
+  -> m StreamIdx
 decompStreamOffset blkSizeBytes numBytesPerInode streamOff inodes =
   check $ return (inodeIdx, blkOff, byteOff)
   where
@@ -620,10 +706,20 @@ decompStreamOffset blkSizeBytes numBytesPerInode streamOff inodes =
       assert (blkCnt == 0 && blkOff == 0 || blkOff < blkCnt) $
       rslt
 
-
---------------------------------------------------------------------------------
--- Misc utility
-
+-- | Adds a byte offset to a (inode index, block index, byte index) triple
+addOffset :: Word64                   -- max blocks per inode
+          -> Word64                   -- block size, in bytes
+          -> Word64                   -- byte offset
+          -> (Word64, Word64, Word64) -- start index
+          -> (Word64, Word64, Word64) -- offset index
+addOffset blksPerInode blkSz offset (inodeIdx, blkIdx, byteIdx) =
+  (inodeIdx + inodeOff + inds, blks', b)
+  where
+    (inodeOff, inodeByteOff) = offset `divMod` (blksPerInode * blkSz)
+    (blkOff, byteOff)        = inodeByteOff `divMod` blkSz
+    (blks, b)                = (byteIdx + byteOff) `divMod` blkSz
+    (inds, blks')            = (blkIdx + blkOff + blks) `divMod` blksPerInode
+    
 -- | A wrapper around Data.Serialize.decode that populates transient fields.  We
 -- do this to avoid occupying valuable on-disk inode space where possible.  Bare
 -- applications of 'decode' should not occur when deserializing inodes.

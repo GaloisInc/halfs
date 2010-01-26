@@ -34,14 +34,18 @@ import Tests.Utils
 import Debug.Trace
 import System.Exit
 import System.IO.Unsafe (unsafePerformIO)
+
 
 --------------------------------------------------------------------------------
 -- Inode properties
 
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
-  [ -- Inode stream single write/read properties
-    exec 1 "Simple WR" propM_basicWR
+  [ -- Inode stream write/read/(over)write/read property
+--    exec 1 "Simple WRWR" propM_basicWRWR
+    -- Inode stream write/read/(truncating)write/read property
+--  ,
+  exec 100 "Truncating WRWR" propM_truncWRWR
   ]
   where
     exec = mkMemDevExec quick "Inode"
@@ -49,30 +53,58 @@ qcProps quick =
 
 --------------------------------------------------------------------------------
 -- Property Implementations
-propM_basicWR :: HalfsCapable b t r l m =>
-                  BDGeom
-               -> BlockDevice m
-               -> PropertyM m ()
-propM_basicWR _g dev = do
-  fs        <- run (newfs dev) >> mountOK dev
-  rdirIR    <- rootDir `fmap` sreadRef (hsSuperBlock fs)
-  nAddrs    <- run $ computeNumAddrsM (bdBlockSize dev)
-  let maxBlocks = safeToInt $ bdNumBlocks dev
-      bm        = hsBlockMap fs 
 
-  forAllM (choose (maxBlocks `div` 8, maxBlocks `div` 4)) $ \fillBlocks -> do
-  forAllM (choose (0, safeToInt nAddrs))                  $ \spillCnt   -> do
-  -- fillBlocks is the number of blocks to fill on the write (1/8 - 1/4 of dev)
-  -- spillCnt is the number of blocks to write into the last inode in the chain
-  let dataSz = fillBlocks * safeToInt (bdBlockSize dev) + spillCnt
-  forAllM (printableBytes dataSz) $ \testData -> do
-                          
-  trace ("\n=============================================================") $ do
-  trace ("propM_basicWR: nAddrs                 = " ++ show nAddrs)               $ do
-  trace ("propM_basicWR: fillBlocks             = " ++ show fillBlocks)           $ do
-  trace ("propM_basicWR: spillCnt               = " ++ show spillCnt)             $ do
-  trace ("propM_basicWR: dataSz                 = " ++ show dataSz)               $ do
-  trace ("propM_basicWR: length testData        = " ++ show (BS.length testData)) $ do
+propM_truncWRWR :: HalfsCapable b t r l m =>
+                   BDGeom
+                -> BlockDevice m
+                -> PropertyM m ()
+propM_truncWRWR g dev = do
+  trace ("propM_truncWRWR: geom = " ++ show g) $ do
+  fs <- run (newfs dev) >> mountOK dev
+  let bm = hsBlockMap fs 
+  rdirIR <- rootDir `fmap` sreadRef (hsSuperBlock fs)
+  withData dev $ \dataSz testData -> do
+  trace ("dataSz = " ++ show dataSz) $ do
+  
+  -- Non-truncating write
+  e1 <- run $ writeStream dev bm rdirIR 0 False testData
+  case e1 of
+    Left e  -> fail $ "writeStream failure in propM_truncWRWR: " ++ show e
+    Right _ -> do
+      -- Truncating write
+--     let dataSz'   = 10239
+      forAllM (choose (dataSz `div` 8, dataSz `div` 4)) $ \dataSz'   -> do
+      forAllM (printableBytes dataSz')                  $ \testData' -> do 
+
+--      let dataSz'   = 8
+--          testData' = BS.replicate dataSz' 0
+      trace ("dataSz' = " ++ show dataSz') $ do
+
+      e2 <- run $ writeStream dev bm rdirIR 1 True testData'
+      case e2 of
+        Left e  -> fail $ "writeStream failure in propM_truncWRWR: " ++ show e
+        Right _ -> do 
+          readBack <- run $ readStream dev rdirIR 1 Nothing
+          trace ("BS.length readBack = " ++ show (BS.length readBack)) $ do
+--          trace ("readBack = " ++ show readBack) $ do
+
+--          trace ("p1: " ++ show (bsTake dataSz' readBack == testData')) $ do
+          assert (bsTake dataSz' readBack == testData')
+
+--          trace ("p2: " ++ show (all (== truncSentinel) $ BS.unpack $ bsDrop dataSz' readBack)) $ do
+--          trace ("p2_detail: readBack remainder length = " ++ show (BS.length $ bsDrop dataSz' readBack)) $ do
+--          trace ("p2_detail: readBack remainder = " ++ show (bsDrop dataSz' readBack)) $ do
+          assert (all (== truncSentinel) $ BS.unpack $ bsDrop dataSz' readBack)
+
+propM_basicWRWR :: HalfsCapable b t r l m =>
+                   BDGeom
+                -> BlockDevice m
+                -> PropertyM m ()
+propM_basicWRWR _g dev = do
+  fs <- run (newfs dev) >> mountOK dev
+  let bm = hsBlockMap fs 
+  rdirIR <- rootDir `fmap` sreadRef (hsSuperBlock fs)
+  withData dev $ \dataSz testData -> do
 
   -- Non-truncating write & read-back
   e1 <- run $ writeStream dev bm rdirIR 0 False testData
@@ -84,22 +116,13 @@ propM_basicWR _g dev = do
       -- the end of the stream will include contents of the whole last block
       assert (testData == testData')
 
-  trace ("propM_basicWR: Non-truncating overwrite & read-back: ") $ do
+--  trace ("propM_basicWR: Non-truncating overwrite & read-back: ") $ do
 
   -- Non-truncating overwrite & read-back
---  let overwriteSz = 513
---      startByte   = 1
-
   forAllM (choose (1, dataSz `div` 2))     $ \overwriteSz -> do 
   forAllM (choose (0, dataSz `div` 2 - 1)) $ \startByte   -> do
   forAllM (printableBytes overwriteSz)     $ \newData     -> do
-
-  trace ("propM_basicWR: overwriteSz = " ++ show overwriteSz) $ do
-  trace ("propM_basicWR: startByte   = " ++ show startByte) $ do
-  -- trace ("propM_basicWR: newData     = " ++ show newData) $ do
-
   e2 <- run $ writeStream dev bm rdirIR (fromIntegral startByte) False newData
-
   case e2 of
     Left  e -> fail $ "writeStream failure in propM_basicWR: " ++ show e
     Right _ -> do
@@ -109,36 +132,21 @@ propM_basicWR _g dev = do
                      newData
                      `BS.append`
                      bsDrop (startByte + overwriteSz) testData
-      trace ("BS.length expected = " ++ show (BS.length expected)) $ do
-      trace ("BS.length readBack = " ++ show (BS.length readBack)) $ do
-
-      let t1 = bsTake startByte testData                 == bsTake startByte readBack
-          t2 = newData                                   == bsTake overwriteSz (bsDrop (startByte) readBack)
-          t3 = bsDrop (startByte + overwriteSz) testData == bsDrop (startByte + overwriteSz) readBack
-
-      trace ("Case t1: " ++ show t1) $ do
-      trace ("Case t2: " ++ show t2) $ do
-      trace ("Case t3: " ++ show t3) $ do
-
-      when (readBack /= expected) $
-        trace ("readBack /= expected, aborting") $ unsafePerformIO exitFailure
       assert (readBack == expected)
-                         
-  return ()  
 
-{-
-  -- Assumes fixed size BDGeom 512 512 !
-  let dsize    = 49*512+1 -- spill over slightly!
-      testData = BS.replicate dsize 0x65
-  ex <- run $ writeStream dev (hsBlockMap fs) rdirIR 0 False testData
-  case ex of
-    Left e  -> fail $ "writeStream failure in propM_basicWR: " ++ show e
-    Right _ -> do
-      testData' <- run $ readStream dev rdirIR 0 Nothing
-      assert (testData == BS.take dsize testData')
--}
-
-
-
-             
-  
+-- Generates random data of random size between 1/8 - 1/4 of the device
+withData :: HalfsCapable b t r l m =>
+            BlockDevice m                          -- The blk dev
+         -> (Int -> ByteString -> PropertyM m ())  -- Action
+         -> PropertyM m ()
+withData dev f = do
+  nAddrs <- run $ computeNumAddrsM (bdBlockSize dev)
+  let maxBlocks = safeToInt $ bdNumBlocks dev
+  forAllM (choose (maxBlocks `div` 8, maxBlocks `div` 4)) $ \fillBlocks -> do
+  forAllM (choose (0, safeToInt nAddrs))                  $ \spillCnt   -> do
+  -- fillBlocks is the number of blocks to fill on the write (1/8 - 1/4 of dev)
+  -- spillCnt is the number of blocks to write into the last inode in the chain
+  let dataSz = fillBlocks * safeToInt (bdBlockSize dev) + spillCnt
+--  let dataSz = safeToInt $ nAddrs * (bdBlockSize dev) + 1
+--  let dataSz = 103 * safeToInt (bdBlockSize dev) + 21
+  forAllM (printableBytes dataSz) (f dataSz)
