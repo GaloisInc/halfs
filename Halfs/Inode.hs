@@ -41,10 +41,6 @@ import Halfs.Protection
 import Halfs.Utils
 import System.Device.BlockDevice
 
-import Debug.Trace
-
-import System.IO.Unsafe (unsafePerformIO)
-
 dbug :: String -> a -> a
 --dbug   = seq . unsafePerformIO . putStrLn
 dbug _ = id
@@ -307,7 +303,6 @@ _writeInodeBlock dev n i bytes = do
 writeInode :: (Ord t, Serialize t, Monad m, Show t) =>
               BlockDevice m -> Inode t -> m ()
 writeInode dev n =
---  dbug ("Writing inode: " ++ show n) $
   bdWriteBlock dev (inodeRefToBlockAddr $ address n) (encode n)
 
 -- | Expands the given inode into an inode list containing itself followed by
@@ -342,10 +337,9 @@ writeStream _ _ _ _ _ bytes | 0 == BS.length bytes = return $ Right ()
 writeStream dev bm startIR start trunc bytes       = do
   -- TODO: locking
 
-  -- TODO: Error handling: the start offset can be exactly at the end of
-  -- the stream, but not beyond it so as not to introduce "gaps" -- this
-  -- is currently an assertion in decompParanoid but it should be a
-  -- proper error here.
+  -- TODO: Error handling: the start offset can be exactly at the end of the
+  -- stream, but not beyond it -- this is currently an assertion in
+  -- decompStreamOffset but it should be a proper error here.
 
   -- NB: This implementation currently 'flattens' Contig/Discontig block groups
   -- from the BlockMap allocator, which will force us to treat them as Discontig
@@ -354,10 +348,8 @@ writeStream dev bm startIR start trunc bytes       = do
   -- unallocation actions required, but we'll leave this as a TODO for now.
 
   startInode <- drefInode dev startIR
-
-  -- Compute (block) addrs per inode (api) and decompose the start byte offset
-  api <- computeNumAddrsM bs
-  let bpi = bs * api
+  api        <- computeNumAddrsM bs -- (block) addrs per inode
+  bpi        <- return $ bs * api   -- bytes per inode
 
   -- NB: expandConts is probably not viable once inode chains get large, but
   -- neither is the continuation scheme in general.  Revisit after stuff is
@@ -398,11 +390,9 @@ writeStream dev bm startIR start trunc bytes       = do
 --  dbug ("inodes' = " ++ show inodes') $ do
   
   let stInode = (inodes' !! safeToInt sInodeIdx)
-
   sBlk <- readInodeBlock dev stInode sBlkOff
 
   let (sData, bytes') = bsSplitAt (bs - sByteOff) bytes
-
       -- The first block-sized chunk to write is the region in the start block
       -- prior to the start byte offset (header), followed by the first bytes of
       -- the data.  The trailer is nonempty and must be included when BS.length
@@ -422,7 +412,6 @@ writeStream dev bm startIR start trunc bytes       = do
 
   chunks <- (firstChunk:) `fmap`
             unfoldrM getBlockContents (bytes', drop 1 blkAddrs)
-
 {-
   forM chunks $ \chunk ->
     dbug ("chunk: " ++ show chunk) $ return ()
@@ -484,8 +473,6 @@ writeStream dev bm startIR start trunc bytes       = do
        else do
          whenOK (allocInodes inodesToAlloc usr grp) $ \newInodes -> do
          whenOK (allocBlocks blksToAlloc)           $ \blks      -> do
-         -- dbug ("newInodes = " ++ show newInodes) $ do              
-         -- dbug ("allocated blks = " ++ show blks) $ do
 
          -- Fixup continuation fields and form the region that we'll fill with
          -- the newly allocated blocks (i.e., starting at the last inode but
@@ -526,9 +513,7 @@ writeStream dev bm startIR start trunc bytes       = do
            if trunc
            then return $ bsReplicate bs truncSentinel
            else
---             dbug ("blkAddr for retention is: " ++ show blkAddr) $ 
              bsDrop (BS.length newBlkData) `fmap` bdReadBlock dev blkAddr
---         dbug ("trailer length = " ++ show (BS.length trailer)) $ do
          let rslt = bsTake bs $ newBlkData `BS.append` trailer
          return $ Just (rslt, (remBytes, blkAddrs))
        else do
@@ -565,8 +550,6 @@ readStream dev startIR start mlen = do
   case mlen of
     Just len | len == 0 -> return BS.empty
     _                   -> do
-      dbug (show mlen) $ do
-      dbug ("inodes = " ++ show inodes) $ do
       case genericDrop sInodeIdx inodes of
         [] -> fail "Inode.readStream internal error: invalid start inode index"
         (inode:rest) -> do
@@ -577,18 +560,15 @@ readStream dev startIR start mlen = do
           header <- do
             let remBlks = calcRemBlks inode (+ sByteOff)
                           -- +sByteOff to force rounding for partial blocks
-                range   = [sBlkOff .. min (blockCount inode - 1) (sBlkOff + remBlks - 1)]
-            dbug ("sBlkOff = " ++ show sBlkOff ++ ", remBlks = " ++ show remBlks ++ ", range = " ++ show range) $ do
+                range   = let lastIdx = blockCount inode - 1 in 
+                          [ sBlkOff .. min lastIdx (sBlkOff + remBlks - 1) ]
             (blk:blks) <- mapM (readBlock inode) range
             return $ bsDrop sByteOff blk `BS.append` BS.concat blks
       
-          dbug ("read header: length is " ++ show (BS.length header)) $ do
-          dbug ("# remaining inodes = " ++ show (length rest)) $ do
-    
           -- 'fullBlocks' is the remaining content from all remaining inodes,
           -- accounting for the possible upper bound on the length of the data
           -- returned.
-          (fullBlocks, readCnt) <-
+          (fullBlocks, _readCnt) <-
             foldM
               (\(acc, bytesSoFar) inode' -> do
                  let remBlks = calcRemBlks inode' (flip (-) bytesSoFar) 

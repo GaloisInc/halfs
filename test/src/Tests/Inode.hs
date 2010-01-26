@@ -23,8 +23,6 @@ import Tests.Instances           (printableBytes)
 import Tests.Types
 import Tests.Utils
 
-import Debug.Trace
-
 
 --------------------------------------------------------------------------------
 -- Inode properties
@@ -47,71 +45,7 @@ qcProps quick =
 --------------------------------------------------------------------------------
 -- Property Implementations
 
-propM_lengthWR :: HalfsCapable b t r l m =>
-                  BDGeom
-               -> BlockDevice m
-               -> PropertyM m ()
-propM_lengthWR g dev = do
-  trace ("g = " ++ show g) $ do
-  withFSData dev $ \bm rdirIR dataSz testData -> do 
-  e1 <- run $ writeStream dev bm rdirIR 0 False testData
-  case e1 of
-    Left e  -> fail $ "writeStream failure in propM_lengthWR: " ++ show e
-    Right _ -> do
-      -- If possible, read a minimum of one full inode + 1 byte worth of data
-      -- into the next inode to push on boundary conditions & spill arithmetic.
-      trace ("total stream size = " ++ show dataSz) $ do
-      blksPerInode <- run $ computeNumAddrsM (bdBlockSize dev)
-      let bs         = bdBlockSize dev
-          minReadLen = min dataSz (fromIntegral $ blksPerInode * bs)
-      trace ("minReadLen = " ++ show minReadLen) $ do
-      forAllM (choose (minReadLen, dataSz))  $ \readLen  -> do
-      forAllM (choose (0, dataSz - 1))       $ \startIdx -> do
-      let readLen' = min readLen (dataSz - startIdx)
-          stIdxW64 = fromIntegral startIdx
-      trace ("readLen = " ++ show readLen) $ do                         
-      trace ("readLen' = " ++ show readLen') $ do                         
-
-      ubRead <- run $ readStream dev rdirIR stIdxW64 (Just $ fromIntegral readLen')
---      trace ("ubRead = " ++ show ubRead) $ do 
-      assert (ubRead == bsTake readLen' (bsDrop startIdx testData))
---      ubRead <- run $ readStream dev rdirIR 0 (Just $ fromIntegral readLen)
---      assert (ubRead == bsTake readLen testData)
-
-
-      -- :END SCRATCH
-
-propM_truncWRWR :: HalfsCapable b t r l m =>
-                   BDGeom
-                -> BlockDevice m
-                -> PropertyM m ()
-propM_truncWRWR g dev = do
-  withFSData dev $ \bm rdirIR dataSz testData -> do 
-  -- Non-truncating write
-  e1 <- run $ writeStream dev bm rdirIR 0 False testData
-  case e1 of
-    Left e  -> fail $ "writeStream failure in propM_truncWRWR: " ++ show e
-    Right _ -> do
-      forAllM (choose (dataSz `div` 8, dataSz `div` 4)) $ \dataSz'   -> do
-      forAllM (printableBytes dataSz')                  $ \testData' -> do 
-      freeBlks <- sreadRef (bmNumFree bm) -- Free blks before truncate
-
-      -- Truncating write
-      e2 <- run $ writeStream dev bm rdirIR 1 True testData'
-      case e2 of
-        Left e  -> fail $ "writeStream failure in propM_truncWRWR: " ++ show e
-        Right _ -> do 
-          -- Read until the end of the stream and check truncation       
-          readBack <- run $ readStream dev rdirIR 1 Nothing
-          assert (bsTake dataSz' readBack == testData')
-          assert (all (== truncSentinel) $ BS.unpack $ bsDrop dataSz' readBack)
-          -- Sanity check the BlockMap' free count
-          freeBlks' <- sreadRef (bmNumFree bm)
-          let minExpectedFree = -- also may have frees on inode storage, so this
-                                -- is just a lower bound sanity check
-                (dataSz - dataSz') `div` (fromIntegral $ bdBlockSize dev)
-          assert (minExpectedFree <= fromIntegral (freeBlks' - freeBlks))
-                 
+-- | Tests basic write/reads & overwrites
 propM_basicWRWR :: HalfsCapable b t r l m =>
                    BDGeom
                 -> BlockDevice m
@@ -143,6 +77,66 @@ propM_basicWRWR _g dev = do
                      `BS.append`
                      bsDrop (startByte + overwriteSz) testData
       assert (readBack == expected)
+
+-- | Tests truncate writes and read-backs of random size
+propM_truncWRWR :: HalfsCapable b t r l m =>
+                   BDGeom
+                -> BlockDevice m
+                -> PropertyM m ()
+propM_truncWRWR _g dev = do
+  withFSData dev $ \bm rdirIR dataSz testData -> do 
+  -- Non-truncating write
+  e1 <- run $ writeStream dev bm rdirIR 0 False testData
+  case e1 of
+    Left e  -> fail $ "writeStream failure in propM_truncWRWR: " ++ show e
+    Right _ -> do
+      forAllM (choose (dataSz `div` 8, dataSz `div` 4)) $ \dataSz'   -> do
+      forAllM (printableBytes dataSz')                  $ \testData' -> do 
+      freeBlks <- sreadRef (bmNumFree bm) -- Free blks before truncate
+
+      -- Truncating write
+      e2 <- run $ writeStream dev bm rdirIR 1 True testData'
+      case e2 of
+        Left e  -> fail $ "writeStream failure in propM_truncWRWR: " ++ show e
+        Right _ -> do 
+          -- Read until the end of the stream and check truncation       
+          readBack <- run $ readStream dev rdirIR 1 Nothing
+          assert (bsTake dataSz' readBack == testData')
+          assert (all (== truncSentinel) $ BS.unpack $ bsDrop dataSz' readBack)
+          -- Sanity check the BlockMap' free count
+          freeBlks' <- sreadRef (bmNumFree bm)
+          let minExpectedFree = -- also may have frees on inode storage, so this
+                                -- is just a lower bound sanity check
+                (dataSz - dataSz') `div` (fromIntegral $ bdBlockSize dev)
+          assert (minExpectedFree <= fromIntegral (freeBlks' - freeBlks))
+                 
+-- | Tests bounded reads of random offset and length
+propM_lengthWR :: HalfsCapable b t r l m =>
+                  BDGeom
+               -> BlockDevice m
+               -> PropertyM m ()
+propM_lengthWR _g dev = do
+  withFSData dev $ \bm rdirIR dataSz testData -> do 
+  e1 <- run $ writeStream dev bm rdirIR 0 False testData
+  case e1 of
+    Left e  -> fail $ "writeStream failure in propM_lengthWR: " ++ show e
+    Right _ -> do
+      -- If possible, read a minimum of one full inode + 1 byte worth of data
+      -- into the next inode to push on boundary conditions & spill arithmetic.
+
+      blksPerInode <- run $ computeNumAddrsM (bdBlockSize dev)
+      let bs         = bdBlockSize dev
+          minReadLen = min dataSz (fromIntegral $ blksPerInode * bs)
+
+      forAllM (choose (minReadLen, dataSz))  $ \readLen  -> do
+      forAllM (choose (0, dataSz - 1))       $ \startIdx -> do
+
+      let readLen' = min readLen (dataSz - startIdx)
+          stIdxW64 = fromIntegral startIdx
+
+      readBack <- run $
+                  readStream dev rdirIR stIdxW64 (Just $ fromIntegral readLen')
+      assert (readBack == bsTake readLen' (bsDrop startIdx testData))
 
 withFSData :: HalfsCapable b t r l m =>
               BlockDevice m
