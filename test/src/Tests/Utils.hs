@@ -98,8 +98,8 @@ mountOK :: HalfsCapable b t r l m =>
            BlockDevice m
         -> PropertyM m (Halfs b r m l)
 mountOK dev =
-  run (mount dev)
-  >>= either (fail . (++) "Unexpected mount failure: " . show) (return)
+  run (mount dev) >>=
+  either (fail . (++) "Unexpected mount failure: " . show) (return)
 
 sreadRef :: HalfsCapable b t r l m => r a -> PropertyM m a
 sreadRef = ($!) (run . readRef)

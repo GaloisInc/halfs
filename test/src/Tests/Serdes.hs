@@ -35,7 +35,6 @@ qcProps quick =
   , serdes prop_serdes       100 "UTCTime"        (arbitrary :: Gen UTCTime) 
   , serdes prop_serdes       100 "DirectoryEntry" (arbitrary :: Gen DirectoryEntry)
   , mkMemDevExec quick "Serdes" 100 "Inode" propM_inodeSerdes
---  , serdes prop_serdes_inode 100 "Inode UTCTime"  (arbitrary :: Gen (Inode UTCTime))
   ]
   where
     numTests n      = (,) $ if quick then stdArgs{maxSuccess = n} else stdArgs
@@ -50,6 +49,11 @@ propM_inodeSerdes :: Timed UTCTime m =>
                   -> BlockDevice m
                   -> PropertyM m ()
 propM_inodeSerdes _g dev = 
-  forAllM (arbitrary :: Gen (Inode UTCTime)) $ \inode -> 
+  forAllM (arbitrary :: Gen (Inode UTCTime)) $ \inode -> do 
+  -- Obtain the expected value inode's numAddrs field post-decoding, based on
+  -- dev's geometry instead of the one the inode generator uses, which is
+  -- arbitrary.
+  nAddrs <- computeNumAddrs (bdBlockSize dev) =<<
+            minimalInodeSize (createTime inode)
   run (decodeInode (bdBlockSize dev) (encode inode)) >>=
-    assert . either (const False) (== inode)
+    assert . either (const False) (== inode { numAddrs = nAddrs })

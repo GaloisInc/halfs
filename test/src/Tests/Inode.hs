@@ -126,7 +126,7 @@ propM_lengthWR _g dev = do
 
       blksPerInode <- run $ computeNumAddrsM (bdBlockSize dev)
       let bs         = bdBlockSize dev
-          minReadLen = min dataSz (fromIntegral $ blksPerInode * bs)
+          minReadLen = min dataSz (fromIntegral $ blksPerInode * bs + 1)
 
       forAllM (choose (minReadLen, dataSz))  $ \readLen  -> do
       forAllM (choose (0, dataSz - 1))       $ \startIdx -> do

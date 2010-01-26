@@ -574,7 +574,9 @@ readStream dev startIR start mlen = do
                  let remBlks = calcRemBlks inode' (flip (-) bytesSoFar) 
                      range   = if remBlks > 0 then [0..remBlks - 1] else []
                  blks <- mapM (readBlock inode') range
-                 return (acc `BS.append` BS.concat blks, bytesSoFar + remBlks * bs)
+                 return ( acc `BS.append` BS.concat blks
+                        , bytesSoFar + remBlks * bs
+                        )
               )
               (BS.empty, fromIntegral $ BS.length header) rest
           dbug ("==== readStream end ===") $ do
