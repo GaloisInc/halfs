@@ -23,6 +23,8 @@ import Tests.Instances           (printableBytes)
 import Tests.Types
 import Tests.Utils
 
+import Debug.Trace
+
 
 --------------------------------------------------------------------------------
 -- Inode properties
@@ -30,10 +32,12 @@ import Tests.Utils
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [ -- Inode stream write/read/(over)write/read property
-    exec 50 "Simple WRWR" propM_basicWRWR
-  ,
+--   exec 1 "Simple WRWR" propM_basicWRWR
+-- ,
     -- Inode stream write/read/(truncating)write/read property
-    exec 50 "Truncating WRWR" propM_truncWRWR
+--    exec 1 "Truncating WRWR" propM_truncWRWR
+    -- Inode length-specific stream write/read
+    exec 100 "Length-specific WR" propM_lengthWR
   ]
   where
     exec = mkMemDevExec quick "Inode"
@@ -42,16 +46,36 @@ qcProps quick =
 --------------------------------------------------------------------------------
 -- Property Implementations
 
+propM_lengthWR :: HalfsCapable b t r l m =>
+                  BDGeom
+               -> BlockDevice m
+               -> PropertyM m ()
+propM_lengthWR g dev = do
+  trace ("g = " ++ show g) $ do
+  withFSData dev $ \bm rdirIR dataSz testData -> do 
+  e1 <- run $ writeStream dev bm rdirIR 0 False testData
+  case e1 of
+    Left e  -> fail $ "writeStream failure in propM_lengthWR: " ++ show e
+    Right _ -> do
+      -- BEGIN SCRATCH:
+      trace ("complete size of stream = " ++ show dataSz) $ do
+      blksPerInode <- run $ computeNumAddrsM (bdBlockSize dev)
+      trace ("blksPerInode = " ++ show blksPerInode) $ do
+      trace ("#(inodes,remBlks) = " ++ show (dataSz `divMod` fromIntegral blksPerInode)) $ do
+      let readLen = (min dataSz (fromIntegral $ blksPerInode * bdBlockSize dev))
+      trace ("readLen = " ++ show readLen) $ do
+      ubRead <- run $ readStream dev rdirIR 0 (Just $ fromIntegral readLen)
+      trace ("length ubRead = " ++ show (BS.length ubRead)) $ do
+      trace ("p1 = " ++ show (ubRead == bsTake readLen testData)) $ do
+      assert (ubRead == bsTake readLen testData)
+      -- :END SCRATCH
+
 propM_truncWRWR :: HalfsCapable b t r l m =>
                    BDGeom
                 -> BlockDevice m
                 -> PropertyM m ()
-propM_truncWRWR _g dev = do
-  fs <- run (newfs dev) >> mountOK dev
-  let bm = hsBlockMap fs 
-  rdirIR <- rootDir `fmap` sreadRef (hsSuperBlock fs)
-  withData dev $ \dataSz testData -> do
-
+propM_truncWRWR g dev = do
+  withFSData dev $ \bm rdirIR dataSz testData -> do 
   -- Non-truncating write
   e1 <- run $ writeStream dev bm rdirIR 0 False testData
   case e1 of
@@ -76,17 +100,13 @@ propM_truncWRWR _g dev = do
                                 -- is just a lower bound sanity check
                 (dataSz - dataSz') `div` (fromIntegral $ bdBlockSize dev)
           assert (minExpectedFree <= fromIntegral (freeBlks' - freeBlks))
-
+                 
 propM_basicWRWR :: HalfsCapable b t r l m =>
                    BDGeom
                 -> BlockDevice m
                 -> PropertyM m ()
 propM_basicWRWR _g dev = do
-  fs <- run (newfs dev) >> mountOK dev
-  let bm = hsBlockMap fs 
-  rdirIR <- rootDir `fmap` sreadRef (hsSuperBlock fs)
-  withData dev $ \dataSz testData -> do
-
+  withFSData dev $ \bm rdirIR dataSz testData -> do 
   -- Non-truncating write & read-back
   e1 <- run $ writeStream dev bm rdirIR 0 False testData
   case e1 of
@@ -112,6 +132,16 @@ propM_basicWRWR _g dev = do
                      `BS.append`
                      bsDrop (startByte + overwriteSz) testData
       assert (readBack == expected)
+
+withFSData :: HalfsCapable b t r l m =>
+              BlockDevice m
+           -> (BlockMap b r -> InodeRef -> Int -> ByteString -> PropertyM m ())
+           -> PropertyM m ()
+withFSData dev f = do
+  fs <- run (newfs dev) >> mountOK dev
+  let bm = hsBlockMap fs 
+  rdirIR <- rootDir `fmap` sreadRef (hsSuperBlock fs)
+  withData dev $ f bm rdirIR 
 
 -- Generates random data of random size between 1/8 - 1/4 of the device
 withData :: HalfsCapable b t r l m =>
