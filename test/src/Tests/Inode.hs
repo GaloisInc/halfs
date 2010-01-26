@@ -32,12 +32,13 @@ import Debug.Trace
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [ -- Inode stream write/read/(over)write/read property
---   exec 1 "Simple WRWR" propM_basicWRWR
--- ,
+    exec 10 "Simple WRWR" propM_basicWRWR
+  ,
     -- Inode stream write/read/(truncating)write/read property
---    exec 1 "Truncating WRWR" propM_truncWRWR
+    exec 10 "Truncating WRWR" propM_truncWRWR
+  ,
     -- Inode length-specific stream write/read
-    exec 100 "Length-specific WR" propM_lengthWR
+    exec 10 "Length-specific WR" propM_lengthWR
   ]
   where
     exec = mkMemDevExec quick "Inode"
@@ -57,17 +58,27 @@ propM_lengthWR g dev = do
   case e1 of
     Left e  -> fail $ "writeStream failure in propM_lengthWR: " ++ show e
     Right _ -> do
-      -- BEGIN SCRATCH:
-      trace ("complete size of stream = " ++ show dataSz) $ do
+      -- If possible, read a minimum of one full inode + 1 byte worth of data
+      -- into the next inode to push on boundary conditions & spill arithmetic.
+      trace ("total stream size = " ++ show dataSz) $ do
       blksPerInode <- run $ computeNumAddrsM (bdBlockSize dev)
-      trace ("blksPerInode = " ++ show blksPerInode) $ do
-      trace ("#(inodes,remBlks) = " ++ show (dataSz `divMod` fromIntegral blksPerInode)) $ do
-      let readLen = (min dataSz (fromIntegral $ blksPerInode * bdBlockSize dev))
-      trace ("readLen = " ++ show readLen) $ do
-      ubRead <- run $ readStream dev rdirIR 0 (Just $ fromIntegral readLen)
-      trace ("length ubRead = " ++ show (BS.length ubRead)) $ do
-      trace ("p1 = " ++ show (ubRead == bsTake readLen testData)) $ do
-      assert (ubRead == bsTake readLen testData)
+      let bs         = bdBlockSize dev
+          minReadLen = min dataSz (fromIntegral $ blksPerInode * bs)
+      trace ("minReadLen = " ++ show minReadLen) $ do
+      forAllM (choose (minReadLen, dataSz))  $ \readLen  -> do
+      forAllM (choose (0, dataSz - 1))       $ \startIdx -> do
+      let readLen' = min readLen (dataSz - startIdx)
+          stIdxW64 = fromIntegral startIdx
+      trace ("readLen = " ++ show readLen) $ do                         
+      trace ("readLen' = " ++ show readLen') $ do                         
+
+      ubRead <- run $ readStream dev rdirIR stIdxW64 (Just $ fromIntegral readLen')
+--      trace ("ubRead = " ++ show ubRead) $ do 
+      assert (ubRead == bsTake readLen' (bsDrop startIdx testData))
+--      ubRead <- run $ readStream dev rdirIR 0 (Just $ fromIntegral readLen)
+--      assert (ubRead == bsTake readLen testData)
+
+
       -- :END SCRATCH
 
 propM_truncWRWR :: HalfsCapable b t r l m =>
@@ -156,4 +167,5 @@ withData dev f = do
   -- fillBlocks is the number of blocks to fill on the write (1/8 - 1/4 of dev)
   -- spillCnt is the number of blocks to write into the last inode in the chain
   let dataSz = fillBlocks * safeToInt (bdBlockSize dev) + spillCnt
+--  let dataSz = 64535
   forAllM (printableBytes dataSz) (f dataSz)

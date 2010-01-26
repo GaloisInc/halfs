@@ -161,8 +161,8 @@ instance Arbitrary BDGeom where
     <*> powTwo  9 12   -- 512b..4K sector size
                        -- => 512K .. 32M filesystem size
 
--- instance Arbitrary BDGeom where
---   arbitrary = return $ BDGeom 512 512
+--instance Arbitrary BDGeom where
+--  arbitrary = return $ BDGeom 512 512
 
 -- Generate an arbitrary version 1 superblock with coherent free and
 -- used block counts.  Block size and count are constrained by the
