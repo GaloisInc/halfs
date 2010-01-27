@@ -283,242 +283,7 @@ emptyInode nAddrs createTm modTm me mommy usr grp =
 
 
 --------------------------------------------------------------------------------
--- Inode utility functions
-
--- | Reads the contents of the given inode's ith block
-readInodeBlock :: (Ord t, Serialize t, Monad m) =>
-                  BlockDevice m -> Inode t -> Word64 -> m ByteString
-readInodeBlock dev n i = do 
-  assert (i < blockCount n) $ return ()
-  bdReadBlock dev (blocks n !! safeToInt i)
-
--- | Writes to the given inode's ith block
-_writeInodeBlock :: (Ord t, Serialize t, Monad m) =>
-                    BlockDevice m -> Inode t -> Word64 -> ByteString -> m ()
-_writeInodeBlock dev n i bytes = do 
-  assert (BS.length bytes == safeToInt (bdBlockSize dev)) $ return ()
-  bdWriteBlock dev (blocks n !! safeToInt i) bytes
-
--- Writes the given inode to its block address
-writeInode :: (Ord t, Serialize t, Monad m, Show t) =>
-              BlockDevice m -> Inode t -> m ()
-writeInode dev n =
-  bdWriteBlock dev (inodeRefToBlockAddr $ address n) (encode n)
-
--- | Expands the given inode into an inode list containing itself followed by
--- all of its continuation inodes
-expandConts :: (Serialize t, Timed t m, Functor m) =>
-               BlockDevice m -> Inode t -> m [Inode t]
-expandConts _   inode@Inode{ continuation = Nothing      } = return [inode]
-expandConts dev inode@Inode{ continuation = Just nextRef } = 
-  (inode:) `fmap` (drefInode dev nextRef >>= expandConts dev)
-
-drefInode :: (Serialize t, Timed t m, Functor m) =>
-             BlockDevice m -> InodeRef -> m (Inode t)
-drefInode dev (IR addr) = do
-  einode <- bdReadBlock dev addr >>= decodeInode (bdBlockSize dev)
-  case einode of
-    Left s  -> fail $ "drefInode decode failure: " ++ s
-    Right r -> return r
-
--- | Writes to the inode stream at the given starting inode and starting byte
--- offset, overwriting data and allocating new space on disk as needed.  If the
--- write is a truncating write, all resources after the end of the written data
--- are freed.
-writeStream :: HalfsCapable b t r l m =>
-               BlockDevice m -- ^ The block device
-            -> BlockMap b r  -- ^ The block map
-            -> InodeRef      -- ^ Starting inode ref
-            -> Word64        -- ^ Starting stream (byte) offset
-            -> Bool          -- ^ Truncating write?
-            -> ByteString    -- ^ Data to write
-            -> m (Either HalfsError ())
-writeStream _ _ _ _ _ bytes | 0 == BS.length bytes = return $ Right ()
-writeStream dev bm startIR start trunc bytes       = do
-  -- TODO: locking
-
-  -- TODO: Error handling: the start offset can be exactly at the end of the
-  -- stream, but not beyond it -- this is currently an assertion in
-  -- decompStreamOffset but it should be a proper error here.
-
-  -- NB: This implementation currently 'flattens' Contig/Discontig block groups
-  -- from the BlockMap allocator, which will force us to treat them as Discontig
-  -- when we unalloc.  We may want to have the inodes hold onto these block
-  -- groups directly and split/merge them as needed to reduce the number of
-  -- unallocation actions required, but we'll leave this as a TODO for now.
-
-  startInode <- drefInode dev startIR
-  api        <- computeNumAddrsM bs -- (block) addrs per inode
-  bpi        <- return $ bs * api   -- bytes per inode
-
-  -- NB: expandConts is probably not viable once inode chains get large, but
-  -- neither is the continuation scheme in general.  Revisit after stuff is
-  -- working.
-  inodes                              <- expandConts dev startInode
-  sIdx@(sInodeIdx, sBlkOff, sByteOff) <- decompStreamOffset bs bpi start inodes
-
-  dbug ("==== writeStream begin ===") $ do
-  dbug ("addrs per inode           = " ++ show api)                            $ do
-  dbug ("inodeIdx, blkIdx, byteIdx = " ++ show (sInodeIdx, sBlkOff, sByteOff)) $ do
-  dbug ("inodes                    = " ++ show inodes)                         $ do
-
-  -- Determine how much space we need to allocate for the data, if any
-  let allocdInBlk   = if sBlkOff < blockCount startInode
-                      then bs else 0
-      allocdInNode  = if sBlkOff + 1 < blockCount startInode
-                      then bs * (blockCount startInode - sBlkOff - 1) else 0
-      allocdInConts = sum $ map ((*bs) . blockCount) $
-                      genericDrop (sInodeIdx + 1) inodes
-      alreadyAllocd = allocdInBlk + allocdInNode + allocdInConts
-      bytesToAlloc  = if alreadyAllocd > len then 0 else len - alreadyAllocd
-      blksToAlloc   = bytesToAlloc `divCeil` bs
-      inodesToAlloc = (blksToAlloc - availBlks (last inodes)) `divCeil` api
-      (u, g)        = (user startInode, group startInode)
-      availBlks :: forall t. (Ord t, Serialize t) => Inode t -> Word64
-      availBlks n   = api - blockCount n
-
-  dbug ("allocdInBlk          = " ++ show allocdInBlk)            $ do
-  dbug ("allocdInNode         = " ++ show allocdInNode)           $ do
-  dbug ("allocdInConts        = " ++ show allocdInConts)          $ do
-  dbug ("alreadyAllocd        = " ++ show alreadyAllocd)          $ do
-  dbug ("bytesToAlloc         = " ++ show bytesToAlloc)           $ do
-  dbug ("blksToAlloc          = " ++ show blksToAlloc)            $ do
-  dbug ("inodesToAlloc        = " ++ show inodesToAlloc)          $ do
-
-  let doAllocs = allocAndFill availBlks blksToAlloc inodesToAlloc u g inodes
-  whenOK doAllocs $ \inodes' -> do 
---  dbug ("inodes' = " ++ show inodes') $ do
-  
-  let stInode = (inodes' !! safeToInt sInodeIdx)
-  sBlk <- readInodeBlock dev stInode sBlkOff
-
-  let (sData, bytes') = bsSplitAt (bs - sByteOff) bytes
-      -- The first block-sized chunk to write is the region in the start block
-      -- prior to the start byte offset (header), followed by the first bytes of
-      -- the data.  The trailer is nonempty and must be included when BS.length
-      -- bytes < bs.
-      firstChunk =
-        let header   = bsTake sByteOff sBlk
-            trailLen = sByteOff + fromIntegral (BS.length sData)
-            trailer  = if trunc
-                       then bsReplicate (bs - trailLen) truncSentinel
-                       else bsDrop trailLen sBlk
-            r        = header `BS.append` sData `BS.append` trailer
-        in assert (fromIntegral (BS.length r) == bs) r
-
-      -- Destination block addresses starting at the the start block
-      blkAddrs = genericDrop sBlkOff (blocks stInode)
-                 ++ concatMap blocks (genericDrop (sInodeIdx + 1) inodes')
-
-  chunks <- (firstChunk:) `fmap`
-            unfoldrM getBlockContents (bytes', drop 1 blkAddrs)
-{-
-  forM chunks $ \chunk ->
-    dbug ("chunk: " ++ show chunk) $ return ()
-  dbug ("blkAddrs     = " ++ show blkAddrs)          $ do
-  dbug ("len blkAddrs = " ++ show (length blkAddrs)) $ do
-  dbug ("len chunks   = " ++ show (length chunks))   $ do
--}
-  assert (all ((== safeToInt bs) . BS.length) chunks) $ do
-
-  -- Write the remaining blocks
-  mapM_ (uncurry $ bdWriteBlock dev) (blkAddrs `zip` chunks)
-               
-  -- If this is a truncating write, fix up the chain terminator & free all
-  -- blocks & inodes in the free region
-  inodes'' <- if trunc
-              then truncUnalloc dev bm api sIdx len inodes'
-              else return inodes'
-
-  let inodesUpdated = len `divCeil` bpi
-  dbug ("inodesUpdated = " ++ show inodesUpdated) $ return ()
-
-  -- Update persisted inodes from the start inode to end of write region
-  mapM_ (writeInode dev) $
-    genericTake inodesUpdated $ genericDrop sInodeIdx inodes''
-
-  dbug ("==== writeStream end ===") $ do
-  return $ Right ()
-  where
-    whenOK act f = act >>= either (return . Left) f
-    bs           = bdBlockSize dev
-    len          = fromIntegral $ BS.length bytes
-
-    -- 
-    allocBlocks n = do -- currently "flattens" BlockGroup; see above comment
-      mbg <- BM.allocBlocks bm n
-      case mbg of
-        Nothing -> return $ Left HalfsAllocFailed
-        Just bg -> return $ Right $ BM.blkRangeBG bg
-
-    -- 
-    allocInodes n u g =
-      if 0 == n
-      then return $ Right []
-      else do
-        minodes <- fmap sequence $ replicateM (safeToInt n) $ do
-                     mir <- (fmap . fmap) blockAddrToInodeRef (BM.alloc1 bm)
-                     case mir of
-                       Nothing -> return Nothing
-                       Just ir -> Just
-                                  `fmap` buildEmptyInode dev ir nilInodeRef u g
-        maybe (return $ Left HalfsAllocFailed) (return . Right) minodes
-
-    -- Allocate the given number of blocks, and fill them into the inodes' block
-    -- lists, allocating new inodes as needed.  The result is the final inode
-    -- chain to write data into.
-    allocAndFill avail blksToAlloc inodesToAlloc usr grp existingInodes = 
-      if blksToAlloc == 0
-       then return (Right existingInodes)
-       else do
-         whenOK (allocInodes inodesToAlloc usr grp) $ \newInodes -> do
-         whenOK (allocBlocks blksToAlloc)           $ \blks      -> do
-
-         -- Fixup continuation fields and form the region that we'll fill with
-         -- the newly allocated blocks (i.e., starting at the last inode but
-         -- including the newly allocated inodes as well).
-         let (_, region) = foldr (\inode (cont, acc) ->
-                                    ( Just $ address inode
-                                    , inode{ continuation = cont } : acc
-                                    )
-                                 )
-                                 (Nothing, [])
-                                 (last existingInodes : newInodes)
-         -- "Spill" the allocated blocks into the empty region
-         let (blks', k)                   = foldl fillBlks (blks, id) region
-             inodes'                      = init existingInodes ++ k []
-             fillBlks (remBlks, k') inode =
-               let cnt    = min (safeToInt $ avail inode) (length remBlks)
-                   inode' =
-                     inode { blockCount = blockCount inode + fromIntegral cnt
-                           , blocks     = blocks inode ++ take cnt remBlks
-                           }
-               in
-                 (drop cnt remBlks, k' . (inode':))
-
-         assert (null blks') $ return ()
-         assert (length inodes' >= length existingInodes) $ return ()
-         return (Right inodes')
-
-    -- Splits the input bytestring into block-sized chunks; may read from the
-    -- block device to preserve some block contents as needed
-    getBlockContents (s, _) | BS.null s    = return Nothing
-    getBlockContents (_, [])               = return Nothing
-    getBlockContents (s, blkAddr:blkAddrs) = do
-      let (newBlkData, remBytes) = bsSplitAt bs s
-      if BS.null remBytes
-       then do
-         -- Last block; retain the relevant portion of its data
-         trailer <-
-           if trunc
-           then return $ bsReplicate bs truncSentinel
-           else
-             bsDrop (BS.length newBlkData) `fmap` bdReadBlock dev blkAddr
-         let rslt = bsTake bs $ newBlkData `BS.append` trailer
-         return $ Just (rslt, (remBytes, blkAddrs))
-       else do
-         -- Full block; nothing to see here
-         return $ Just (newBlkData, (remBytes, blkAddrs))
+-- Inode stream functions
 
 -- | Provides a stream over the bytes governed by a given Inode and its
 -- continuations.
@@ -592,9 +357,206 @@ readStream dev startIR start mlen = do
         Nothing  -> blockCount inode
         Just len -> min (blockCount inode) $ f len `divCeil` bs
 
+-- | Writes to the inode stream at the given starting inode and starting byte
+-- offset, overwriting data and allocating new space on disk as needed.  If the
+-- write is a truncating write, all resources after the end of the written data
+-- are freed.
+writeStream :: HalfsCapable b t r l m =>
+               BlockDevice m -- ^ The block device
+            -> BlockMap b r  -- ^ The block map
+            -> InodeRef      -- ^ Starting inode ref
+            -> Word64        -- ^ Starting stream (byte) offset
+            -> Bool          -- ^ Truncating write?
+            -> ByteString    -- ^ Data to write
+            -> m (Either HalfsError ())
+writeStream _ _ _ _ _ bytes | 0 == BS.length bytes = return $ Right ()
+writeStream dev bm startIR start trunc bytes       = do
+  -- TODO: locking
+
+  -- TODO: Error handling: the start offset can be exactly at the end of the
+  -- stream, but not beyond it -- this is currently an assertion in
+  -- decompStreamOffset but it should be a proper error here.
+
+  -- NB: This implementation currently 'flattens' Contig/Discontig block groups
+  -- from the BlockMap allocator (see allocFill and truncUnalloc), which will
+  -- force us to treat them as Discontig when we unallocate.  We may want to
+  -- have the inodes hold onto these block groups directly and split/merge them
+  -- as needed to reduce the number of unallocation actions required, but we'll
+  -- leave this as a TODO for now.
+
+  startInode <- drefInode dev startIR
+  api        <- computeNumAddrsM bs -- (block) addrs per inode
+  bpi        <- return $ bs * api   -- bytes per inode
+
+  -- NB: expandConts is probably not viable once inode chains get large, but
+  -- neither is the continuation scheme in general.  Revisit after stuff is
+  -- working.
+  inodes                              <- expandConts dev startInode
+  sIdx@(sInodeIdx, sBlkOff, sByteOff) <- decompStreamOffset bs bpi start inodes
+
+  dbug ("==== writeStream begin ===") $ do
+  dbug ("addrs per inode           = " ++ show api)                            $ do
+  dbug ("inodeIdx, blkIdx, byteIdx = " ++ show (sInodeIdx, sBlkOff, sByteOff)) $ do
+  dbug ("inodes                    = " ++ show inodes)                         $ do
+
+  -- Determine how much space we need to allocate for the data, if any
+  let allocdInBlk   = if sBlkOff < blockCount startInode
+                      then bs else 0
+      allocdInNode  = if sBlkOff + 1 < blockCount startInode
+                      then bs * (blockCount startInode - sBlkOff - 1) else 0
+      allocdInConts = sum $ map ((*bs) . blockCount) $
+                      genericDrop (sInodeIdx + 1) inodes
+      alreadyAllocd = allocdInBlk + allocdInNode + allocdInConts
+      bytesToAlloc  = if alreadyAllocd > len then 0 else len - alreadyAllocd
+      blksToAlloc   = bytesToAlloc `divCeil` bs
+      inodesToAlloc = (blksToAlloc - availBlks (last inodes)) `divCeil` api
+      availBlks :: forall t. (Ord t, Serialize t) => Inode t -> Word64
+      availBlks n   = api - blockCount n
+
+  dbug ("allocdInBlk          = " ++ show allocdInBlk)            $ do
+  dbug ("allocdInNode         = " ++ show allocdInNode)           $ do
+  dbug ("allocdInConts        = " ++ show allocdInConts)          $ do
+  dbug ("alreadyAllocd        = " ++ show alreadyAllocd)          $ do
+  dbug ("bytesToAlloc         = " ++ show bytesToAlloc)           $ do
+  dbug ("blksToAlloc          = " ++ show blksToAlloc)            $ do
+  dbug ("inodesToAlloc        = " ++ show inodesToAlloc)          $ do
+
+  whenOK ( allocFill
+             dev
+             bm
+             availBlks
+             blksToAlloc
+             inodesToAlloc
+             (user startInode)
+             (group startInode)
+             inodes
+         )
+    $ \inodes' -> do 
+
+--  dbug ("inodes' = " ++ show inodes') $ do
+  
+  let stInode = (inodes' !! safeToInt sInodeIdx)
+  sBlk <- readInodeBlock dev stInode sBlkOff
+
+  let (sData, bytes') = bsSplitAt (bs - sByteOff) bytes
+      -- The first block-sized chunk to write is the region in the start block
+      -- prior to the start byte offset (header), followed by the first bytes of
+      -- the data.  The trailer is nonempty and must be included when BS.length
+      -- bytes < bs.
+      firstChunk =
+        let header   = bsTake sByteOff sBlk
+            trailLen = sByteOff + fromIntegral (BS.length sData)
+            trailer  = if trunc
+                       then bsReplicate (bs - trailLen) truncSentinel
+                       else bsDrop trailLen sBlk
+            r        = header `BS.append` sData `BS.append` trailer
+        in assert (fromIntegral (BS.length r) == bs) r
+
+      -- Destination block addresses starting at the the start block
+      blkAddrs = genericDrop sBlkOff (blocks stInode)
+                 ++ concatMap blocks (genericDrop (sInodeIdx + 1) inodes')
+
+  chunks <- (firstChunk:) `fmap`
+            unfoldrM (getBlockContents dev trunc) (bytes', drop 1 blkAddrs)
+{-
+  forM chunks $ \chunk ->
+    dbug ("chunk: " ++ show chunk) $ return ()
+  dbug ("blkAddrs     = " ++ show blkAddrs)          $ do
+  dbug ("len blkAddrs = " ++ show (length blkAddrs)) $ do
+  dbug ("len chunks   = " ++ show (length chunks))   $ do
+-}
+  assert (all ((== safeToInt bs) . BS.length) chunks) $ do
+
+  -- Write the remaining blocks
+  mapM_ (uncurry $ bdWriteBlock dev) (blkAddrs `zip` chunks)
+               
+  -- If this is a truncating write, fix up the chain terminator & free all
+  -- blocks & inodes in the free region
+  inodes'' <- if trunc
+              then truncUnalloc dev bm api sIdx len inodes'
+              else return inodes'
+
+  let inodesUpdated = len `divCeil` bpi
+  dbug ("inodesUpdated = " ++ show inodesUpdated) $ return ()
+
+  -- Update persisted inodes from the start inode to end of write region
+  mapM_ (writeInode dev) $
+    genericTake inodesUpdated $ genericDrop sInodeIdx inodes''
+
+  dbug ("==== writeStream end ===") $ do
+  return $ Right ()
+  where
+    bs  = bdBlockSize dev
+    len = fromIntegral $ BS.length bytes
+
 
 --------------------------------------------------------------------------------
 -- Inode stream helper functions
+
+-- | Allocate the given number of inodes and blocks, and fill blocks into the
+-- given inode chain's block lists.  Newly allocated new inodes go at the end of
+-- the given inode chain, and the result is the final inode chain to write data
+-- into.
+allocFill :: HalfsCapable b t r l m => 
+             BlockDevice m       -- ^ The block device
+          -> BlockMap b r        -- ^ The block map to use for allocation
+          -> (Inode t -> Word64) -- ^ Available blocks function
+          -> Word64              -- ^ Number of blocks to allocate
+          -> Word64              -- ^ Number of inodes to allocate
+          -> UserID              -- ^ User for new inodes
+          -> GroupID             -- ^ Group for new inodes
+          -> [Inode t]           -- ^ Inode chain to extend and fill
+          -> m (Either HalfsError [Inode t])
+allocFill _ _ _ 0 _ _ _ existingInodes = return $ Right existingInodes
+allocFill dev bm avail blksToAlloc inodesToAlloc usr grp existingInodes =
+  whenOK (allocInodes inodesToAlloc) $ \newInodes -> do
+  whenOK (allocBlocks blksToAlloc)   $ \blks      -> do
+  
+  -- Fixup continuation fields and form the region that we'll fill with
+  -- the newly allocated blocks (i.e., starting at the last inode but
+  -- including the newly allocated inodes as well).
+  let (_, region) = foldr (\inode (cont, acc) ->
+                             ( Just $ address inode
+                             , inode{ continuation = cont } : acc
+                             )
+                          )
+                          (Nothing, [])
+                          (last existingInodes : newInodes)
+  -- "Spill" the allocated blocks into the empty region
+  let (blks', k)                   = foldl fillBlks (blks, id) region
+      inodes'                      = init existingInodes ++ k []
+      fillBlks (remBlks, k') inode =
+        let cnt    = min (safeToInt $ avail inode) (length remBlks)
+            inode' =
+              inode { blockCount = blockCount inode + fromIntegral cnt
+                    , blocks     = blocks inode ++ take cnt remBlks
+                    }
+        in
+          (drop cnt remBlks, k' . (inode':))
+  
+  assert (null blks') $ return ()
+  assert (length inodes' >= length existingInodes) $ return ()
+  return (Right inodes')
+  where
+    allocBlocks n = do
+      -- currently "flattens" BlockGroup; see comment in writeStream
+      mbg <- BM.allocBlocks bm n
+      case mbg of
+        Nothing -> return $ Left HalfsAllocFailed
+        Just bg -> return $ Right $ BM.blkRangeBG bg
+    -- 
+    allocInodes n =
+      if 0 == n
+      then return $ Right []
+      else do
+        minodes <- fmap sequence $ replicateM (safeToInt n) $ do
+                     mir <- (fmap . fmap) blockAddrToInodeRef (BM.alloc1 bm)
+                     case mir of
+                       Nothing -> return Nothing
+                       Just ir -> Just
+                                  `fmap`
+                                  buildEmptyInode dev ir nilInodeRef usr grp
+        maybe (return $ Left HalfsAllocFailed) (return . Right) minodes
 
 -- | Truncates the stream at the given stream index and length offset, and
 -- unallocates all resources in the corresponding free region
@@ -641,9 +603,72 @@ truncUnalloc dev bm api sIdx len inodes = do
            }
     
 
-
---------------------------------------------------------------------------------
--- Misc utility
+-- | Splits the input bytestring into block-sized chunks; may read from the
+-- block device in order to preserve contents of blocks if needed.
+getBlockContents ::
+  (Monad m, Functor m) => 
+    BlockDevice m
+  -- ^ The block device
+  -> Bool
+  -- ^ Truncating write? (Impacts partial block retention)
+  -> (ByteString, [Word64])
+  -- ^ Input bytestring, block addresses for each chunk (for retention)
+  -> m (Maybe (ByteString, (ByteString, [Word64])))
+  -- ^ Remaining bytestring & chunk addrs
+getBlockContents _ _ (s, _) | BS.null s    = return Nothing
+getBlockContents _ _ (_, [])               = return Nothing
+getBlockContents dev trunc (s, blkAddr:blkAddrs) = do
+  let (newBlkData, remBytes) = bsSplitAt bs s
+      bs                     = bdBlockSize dev 
+  if BS.null remBytes
+   then do
+     -- Last block; retain the relevant portion of its data
+     trailer <-
+       if trunc
+       then return $ bsReplicate bs truncSentinel
+       else
+         bsDrop (BS.length newBlkData) `fmap` bdReadBlock dev blkAddr
+     let rslt = bsTake bs $ newBlkData `BS.append` trailer
+     return $ Just (rslt, (remBytes, blkAddrs))
+   else do
+     -- Full block; nothing to see here
+     return $ Just (newBlkData, (remBytes, blkAddrs))
+
+-- | Reads the contents of the given inode's ith block
+readInodeBlock :: (Ord t, Serialize t, Monad m) =>
+                  BlockDevice m -> Inode t -> Word64 -> m ByteString
+readInodeBlock dev n i = do 
+  assert (i < blockCount n) $ return ()
+  bdReadBlock dev (blocks n !! safeToInt i)
+
+-- | Writes to the given inode's ith block
+_writeInodeBlock :: (Ord t, Serialize t, Monad m) =>
+                    BlockDevice m -> Inode t -> Word64 -> ByteString -> m ()
+_writeInodeBlock dev n i bytes = do 
+  assert (BS.length bytes == safeToInt (bdBlockSize dev)) $ return ()
+  bdWriteBlock dev (blocks n !! safeToInt i) bytes
+
+-- Writes the given inode to its block address
+writeInode :: (Ord t, Serialize t, Monad m, Show t) =>
+              BlockDevice m -> Inode t -> m ()
+writeInode dev n =
+  bdWriteBlock dev (inodeRefToBlockAddr $ address n) (encode n)
+
+-- | Expands the given inode into an inode list containing itself followed by
+-- all of its continuation inodes
+expandConts :: (Serialize t, Timed t m, Functor m) =>
+               BlockDevice m -> Inode t -> m [Inode t]
+expandConts _   inode@Inode{ continuation = Nothing      } = return [inode]
+expandConts dev inode@Inode{ continuation = Just nextRef } = 
+  (inode:) `fmap` (drefInode dev nextRef >>= expandConts dev)
+
+drefInode :: (Serialize t, Timed t m, Functor m) =>
+             BlockDevice m -> InodeRef -> m (Inode t)
+drefInode dev (IR addr) = do
+  einode <- bdReadBlock dev addr >>= decodeInode (bdBlockSize dev)
+  case einode of
+    Left s  -> fail $ "drefInode decode failure: " ++ s
+    Right r -> return r
 
 -- | Decompose the given absolute byte offset into an inode data stream into
 -- inode index (i.e., 0-based index into sequence of Inode continuations), block
@@ -722,6 +747,9 @@ bsReplicate = makeSafeIntF BS.replicate
 
 bsSplitAt :: Integral a => a -> ByteString -> (ByteString, ByteString)
 bsSplitAt = makeSafeIntF BS.splitAt
+
+whenOK :: Monad m => m (Either a b) -> (b -> m (Either a c)) -> m (Either a c)
+whenOK act f = act >>= either (return . Left) f
 
 
 --------------------------------------------------------------------------------
