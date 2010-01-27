@@ -41,6 +41,8 @@ import Halfs.Protection
 import Halfs.Utils
 import System.Device.BlockDevice
 
+import Debug.Trace
+
 dbug :: String -> a -> a
 --dbug   = seq . unsafePerformIO . putStrLn
 dbug _ = id
@@ -373,10 +375,6 @@ writeStream _ _ _ _ _ bytes | 0 == BS.length bytes = return $ Right ()
 writeStream dev bm startIR start trunc bytes       = do
   -- TODO: locking
 
-  -- TODO: Error handling: the start offset can be exactly at the end of the
-  -- stream, but not beyond it -- this is currently an assertion in
-  -- decompStreamOffset but it should be a proper error here.
-
   -- NB: This implementation currently 'flattens' Contig/Discontig block groups
   -- from the BlockMap allocator (see allocFill and truncUnalloc), which will
   -- force us to treat them as Discontig when we unallocate.  We may want to
@@ -393,6 +391,14 @@ writeStream dev bm startIR start trunc bytes       = do
   -- working.
   inodes                              <- expandConts dev startInode
   sIdx@(sInodeIdx, sBlkOff, sByteOff) <- decompStreamOffset bs bpi start inodes
+
+  -- Sanity check
+  if (sInodeIdx >= fromIntegral (length inodes) ||
+      let blkCnt = blockCount (inodes !! safeToInt sInodeIdx) in
+      sBlkOff >= blkCnt && not (sBlkOff == 0 && blkCnt == 0)
+     )
+   then return $ Left $ HalfsInvalidStreamIndex start
+   else do 
 
   dbug ("==== writeStream begin ===") $ do
   dbug ("addrs per inode           = " ++ show api)                            $ do
@@ -413,13 +419,10 @@ writeStream dev bm startIR start trunc bytes       = do
       availBlks :: forall t. (Ord t, Serialize t) => Inode t -> Word64
       availBlks n   = api - blockCount n
 
-  dbug ("allocdInBlk          = " ++ show allocdInBlk)            $ do
-  dbug ("allocdInNode         = " ++ show allocdInNode)           $ do
-  dbug ("allocdInConts        = " ++ show allocdInConts)          $ do
-  dbug ("alreadyAllocd        = " ++ show alreadyAllocd)          $ do
-  dbug ("bytesToAlloc         = " ++ show bytesToAlloc)           $ do
-  dbug ("blksToAlloc          = " ++ show blksToAlloc)            $ do
-  dbug ("inodesToAlloc        = " ++ show inodesToAlloc)          $ do
+  dbug ("alreadyAllocd = " ++ show alreadyAllocd)          $ do
+  dbug ("bytesToAlloc  = " ++ show bytesToAlloc)           $ do
+  dbug ("blksToAlloc   = " ++ show blksToAlloc)            $ do
+  dbug ("inodesToAlloc = " ++ show inodesToAlloc)          $ do
 
   whenOK ( allocFill
              dev
@@ -433,8 +436,6 @@ writeStream dev bm startIR start trunc bytes       = do
          )
     $ \inodes' -> do 
 
---  dbug ("inodes' = " ++ show inodes') $ do
-  
   let stInode = (inodes' !! safeToInt sInodeIdx)
   sBlk <- readInodeBlock dev stInode sBlkOff
 
@@ -458,6 +459,7 @@ writeStream dev bm startIR start trunc bytes       = do
 
   chunks <- (firstChunk:) `fmap`
             unfoldrM (getBlockContents dev trunc) (bytes', drop 1 blkAddrs)
+
 {-
   forM chunks $ \chunk ->
     dbug ("chunk: " ++ show chunk) $ return ()
@@ -486,12 +488,12 @@ writeStream dev bm startIR start trunc bytes       = do
   dbug ("==== writeStream end ===") $ do
   return $ Right ()
   where
-    bs  = bdBlockSize dev
-    len = fromIntegral $ BS.length bytes
+    bs           = bdBlockSize dev
+    len          = fromIntegral $ BS.length bytes
 
 
 --------------------------------------------------------------------------------
--- Inode stream helper functions
+-- Inode stream helper & utility functions 
 
 -- | Allocate the given number of inodes and blocks, and fill blocks into the
 -- given inode chain's block lists.  Newly allocated new inodes go at the end of
@@ -656,6 +658,11 @@ writeInode dev n =
 
 -- | Expands the given inode into an inode list containing itself followed by
 -- all of its continuation inodes
+
+-- NB/TODO: We need to optimize/fix this function. The worst case is, e.g.,
+-- writing a small number of bytes at a low offset into a huge file (and hence a
+-- long continuation chain): we read the entire chain when examination of the
+-- stream from the start to end offsets would be sufficient.
 expandConts :: (Serialize t, Timed t m, Functor m) =>
                BlockDevice m -> Inode t -> m [Inode t]
 expandConts _   inode@Inode{ continuation = Nothing      } = return [inode]
@@ -719,12 +726,12 @@ decodeInode blkSize bs = do
     Right n -> return $ Right $ n { numAddrs = numAddrs' }
 
 -- "Safe" (i.e., emits runtime assertions on overflow) versions of
--- BS.{take,drop,replicate}.  We want the efficiency of these functions
--- without the danger of an unguarded fromIntegral on the Word64 types
--- we use throughout this module, as this could overflow for absurdly
--- large device geometries).  We may need to revisit some implementation
--- decisions should this occur (e.g., because many Prelude and
--- Data.ByteString functions yield values of type Int)
+-- BS.{take,drop,replicate}.  We want the efficiency of these functions without
+-- the danger of an unguarded fromIntegral on the Word64 types we use throughout
+-- this module, as this could overflow for absurdly large device geometries.  We
+-- may need to revisit some implementation decisions should this occur (e.g.,
+-- because many Prelude and Data.ByteString functions yield and take values of
+-- type Int).
 
 safeToInt :: Integral a => a -> Int
 safeToInt n =

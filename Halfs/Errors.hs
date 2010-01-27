@@ -1,6 +1,8 @@
 module Halfs.Errors
 where
 
+import Data.Word
+
 data HalfsError =
     HalfsFileNotFound
   | HalfsDirectoryExists
@@ -9,6 +11,7 @@ data HalfsError =
   | HalfsUnmountFailed 
   | HalfsMountFailed   RsnHalfsMountFail
   | HalfsAllocFailed
+  | HalfsInvalidStreamIndex Word64
   deriving Show
 
 data RsnHalfsMountFail = 

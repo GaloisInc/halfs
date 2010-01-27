@@ -14,6 +14,7 @@ import Test.QuickCheck.Monadic
 import Halfs.BlockMap
 import Halfs.Classes
 import Halfs.CoreAPI
+import Halfs.Errors
 import Halfs.Inode
 import Halfs.Monad
 import Halfs.SuperBlock
@@ -23,6 +24,8 @@ import Tests.Instances           (printableBytes)
 import Tests.Types
 import Tests.Utils
 
+import Debug.Trace 
+
 
 --------------------------------------------------------------------------------
 -- Inode properties
@@ -30,13 +33,13 @@ import Tests.Utils
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [ -- Inode stream write/read/(over)write/read property
-    exec 5 "Simple WRWR" propM_basicWRWR
+    exec 50 "Simple WRWR" propM_basicWRWR
   ,
     -- Inode stream write/read/(truncating)write/read property
-    exec 5 "Truncating WRWR" propM_truncWRWR
+    exec 50 "Truncating WRWR" propM_truncWRWR
   ,
     -- Inode length-specific stream write/read
-    exec 5 "Length-specific WR" propM_lengthWR
+    exec 50 "Length-specific WR" propM_lengthWR
   ]
   where
     exec = mkMemDevExec quick "Inode"
@@ -52,6 +55,18 @@ propM_basicWRWR :: HalfsCapable b t r l m =>
                 -> PropertyM m ()
 propM_basicWRWR _g dev = do
   withFSData dev $ \bm rdirIR dataSz testData -> do 
+
+{- Currently not testing for the invalid index error, due to an aggressive
+   assert in Inode.decompStreamOffset catching the problem.
+
+  -- Expected-error: attempt write past end of (empty) stream
+
+  e0 <- run $ writeStream dev bm rdirIR (bdBlockSize dev) False testData
+  case e0 of
+    Left (HalfsInvalidStreamIndex _) -> assert True
+    _                                -> assert False
+-}
+                                        
   -- Non-truncating write & read-back
   e1 <- run $ writeStream dev bm rdirIR 0 False testData
   case e1 of
