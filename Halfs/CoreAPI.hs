@@ -5,6 +5,7 @@ import Control.Exception (assert)
 import Control.Monad.Reader
 import Data.ByteString(ByteString)
 import qualified Data.ByteString as BS
+import qualified Data.Map        as M
 import Data.Serialize
 import Data.Word
 import System.FilePath
@@ -171,7 +172,7 @@ openDir fs fp =
 
 closeDir :: (HalfsCapable b t r l m) =>
             Halfs b r l m -> DirHandle r -> HalfsM m ()
-closeDir = undefined
+closeDir fs dh = undefined
 
 readDir :: (HalfsCapable b t r l m) =>
            Halfs b r l m -> DirHandle r -> HalfsM m [(FilePath, FileStat t)]
@@ -369,3 +370,31 @@ defaultDirPerms = FileMode [Read,Write,Execute] [Read, Execute] [Read, Execute]
 -- TODO: Placeholder
 defaultFilePerms :: FileMode
 defaultFilePerms = FileMode [Read,Write] [Read] [Read]
+
+
+--------------------------------------------------------------------------------
+-- Debugging helpers
+
+dumpfs :: HalfsCapable b t r l m =>
+          Halfs b r l m -> m String
+dumpfs fs = do
+  dump <- dumpfs' 2 "/\n" =<< rootDir `fmap` readRef (hsSuperBlock fs)
+  return $ "=== fs dump begin ===\n" ++ dump  ++ "=== fs dump end ===\n"
+  where
+    dumpfs' i pfx inr = do 
+      let pre = replicate i ' '            
+      dh       <- openDirectory (hsBlockDev fs) inr
+      contents <- readRef $ dhContents dh
+      foldM (\dumpAcc (path, dirEnt) -> do
+               sub <- if deType dirEnt == Directory
+                      then dumpfs' (i+2) "" (deInode dirEnt)
+                      else return ""
+               return $ dumpAcc
+                     ++ pre
+                     ++ path
+                     ++ case deType dirEnt of
+                          RegularFile -> " (file)"
+                          Directory   -> " (directory)" ++ "\n" ++ sub
+                          Symlink     -> " (symlink)"
+            )
+            pfx (M.toList contents)

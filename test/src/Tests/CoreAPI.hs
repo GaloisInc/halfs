@@ -163,8 +163,13 @@ propM_dirConstructionOK _g dev = do
     
   test fs "/foo"
   test fs "/foo/bar"
+  test fs "/foo/bar/xxx"
+  test fs "/foo/bar/xxx/yyy"
   test fs "/foo/baz"
   test fs "/foo/baz/zzz"
+
+  dump <- run $ dumpfs fs
+  trace dump $ return ()
 
   trace ("=== End propM_dirConstructionOK ===") $ return ()
   where

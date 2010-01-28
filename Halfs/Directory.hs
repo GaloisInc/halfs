@@ -36,6 +36,7 @@ import Halfs.Inode ( InodeRef(..)
                    , writeStream
                    )
 import Halfs.Protection
+import Halfs.SuperBlock (SuperBlock(rootDir))
 import Halfs.Utils
 import System.Device.BlockDevice
 
@@ -202,7 +203,6 @@ openDirectory dev inr = do
   trace ("openDirectory: DirHandle contents = " ++ show contents) $ do            
   DirHandle inr `fmap` newRef contents `ap` newRef Clean
 
-
 -- | Finds a directory, file, or symlink given a starting inode reference (i.e.,
 -- the directory inode at which to begin the search) and a list of path
 -- components.  Yields Nothing if any of the path components cannot be found in
@@ -262,9 +262,6 @@ showDH dh = do
   return $ "DirHandle { dhInode    = " ++ show (dhInode dh)
                   ++ ", dhContents = " ++ show contents
                   ++ ", dhState    = " ++ show state
-
---dumpfs :: HalfsCapable b t r l m =>
---          Halfs b r m l -> 
 
 dirStTransAdd :: DirectoryState -> DirectoryState
 dirStTransAdd Clean     = OnlyAdded
