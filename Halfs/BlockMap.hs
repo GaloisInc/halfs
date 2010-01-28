@@ -14,6 +14,7 @@ module Halfs.BlockMap
   -- * Block Map allocation/unallocation functions
   , alloc1
   , allocBlocks
+  , unalloc1
   , unallocBlocks
   -- * Utility functions
   , blkGroupExts
@@ -237,6 +238,11 @@ alloc1 bm = do
   case res of
     Just (Contig ext) -> return $ Just $ extBase ext
     _                 -> return Nothing
+
+-- | Unallocate a single block
+unalloc1 :: (Bitmapped b m, Reffable r m) =>
+            BlockMap b r -> Word64 -> m ()
+unalloc1 bm addr = unallocBlocks bm $ Contig $ Extent addr 1 
 
 -- | Mark a given block group as unused
 unallocBlocks :: (Monad m, Reffable r m, Bitmapped b m) =>

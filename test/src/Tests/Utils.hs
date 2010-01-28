@@ -96,7 +96,7 @@ mkMemDevExec quick pfx =
 
 mountOK :: HalfsCapable b t r l m =>
            BlockDevice m
-        -> PropertyM m (Halfs b r m l)
+        -> PropertyM m (Halfs b r l m)
 mountOK dev =
   run (mount dev) >>=
   either (fail . (++) "Unexpected mount failure: " . show) (return)

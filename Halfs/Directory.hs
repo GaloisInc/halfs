@@ -103,7 +103,7 @@ data FileStat t = FileStat {
 -- its group, generate a new, empty directory with the given name (which is
 -- Nothing in the case of the root directory).
 makeDirectory :: HalfsCapable b t r l m =>
-                 Halfs b r m l
+                 Halfs b r l m
               -> Word64
               -> InodeRef
               -> String
@@ -113,11 +113,13 @@ makeDirectory :: HalfsCapable b t r l m =>
               -> HalfsM m InodeRef
 makeDirectory fs addr parentIR dname user group perms = do
   -- TODO: Locking
-  dh       <- openDirectory dev parentIR
-  contents <- readRef (dhContents dh)
+  pdh       <- openDirectory dev parentIR
+  contents <- readRef (dhContents pdh)
+  trace ("makeDirectory: contents of parent directory are: " ++ show contents) $ do            
   if M.member dname contents
    then do return $ Left HalfsDirectoryExists
    else do 
+     trace ("makeDirectory: creating dname = " ++ show dname ++ " new inode @ addr " ++ show addr ) $ do
      -- Build the directory inode and persist it
      bstr <- buildEmptyInodeEnc dev thisIR parentIR user group
      assert (BS.length bstr == fromIntegral (bdBlockSize dev)) $ do 
@@ -125,14 +127,14 @@ makeDirectory fs addr parentIR dname user group perms = do
    
      -- Add the new directory 'dname' to the parent dir's contents
      let newDE = DirEnt dname thisIR user group perms Directory
-     writeRef (dhContents dh) $ M.insert dname newDE contents
-     modifyRef (dhState dh) dirStTransAdd
-   
+     writeRef (dhContents pdh) $ M.insert dname newDE contents
+     modifyRef (dhState pdh) dirStTransAdd
+
      -- NB/TODO: We write this back to disk immediately for now (via the
      -- explicit syncDir' invocation below), but presumably modifications to the
      -- directory state should be sufficient and syncing ought to happen
      -- elsewhere.
-     syncDirectory fs dh
+     syncDirectory fs pdh
      return $ Right thisIR
   where
     thisIR = blockAddrToInodeRef addr
@@ -146,7 +148,7 @@ makeDirectory fs addr parentIR dname user group perms = do
 -- Alternately, this might stay the same as a primitive op for CoreAPI.syncDir,
 -- which might manage the set of DirHandles that need to be sync'd...
 syncDirectory :: HalfsCapable b t r l m =>
-                 Halfs b r m l -> DirHandle r -> HalfsM m ()
+                 Halfs b r l m -> DirHandle r -> HalfsM m ()
 syncDirectory fs dh = do 
   -- TODO: locking
   state <- readRef $ dhState dh
@@ -154,12 +156,16 @@ syncDirectory fs dh = do
     Clean       -> return $ Right ()
     OnlyAdded   -> do
       toWrite <- (encode . M.elems) `fmap` readRef (dhContents dh)
+
+      tmpDbug <- M.elems `fmap` readRef (dhContents dh)                 
       trace ("syncDirectory: toWrite length = " ++ show (BS.length toWrite)
-             ++ ", toWrite = " ++ show toWrite) $ do
-      -- Currently, we overwrite the entire DirectoryEntry list, truncating the
-      -- directory's inode data stream -- this is braindead, though, as we
-      -- should be able to simply append to the end of the list.
+             ++ ", toWrite = " ++ show toWrite ++ "elems of dh contents = " ++ show tmpDbug) $ do
+
+      -- TODO: Currently, we overwrite the entire DirectoryEntry list,
+      -- truncating the directory's inode data stream -- this is braindead,
+      -- though, as we should track the end of the stream and append
       writeStream (hsBlockDev fs) (hsBlockMap fs) (dhInode dh) 0 True toWrite
+      modifyRef (dhState dh) dirStTransClean
       return $ Right ()
     OnlyDeleted -> fail "syncDirectory for OnlyDeleted DirHandle state NYI"
     VeryDirty   -> fail "syncDirectory for VeryDirty DirHandle state NYI"
@@ -170,33 +176,32 @@ syncDirectory fs dh = do
 openDirectory :: HalfsCapable b t r l m =>
                  BlockDevice m -> InodeRef -> m (DirHandle r)
 openDirectory dev inr = do
-  -- Need a "data stream generator" that turns an inode into a lazy bytestring
-  -- representing the underlying data that it covers, reading blocks and
-  -- expanding inode continuations as needed...this will eventually end up being
-  -- used by the file implementation as well: this is 'Inode.readStream' below
-
-  -- TODO: May want to allocate a block for empty directories and serialize an
-  -- empty list so that this null size checking does not need to occur, nor the
-  -- special case in readStream.
-
-  -- TODO: revisit this function
-
   rawDirBytes <- readStream dev inr 0 Nothing
-  dirEnts     <- if BS.null rawDirBytes
-                 then do return []
-                 else do
-                   edents <- decode `fmap` readStream dev inr 0 Nothing
-                   case edents of
-                     Left msg -> fail $ "Failed to decode [DireectoryEntry]: "
-                                      ++ msg
-                     Right x  -> return x
-  trace ("dirEnts = " ++ show (dirEnts :: [DirectoryEntry])) $ do
 
-  -- TODO: Implement a DirHandle cache; creating new references here each time
-  -- will break locking.
+  -- TODO/design scratch re: locking and DirHandle cache.
+ 
+  -- Should be: if we don't have a current DirHandle in the DH cache for this
+  --   inr (and we may possibly need pathname here), read it in from disk and
+  --   make a DirHandle (probably with its own acquired lock) to put into the
+  --   cache and return.  Otherwise (found in cache), just hand it back after
+  --   acquiring the lock?
+
+  -- For now, read dir contents every time, and provide a new reference: NOT
+  -- THREAD SAFE.
+
+  dirEnts <- if BS.null rawDirBytes
+             then do return []
+             else do
+               edents <- decode `fmap` readStream dev inr 0 Nothing
+               case edents of
+                 Left msg -> fail $ "Failed to decode [DireectoryEntry]: "
+                                  ++ msg
+                 Right x  -> return x
+
+  contents <- return $ M.fromList $ map deName dirEnts `zip` dirEnts
+  trace ("openDirectory: DirHandle contents = " ++ show contents) $ do            
   DirHandle inr `fmap` newRef contents `ap` newRef Clean
-  where
-    contents = M.empty -- FIXME
+
 
 -- | Finds a directory, file, or symlink given a starting inode reference (i.e.,
 -- the directory inode at which to begin the search) and a list of path
@@ -258,6 +263,9 @@ showDH dh = do
                   ++ ", dhContents = " ++ show contents
                   ++ ", dhState    = " ++ show state
 
+--dumpfs :: HalfsCapable b t r l m =>
+--          Halfs b r m l -> 
+
 dirStTransAdd :: DirectoryState -> DirectoryState
 dirStTransAdd Clean     = OnlyAdded
 dirStTransAdd OnlyAdded = OnlyAdded
@@ -267,6 +275,9 @@ dirStTransRm :: DirectoryState -> DirectoryState
 dirStTransRm Clean       = OnlyDeleted
 dirStTransRm OnlyDeleted = OnlyDeleted
 dirStTransRm _           = VeryDirty
+
+dirStTransClean :: DirectoryState -> DirectoryState
+dirStTransClean = const Clean
 
 
 --------------------------------------------------------------------------------

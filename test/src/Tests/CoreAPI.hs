@@ -43,12 +43,7 @@ qcProps quick =
   , exec 50  "Mount/unmount"  propM_mountUnmountOK
   , exec 50  "Unmount mutex"  propM_unmountMutexOK
 -}
-    exec 1 "Directory construction" propM_dirConstructionOK -- FIXME: currently
-                                                            -- fails with
-                                                            -- "truncating write
-                                                            -- NYI" exception
-                                                            -- (Inode.writeStream
-                                                            -- limitation)
+    exec 1 "Directory construction" propM_dirConstructionOK
   ]
   where
     exec = mkMemDevExec quick "CoreAPI"
@@ -156,18 +151,29 @@ propM_dirConstructionOK :: HalfsCapable b t r l m =>
                         -> BlockDevice m
                         -> PropertyM m ()
 propM_dirConstructionOK _g dev = do
+  trace ("=== Begin propM_dirConstructionOK ===") $ return ()
   fs <- run (newfs dev) >> mountOK dev
 
-  -- Check that the root directory is present but empty
-  exec "openDir on root directory" (openDir fs rootPath) >>= \dh -> do
+  -- Check that the root directory is present and empty
+  exec "openDir /" (openDir fs rootPath) >>= \dh -> do
     dirState <- sreadRef $ dhState dh
     contents <- sreadRef $ dhContents dh
     assert $ dirState == Clean
     assert $ M.null contents
     
-  exec "mkdir in root directory" $ mkdir fs (rootPath </> "foo") perms
+  test fs "/foo"
+  test fs "/foo/bar"
+  test fs "/foo/baz"
+  test fs "/foo/baz/zzz"
 
+  trace ("=== End propM_dirConstructionOK ===") $ return ()
   where
+    test fs p      = do
+      exec ("mkdir " ++ show p) $ mkdir fs p perms
+      dh <- exec ("openDir " ++ show p) $ openDir fs p
+      isEmpty dh
+
+    isEmpty dh     = assert =<< M.null `fmap` sreadRef (dhContents dh)
     rootPath       = [pathSeparator]
     perms          = FileMode [Read,Write,Execute] [Read,Execute] [Read,Execute]
     exec descrip f = run f >>= \ea -> case ea of
