@@ -41,12 +41,11 @@ import Halfs.Protection
 import Halfs.Utils
 import System.Device.BlockDevice
 
-import System.IO.Unsafe
 import Debug.Trace
-
+--import System.IO.Unsafe
 dbug :: String -> a -> a
-dbug   = seq . unsafePerformIO . putStrLn
---dbug _ = id
+--dbug   = seq . unsafePerformIO . putStrLn
+dbug _ = id
 
 
 --------------------------------------------------------------------------------

@@ -25,7 +25,7 @@ import Halfs.Monad
 import Halfs.SuperBlock
 
 import System.Device.BlockDevice (BlockDevice(..))
-import Tests.Instances ()
+import Tests.Instances (printableBytes)
 import Tests.Types
 import Tests.Utils
 
@@ -44,8 +44,10 @@ qcProps quick =
   , exec 50  "Unmount mutex"  propM_unmountMutexOK
 
 -}
---  exec 1 "Directory construction" propM_dirConstructionOK
-    exec 1 "Simple file creation" propM_fileCreationOK
+--    exec 1 "Directory construction" propM_dirConstructionOK
+--  , exec 1 "Simple file creation"   propM_fileCreationOK
+--  ,
+  exec 50 "File WR"                propM_fileWR
   ]
   where
     exec = mkMemDevExec quick "CoreAPI"
@@ -149,7 +151,6 @@ propM_dirConstructionOK :: HalfsCapable b t r l m =>
                         -> BlockDevice m
                         -> PropertyM m ()
 propM_dirConstructionOK _g dev = do
-  trace ("=== Begin propM_dirConstructionOK ===") $ return ()
   fs <- run (newfs dev) >> mountOK dev
 
   -- Check that the root directory is present and empty
@@ -167,12 +168,8 @@ propM_dirConstructionOK _g dev = do
   test fs $ rootPath </> "foo" </> "baz" 
   test fs $ rootPath </> "foo" </> "baz" </> "zzz"
 
-  dump <- run $ dumpfs fs
-  trace dump $ return ()
-
+  run (dumpfs fs) >>= flip trace (return ())
   unmountOK fs
-
-  trace ("=== End propM_dirConstructionOK ===") $ return ()
   where
     test fs p      = do
       exec ("mkdir " ++ p) (mkdir fs p perms)
@@ -188,7 +185,6 @@ propM_fileCreationOK :: HalfsCapable b t r l m =>
                      -> BlockDevice m
                      -> PropertyM m ()
 propM_fileCreationOK _g dev = do
-  trace ("=== Begin propM_fileCreationOK ===") $ return ()  
   fs <- run (newfs dev) >> mountOK dev
   
   let fooPath = rootPath </> "foo"
@@ -207,11 +203,34 @@ propM_fileCreationOK _g dev = do
     Right _                ->
       fail "Open w/ creat of existing file should fail"
 
-  unmountOK fs
-  trace ("=== End propM_fileCreationOK ===") $ return ()
   run (dumpfs fs) >>= flip trace (return ())
+  unmountOK fs
   where
     exec = execE "propM_fileCreationOK"
+
+-- | Ensure that smile write/readback works for a new file in a new
+-- filesystem
+propM_fileWR :: HalfsCapable b t r l m =>
+                BDGeom
+             -> BlockDevice m
+             -> PropertyM m ()
+propM_fileWR _g dev = do
+  fs <- run (newfs dev) >> mountOK dev
+  fh <- exec "create /myfile" $ openFile fs (rootPath </> "myfile") True
+
+  let maxBytes = bdBlockSize dev * bdNumBlocks dev `div` 4
+  forAllM (choose (1, fromIntegral maxBytes)) $ \fileSz   -> do
+  forAllM (printableBytes fileSz)             $ \fileData -> do 
+
+  exec "bytes -> /myfile"  $ write fs fh 0 fileData
+  fileData' <- exec "bytes <- /myfile" $ read fs fh 0 (fromIntegral fileSz)
+  assert $ fileData == fileData'
+
+  run (dumpfs fs) >>= flip trace (return ())
+  unmountOK fs
+  where
+    exec = execE "propM_fileWR"
+  
 
 
 --------------------------------------------------------------------------------

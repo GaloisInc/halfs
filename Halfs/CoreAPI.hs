@@ -221,7 +221,8 @@ openFile fs fp creat = do
                  ) $
             \fir -> do
               fh <- openFilePrim fir
-              -- TODO/FIXME: mark this FH as open & r/w'able perms etc.?
+              -- TODO/FIXME: mark this FH as open in FD structures &
+              -- r/w'able perms etc.?
               return $ Right fh
         else do
           return $ Left $ HalfsFileNotFound
@@ -232,7 +233,8 @@ openFile fs fp creat = do
          return $ Left $ HalfsFileExists fp
        else do
          fh <- openFilePrim fir
-         -- TODO/FIXME: mark this FH as open, store r/w'able perms etc.?
+         -- TODO/FIXME: mark this FH as open in FD structures, store
+         -- r/w'able perms etc.?
          return $ Right fh
                     
 read :: (HalfsCapable b t r l m) =>
@@ -241,7 +243,9 @@ read :: (HalfsCapable b t r l m) =>
      -> Word64              -- ^ the byte offset into the file
      -> Word64              -- ^ the number of bytes to read
      -> HalfsM m ByteString -- ^ the data read
-read = undefined
+read fs fh byteOff len = do
+  -- TODO: check fh modes & perms (e.g., write only)
+  readStream (hsBlockDev fs) (fhInode fh) byteOff (Just len)
 
 write :: (HalfsCapable b t r l m) =>
          Halfs b r l m -- ^ the filesystem
@@ -250,9 +254,9 @@ write :: (HalfsCapable b t r l m) =>
       -> ByteString    -- ^ the data to write
       -> HalfsM m ()
 write fs fh byteOff bytes = 
-  -- TODO: check fh modes (e.g., read only)
-  -- TODO: check perms
+  -- TODO: check fh modes & perms (e.g., read only, not owner, etc)
   writeStream (hsBlockDev fs) (hsBlockMap fs) (fhInode fh) byteOff False bytes
+  -- TODO: process errors from writeStream?
 
 flush :: (HalfsCapable b t r l m) =>
          Halfs b r l m -> FileHandle -> HalfsM m ()
@@ -263,9 +267,11 @@ syncFile :: (HalfsCapable b t r l m) =>
 syncFile = undefined
 
 closeFile :: (HalfsCapable b t r l m) =>
-             Halfs b r l m -> FileHandle -> HalfsM m ()
-closeFile fs fh = do
-  -- TODO/FIXME: sync, mark fh closed
+             Halfs b r l m -- ^ the filesystem
+          -> FileHandle    -- ^ the handle to the open file to close
+          -> HalfsM m ()
+closeFile _fs _fh = do
+  -- TODO/FIXME: sync, mark fh closed in FD structures
   return $ Right ()
 
 setFileSize :: (HalfsCapable b t r l m) =>
@@ -286,7 +292,7 @@ rename = undefined
 
 chmod :: (HalfsCapable b t r l m) =>
          Halfs b r l m -> FilePath -> FileMode -> HalfsM m ()
-chmod _ _ _ = trace ("WARNING: chmod NYI") $ return $ Right ()
+chmod = undefined
 
 chown :: (HalfsCapable b t r l m) =>
          Halfs b r l m -> FilePath -> UserID -> GroupID -> HalfsM m ()
@@ -354,7 +360,6 @@ withAbsPathIR :: HalfsCapable b t r l m =>
               -> (InodeRef -> HalfsM m a)
               -> HalfsM m a
 withAbsPathIR fs fp ftype f = do
-  trace ("withAbsPathIR: fp = " ++ show fp ++ ", ftype = " ++ show ftype) $ do
   if isAbsolute fp
    then do
      rdirIR <- rootDir `fmap` readRef (hsSuperBlock fs)

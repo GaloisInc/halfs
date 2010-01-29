@@ -138,10 +138,7 @@ makeDirectory fs parentIR dname user group perms = do
          writeRef (dhContents pdh) $ M.insert dname newDE contents
          modifyRef (dhState pdh) dirStTransAdd
     
-         -- NB/TODO: We write this back to disk immediately for now (via the
-         -- explicit syncDir' invocation below), but presumably modifications to the
-         -- directory state should be sufficient and syncing ought to happen
-         -- elsewhere.
+         -- Persist the new directory structures
          syncDirectory fs pdh
          return $ Right thisIR
   where
