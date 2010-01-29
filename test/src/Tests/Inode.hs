@@ -18,6 +18,7 @@ import Halfs.Errors
 import Halfs.Inode
 import Halfs.Monad
 import Halfs.SuperBlock
+import Halfs.Utils  
 
 import System.Device.BlockDevice (BlockDevice(..))
 import Tests.Instances           (printableBytes)
@@ -72,10 +73,14 @@ propM_basicWRWR _g dev = do
   case e1 of
     Left  e -> fail $ "writeStream failure in propM_basicWR: " ++ show e
     Right _ -> do
-      testData' <- bsTake dataSz `fmap` (run $ readStream dev rdirIR 0 Nothing)
-      -- ^ We leave off the trailing bytes of what we read, since reading until
-      -- the end of the stream will include contents of the whole last block
-      assert (testData == testData')
+      ebs <- run $ readStream dev rdirIR 0 Nothing
+      case ebs of
+        Left e -> fail $ "readStream failure in propM_basicWR: " ++ show e
+        Right bs ->
+          -- ^ We leave off the trailing bytes of what we read, since reading
+          -- until the end of the stream will include contents of the whole last
+          -- block
+          assert (testData == bsTake dataSz bs)
 
   -- Non-truncating overwrite & read-back
   forAllM (choose (1, dataSz `div` 2))     $ \overwriteSz -> do 
@@ -85,13 +90,17 @@ propM_basicWRWR _g dev = do
   case e2 of
     Left  e -> fail $ "writeStream failure in propM_basicWR: " ++ show e
     Right _ -> do
-      readBack <- bsTake dataSz `fmap` (run $ readStream dev rdirIR 0 Nothing)
-      let expected = bsTake startByte testData
-                     `BS.append`
-                     newData
-                     `BS.append`
-                     bsDrop (startByte + overwriteSz) testData
-      assert (readBack == expected)
+      ebs <- run $ readStream dev rdirIR 0 Nothing
+      case ebs of
+        Left e   -> fail $ "readStream failure in propM_basicWR: " ++ show e
+        Right bs -> do 
+          let readBack = bsTake dataSz bs
+              expected = bsTake startByte testData
+                         `BS.append`
+                         newData
+                         `BS.append`
+                         bsDrop (startByte + overwriteSz) testData
+          assert (readBack == expected)
 
 -- | Tests truncate writes and read-backs of random size
 propM_truncWRWR :: HalfsCapable b t r l m =>
@@ -107,6 +116,7 @@ propM_truncWRWR _g dev = do
     Right _ -> do
       forAllM (choose (dataSz `div` 8, dataSz `div` 4)) $ \dataSz'   -> do
       forAllM (printableBytes dataSz')                  $ \testData' -> do 
+
       freeBlks <- sreadRef (bmNumFree bm) -- Free blks before truncate
 
       -- Truncating write
@@ -115,15 +125,18 @@ propM_truncWRWR _g dev = do
         Left e  -> fail $ "writeStream failure in propM_truncWRWR: " ++ show e
         Right _ -> do 
           -- Read until the end of the stream and check truncation       
-          readBack <- run $ readStream dev rdirIR 1 Nothing
-          assert (bsTake dataSz' readBack == testData')
-          assert (all (== truncSentinel) $ BS.unpack $ bsDrop dataSz' readBack)
-          -- Sanity check the BlockMap' free count
-          freeBlks' <- sreadRef (bmNumFree bm)
-          let minExpectedFree = -- also may have frees on inode storage, so this
-                                -- is just a lower bound sanity check
-                (dataSz - dataSz') `div` (fromIntegral $ bdBlockSize dev)
-          assert (minExpectedFree <= fromIntegral (freeBlks' - freeBlks))
+          ebs <- run $ readStream dev rdirIR 1 Nothing
+          case ebs of
+            Left e   -> fail $ "readStream failure in propM_truncWRWR: " ++ show e
+            Right bs -> do
+              assert (bsTake dataSz' bs == testData')
+              assert (all (== truncSentinel) $ BS.unpack $ bsDrop dataSz' bs)
+              -- Sanity check the BlockMap' free count
+              freeBlks' <- sreadRef (bmNumFree bm)
+              let minExpectedFree = -- also may have frees on inode storage, so
+                                    -- this is just a lower bound sanity check
+                    (dataSz - dataSz') `div` (fromIntegral $ bdBlockSize dev)
+              assert (minExpectedFree <= fromIntegral (freeBlks' - freeBlks))
                  
 -- | Tests bounded reads of random offset and length
 propM_lengthWR :: HalfsCapable b t r l m =>
@@ -140,8 +153,8 @@ propM_lengthWR _g dev = do
       -- into the next inode to push on boundary conditions & spill arithmetic.
 
       blksPerInode <- run $ computeNumAddrsM (bdBlockSize dev)
-      let bs         = bdBlockSize dev
-          minReadLen = min dataSz (fromIntegral $ blksPerInode * bs + 1)
+      let blkSize    = bdBlockSize dev
+          minReadLen = min dataSz (fromIntegral $ blksPerInode * blkSize + 1)
 
       forAllM (choose (minReadLen, dataSz))  $ \readLen  -> do
       forAllM (choose (0, dataSz - 1))       $ \startIdx -> do
@@ -149,9 +162,11 @@ propM_lengthWR _g dev = do
       let readLen' = min readLen (dataSz - startIdx)
           stIdxW64 = fromIntegral startIdx
 
-      readBack <- run $
-                  readStream dev rdirIR stIdxW64 (Just $ fromIntegral readLen')
-      assert (readBack == bsTake readLen' (bsDrop startIdx testData))
+      ebs <- run $ readStream dev rdirIR stIdxW64 (Just $ fromIntegral readLen')
+      case ebs of
+        Left e   -> fail $ "readStream failure in propM_lengthWR: " ++ show e
+        Right bs -> 
+          assert (bs == bsTake readLen' (bsDrop startIdx testData))
 
 withFSData :: HalfsCapable b t r l m =>
               BlockDevice m

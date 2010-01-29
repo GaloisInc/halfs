@@ -298,15 +298,16 @@ emptyInode nAddrs createTm modTm me mommy usr grp =
 -- counts, continuations, etc., and perhaps build enumerators for
 -- inode/block/byte sequences over inodes.
 readStream :: HalfsCapable b t r l m => 
-              BlockDevice m -- ^ Block device
-           -> InodeRef      -- ^ Starting inode reference
-           -> Word64        -- ^ Starting stream (byte) offset
-           -> Maybe Word64  -- ^ Stream length (Nothing => until end of stream,
-                            -- including entire last block)
-           -> m ByteString  -- ^ Stream contents
+              BlockDevice m                   -- ^ Block device
+           -> InodeRef                        -- ^ Starting inode reference
+           -> Word64                          -- ^ Starting stream (byte) offset
+           -> Maybe Word64                    -- ^ Stream length (Nothing =>
+                                              --   until end of stream,
+                                              --   including entire last block)
+           -> m (Either HalfsError ByteString) -- ^ Stream contents
 readStream dev startIR start mlen = do
   startInode <- drefInode dev startIR
-  if 0 == blockCount startInode then return BS.empty else do 
+  if 0 == blockCount startInode then return $ Right BS.empty else do 
   -- Compute bytes per inode (bpi) and decompose the starting byte offset
   bpi    <- (*bs) `fmap` computeNumAddrsM bs
   inodes <- expandConts dev startInode
@@ -316,50 +317,47 @@ readStream dev startIR start mlen = do
   dbug ("start = " ++ show start) $ do
   dbug ("(sInodeIdx, sBlkOff, sByteOff) = " ++ show (sInodeIdx, sBlkOff, sByteOff)) $ do
 
-{-
   -- Sanity check
   if (sInodeIdx >= fromIntegral (length inodes) ||
       let blkCnt = blockCount (inodes !! safeToInt sInodeIdx) in
       sBlkOff >= blkCnt && not (sBlkOff == 0 && blkCnt == 0)
      )
    then return $ Left $ HalfsInvalidStreamIndex start
-   else do 
--}
-
-  case mlen of
-    Just len | len == 0 -> return BS.empty
-    _                   -> do
-      case genericDrop sInodeIdx inodes of
-        [] -> fail "Inode.readStream internal error: invalid start inode index"
-        (inode:rest) -> do
-          -- 'header' is just the partial first block and all remaining blocks
-          -- in the first inode, accounting for the possible upper bound on the
-          -- length of the data returned.
-          assert (maybe True (> 0) mlen) $ return ()
-          header <- do
-            let remBlks = calcRemBlks inode (+ sByteOff)
-                          -- +sByteOff to force rounding for partial blocks
-                range   = let lastIdx = blockCount inode - 1 in 
-                          [ sBlkOff .. min lastIdx (sBlkOff + remBlks - 1) ]
-            (blk:blks) <- mapM (readBlock inode) range
-            return $ bsDrop sByteOff blk `BS.append` BS.concat blks
-      
-          -- 'fullBlocks' is the remaining content from all remaining inodes,
-          -- accounting for the possible upper bound on the length of the data
-          -- returned.
-          (fullBlocks, _readCnt) <-
-            foldM
-              (\(acc, bytesSoFar) inode' -> do
-                 let remBlks = calcRemBlks inode' (flip (-) bytesSoFar) 
-                     range   = if remBlks > 0 then [0..remBlks - 1] else []
-                 blks <- mapM (readBlock inode') range
-                 return ( acc `BS.append` BS.concat blks
-                        , bytesSoFar + remBlks * bs
-                        )
-              )
-              (BS.empty, fromIntegral $ BS.length header) rest
-          dbug ("==== readStream end ===") $ do
-          return $ (maybe id bsTake mlen) $ header `BS.append` fullBlocks
+   else case mlen of
+     Just len | len == 0 -> return $ Right BS.empty
+     _                   -> do
+       case genericDrop sInodeIdx inodes of
+         [] -> fail "Inode.readStream internal error: invalid start inode index"
+         (inode:rest) -> do
+           -- 'header' is just the partial first block and all remaining
+           -- blocks in the first inode, accounting for the possible upper
+           -- bound on the length of the data returned.
+           assert (maybe True (> 0) mlen) $ return ()
+           header <- do
+             let remBlks = calcRemBlks inode (+ sByteOff)
+                           -- +sByteOff to force rounding for partial blocks
+                 range   = let lastIdx = blockCount inode - 1 in 
+                           [ sBlkOff .. min lastIdx (sBlkOff + remBlks - 1) ]
+             (blk:blks) <- mapM (readBlock inode) range
+             return $ bsDrop sByteOff blk `BS.append` BS.concat blks
+       
+           -- 'fullBlocks' is the remaining content from all remaining inodes,
+           -- accounting for the possible upper bound on the length of the
+           -- data returned.
+           (fullBlocks, _readCnt) <-
+             foldM
+               (\(acc, bytesSoFar) inode' -> do
+                  let remBlks = calcRemBlks inode' (flip (-) bytesSoFar) 
+                      range   = if remBlks > 0 then [0..remBlks - 1] else []
+                  blks <- mapM (readBlock inode') range
+                  return ( acc `BS.append` BS.concat blks
+                         , bytesSoFar + remBlks * bs
+                         )
+               )
+               (BS.empty, fromIntegral $ BS.length header) rest
+           dbug ("==== readStream end ===") $ return ()
+           return $ Right $
+             (maybe id bsTake mlen) $ header `BS.append` fullBlocks
   where
     readBlock = readInodeBlock dev
     bs        = bdBlockSize dev

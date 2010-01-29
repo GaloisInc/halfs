@@ -17,5 +17,4 @@ unfoldrM f x = do
 
 whenOK :: Monad m => m (Either a b) -> (b -> m (Either a c)) -> m (Either a c)
 whenOK act f = act >>= either (return . Left) f
-               
 

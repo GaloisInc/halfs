@@ -181,8 +181,6 @@ syncDirectory fs dh = do
 openDirectory :: HalfsCapable b t r l m =>
                  BlockDevice m -> InodeRef -> m (DirHandle r)
 openDirectory dev inr = do
-  rawDirBytes <- readStream dev inr 0 Nothing
-
   -- TODO/design scratch re: locking and DirHandle cache.
  
   -- Should be: if we don't have a current DirHandle in the DH cache for this
@@ -200,18 +198,20 @@ openDirectory dev inr = do
 
   -- FIXME FIXME FIXME
 
-  dirEnts <- if BS.null rawDirBytes
-             then do return []
-             else do
-               edents <- decode `fmap` readStream dev inr 0 Nothing
-               case edents of
-                 Left msg -> fail $ "Failed to decode [DireectoryEntry]: "
-                                  ++ msg
-                 Right x  -> return x
-
-  contents <- return $ M.fromList $ map deName dirEnts `zip` dirEnts
-  trace ("openDirectory: DirHandle contents = " ++ show contents) $ do            
-  DirHandle inr `fmap` newRef contents `ap` newRef Clean
+  eRawDirBytes <- readStream dev inr 0 Nothing
+  case eRawDirBytes of
+    Left e            -> fail "readStream err"
+    Right rawDirBytes -> do
+      dirEnts <- if BS.null rawDirBytes
+                 then do return []
+                 else case decode rawDirBytes of 
+                   Left msg -> fail $ "Failed to decode [DirectoryEntry]: "
+                               ++ msg
+                   Right x  -> return x
+    
+      contents <- return $ M.fromList $ map deName dirEnts `zip` dirEnts
+      trace ("openDirectory: DirHandle contents = " ++ show contents) $ do            
+      DirHandle inr `fmap` newRef contents `ap` newRef Clean
 
 closeDirectory :: HalfsCapable b t r l m =>
                   Halfs b r l m 
