@@ -38,16 +38,12 @@ import Debug.Trace
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [
-{-
-    exec 50  "Init and mount" propM_initAndMountOK
-  , exec 50  "Mount/unmount"  propM_mountUnmountOK
-  , exec 50  "Unmount mutex"  propM_unmountMutexOK
-
--}
---    exec 1 "Directory construction" propM_dirConstructionOK
---  , exec 1 "Simple file creation"   propM_fileCreationOK
---  ,
-  exec 50 "File WR"                propM_fileWR
+    exec 10  "Init and mount"        propM_initAndMountOK
+  , exec 10 "Mount/unmount"          propM_mountUnmountOK
+  , exec 10 "Unmount mutex"          propM_unmountMutexOK
+  , exec 1  "Directory construction" propM_dirConstructionOK
+  , exec 1  "Simple file creation"   propM_fileCreationOK
+  , exec 1  "File WR"                propM_fileWR
   ]
   where
     exec = mkMemDevExec quick "CoreAPI"

@@ -12,6 +12,8 @@ import System.Device.BlockDevice
 
 type HalfsM m a = m (Either HalfsError a)
 
+-- type HalfsM m a = ErrorT HalfsError m a
+
 data Halfs b r l m = HalfsState {
     hsBlockDev   :: BlockDevice m
   , hsBlockMap   :: BlockMap b r
