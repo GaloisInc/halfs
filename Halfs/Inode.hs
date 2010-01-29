@@ -41,11 +41,12 @@ import Halfs.Protection
 import Halfs.Utils
 import System.Device.BlockDevice
 
+import System.IO.Unsafe
 import Debug.Trace
 
 dbug :: String -> a -> a
---dbug   = seq . unsafePerformIO . putStrLn
-dbug _ = id
+dbug   = seq . unsafePerformIO . putStrLn
+--dbug _ = id
 
 
 --------------------------------------------------------------------------------
@@ -309,10 +310,21 @@ readStream dev startIR start mlen = do
   -- Compute bytes per inode (bpi) and decompose the starting byte offset
   bpi    <- (*bs) `fmap` computeNumAddrsM bs
   inodes <- expandConts dev startInode
+
   dbug ("==== readStream begin ===") $ do
   (sInodeIdx, sBlkOff, sByteOff) <- decompStreamOffset bs bpi start inodes
   dbug ("start = " ++ show start) $ do
   dbug ("(sInodeIdx, sBlkOff, sByteOff) = " ++ show (sInodeIdx, sBlkOff, sByteOff)) $ do
+
+{-
+  -- Sanity check
+  if (sInodeIdx >= fromIntegral (length inodes) ||
+      let blkCnt = blockCount (inodes !! safeToInt sInodeIdx) in
+      sBlkOff >= blkCnt && not (sBlkOff == 0 && blkCnt == 0)
+     )
+   then return $ Left $ HalfsInvalidStreamIndex start
+   else do 
+-}
 
   case mlen of
     Just len | len == 0 -> return BS.empty
@@ -320,9 +332,9 @@ readStream dev startIR start mlen = do
       case genericDrop sInodeIdx inodes of
         [] -> fail "Inode.readStream internal error: invalid start inode index"
         (inode:rest) -> do
-          -- 'header' is just the partial first block and all remaining blocks in
-          -- the first inode, accounting for the possible upper bound on the length
-          -- of the data returned.
+          -- 'header' is just the partial first block and all remaining blocks
+          -- in the first inode, accounting for the possible upper bound on the
+          -- length of the data returned.
           assert (maybe True (> 0) mlen) $ return ()
           header <- do
             let remBlks = calcRemBlks inode (+ sByteOff)
@@ -754,9 +766,6 @@ bsReplicate = makeSafeIntF BS.replicate
 
 bsSplitAt :: Integral a => a -> ByteString -> (ByteString, ByteString)
 bsSplitAt = makeSafeIntF BS.splitAt
-
-whenOK :: Monad m => m (Either a b) -> (b -> m (Either a c)) -> m (Either a c)
-whenOK act f = act >>= either (return . Left) f
 
 
 --------------------------------------------------------------------------------

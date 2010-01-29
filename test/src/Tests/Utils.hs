@@ -12,7 +12,7 @@ import Test.QuickCheck hiding (numTests)
 import Test.QuickCheck.Monadic
 
 import Halfs.Classes
-import Halfs.CoreAPI (mount)
+import Halfs.CoreAPI (mount, unmount)
 import Halfs.Monad
   
 import System.Device.BlockDevice
@@ -100,6 +100,14 @@ mountOK :: HalfsCapable b t r l m =>
 mountOK dev =
   run (mount dev) >>=
   either (fail . (++) "Unexpected mount failure: " . show) (return)
+
+unmountOK :: HalfsCapable b t r l m =>
+             Halfs b r l m -> PropertyM m ()
+unmountOK fs =
+      run (unmount fs)
+      >>= either (fail . (++) "Unxpected unmount failure: " . show)
+                 (const $ return ())
+         
 
 sreadRef :: HalfsCapable b t r l m => r a -> PropertyM m a
 sreadRef = ($!) (run . readRef)

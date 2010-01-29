@@ -5,8 +5,10 @@ module Halfs.Directory
   , FileMode(..)
   , AccessRight(..)
   , FileType(..)
-  , findInDir
+  , addFile
+  , closeDirectory
   , find
+  , findInDir
   , makeDirectory
   , openDirectory
   -- * for testing
@@ -26,12 +28,14 @@ import Data.Serialize
 import Data.Word
 import System.FilePath
 
+import Halfs.BlockMap
 import Halfs.Classes
 import Halfs.Errors
 import Halfs.Monad
 import Halfs.Inode ( InodeRef(..)
                    , blockAddrToInodeRef
                    , buildEmptyInodeEnc
+                   , inodeRefToBlockAddr
                    , readStream
                    , writeStream
                    )
@@ -100,48 +104,50 @@ data FileStat t = FileStat {
 --------------------------------------------------------------------------------
 -- Directory manipulation and query functions
 
--- | Given a block address to place the directory, its parent, its owner, and
--- its group, generate a new, empty directory with the given name (which is
--- Nothing in the case of the root directory).
+-- | Given a parent directory's inoderef, its owner, and its group,
+-- generate a new, empty directory with the given name.
 makeDirectory :: HalfsCapable b t r l m =>
-                 Halfs b r l m
-              -> Word64
-              -> InodeRef
-              -> String
-              -> UserID
-              -> GroupID
-              -> FileMode 
-              -> HalfsM m InodeRef
-makeDirectory fs addr parentIR dname user group perms = do
+                 Halfs b r l m     -- ^ the filesystem
+              -> InodeRef          -- ^ inr to parent directory
+              -> String            -- ^ directory name
+              -> UserID            -- ^ user id for created directory
+              -> GroupID           -- ^ group id for created directory
+              -> FileMode          -- ^ initial filemode
+              -> HalfsM m InodeRef -- ^ on success, the inode ref to the
+                                   --   created directory
+makeDirectory fs parentIR dname user group perms = do
   -- TODO: Locking
-  pdh       <- openDirectory dev parentIR
+  withDirectory fs parentIR $ \pdh -> do
   contents <- readRef (dhContents pdh)
   trace ("makeDirectory: contents of parent directory are: " ++ show contents) $ do            
   if M.member dname contents
    then do return $ Left HalfsDirectoryExists
    else do 
-     trace ("makeDirectory: creating dname = " ++ show dname ++ " new inode @ addr " ++ show addr ) $ do
-     -- Build the directory inode and persist it
-     bstr <- buildEmptyInodeEnc dev thisIR parentIR user group
-     assert (BS.length bstr == fromIntegral (bdBlockSize dev)) $ do 
-     bdWriteBlock dev addr bstr
-   
-     -- Add the new directory 'dname' to the parent dir's contents
-     let newDE = DirEnt dname thisIR user group perms Directory
-     writeRef (dhContents pdh) $ M.insert dname newDE contents
-     modifyRef (dhState pdh) dirStTransAdd
-
-     -- NB/TODO: We write this back to disk immediately for now (via the
-     -- explicit syncDir' invocation below), but presumably modifications to the
-     -- directory state should be sufficient and syncing ought to happen
-     -- elsewhere.
-     syncDirectory fs pdh
-     return $ Right thisIR
+     mir <- (fmap . fmap) blockAddrToInodeRef $ alloc1 (hsBlockMap fs)
+     case mir of
+       Nothing     -> return $ Left HalfsAllocFailed
+       Just thisIR -> do
+         trace ("makeDirectory: creating dname = " ++ show dname ++ " new inode @ addr " ++ show thisIR ) $ do
+         -- Build the directory inode and persist it
+         bstr <- buildEmptyInodeEnc dev thisIR parentIR user group
+         assert (BS.length bstr == fromIntegral (bdBlockSize dev)) $ return ()
+         bdWriteBlock dev (inodeRefToBlockAddr thisIR) bstr
+       
+         -- Add the new directory 'dname' to the parent dir's contents
+         let newDE = DirEnt dname thisIR user group perms Directory
+         writeRef (dhContents pdh) $ M.insert dname newDE contents
+         modifyRef (dhState pdh) dirStTransAdd
+    
+         -- NB/TODO: We write this back to disk immediately for now (via the
+         -- explicit syncDir' invocation below), but presumably modifications to the
+         -- directory state should be sufficient and syncing ought to happen
+         -- elsewhere.
+         syncDirectory fs pdh
+         return $ Right thisIR
   where
-    thisIR = blockAddrToInodeRef addr
-    dev    = hsBlockDev fs
+    dev = hsBlockDev fs
 
--- | Syncs contents referred to by a directory handle to the disk
+-- | Syncs directory contents to disk
 
 -- NB: This should be modified to use the DirHandle cache when it exists, in
 -- which case this function may not take an explicit DirHandle to sync.
@@ -149,12 +155,12 @@ makeDirectory fs addr parentIR dname user group perms = do
 -- Alternately, this might stay the same as a primitive op for CoreAPI.syncDir,
 -- which might manage the set of DirHandles that need to be sync'd...
 syncDirectory :: HalfsCapable b t r l m =>
-                 Halfs b r l m -> DirHandle r -> HalfsM m ()
+                 Halfs b r l m -> DirHandle r -> m ()
 syncDirectory fs dh = do 
   -- TODO: locking
   state <- readRef $ dhState dh
   case state of
-    Clean       -> return $ Right ()
+    Clean       -> return ()
     OnlyAdded   -> do
       toWrite <- (encode . M.elems) `fmap` readRef (dhContents dh)
 
@@ -167,11 +173,9 @@ syncDirectory fs dh = do
       -- though, as we should track the end of the stream and append
       writeStream (hsBlockDev fs) (hsBlockMap fs) (dhInode dh) 0 True toWrite
       modifyRef (dhState dh) dirStTransClean
-      return $ Right ()
+
     OnlyDeleted -> fail "syncDirectory for OnlyDeleted DirHandle state NYI"
     VeryDirty   -> fail "syncDirectory for VeryDirty DirHandle state NYI"
-
-  return $ Right () 
 
 -- | Obtains an active directory handle for the directory at the given InodeRef
 openDirectory :: HalfsCapable b t r l m =>
@@ -187,8 +191,14 @@ openDirectory dev inr = do
   --   cache and return.  Otherwise (found in cache), just hand it back after
   --   acquiring the lock?
 
-  -- For now, read dir contents every time, and provide a new reference: NOT
-  -- THREAD SAFE.
+  -- FIXME FIXME FIXME
+
+  -- For now, read dir contents every time, and provide a new reference:
+  -- NOT THREAD SAFE.  Furthermore, it's not even safe: multiple opens
+  -- will result in new references, meaning the dirent map can get out
+  -- of sync etc.  Gross.
+
+  -- FIXME FIXME FIXME
 
   dirEnts <- if BS.null rawDirBytes
              then do return []
@@ -202,6 +212,36 @@ openDirectory dev inr = do
   contents <- return $ M.fromList $ map deName dirEnts `zip` dirEnts
   trace ("openDirectory: DirHandle contents = " ++ show contents) $ do            
   DirHandle inr `fmap` newRef contents `ap` newRef Clean
+
+closeDirectory :: HalfsCapable b t r l m =>
+                  Halfs b r l m 
+               -> DirHandle r
+               -> m ()
+closeDirectory fs dh = do
+  -- TODO/design scratch re: locking and DirHandle cache
+  syncDirectory fs dh
+  return ()
+  
+-- | Add a directory entry for the given file to a directory; expects
+-- that the file does not already exist in the directory
+addFile :: HalfsCapable b t r l m =>
+           DirHandle r
+        -> String
+        -> InodeRef
+        -> UserID
+        -> GroupID
+        -> FileMode
+        -> m ()
+addFile dh fname fir u g mode = do
+  -- begin sanity check
+  mfound <- liftM (M.lookup fname) (readRef $ dhContents dh)
+  maybe (return ()) (fail "Directory.addFile: file already exists") mfound
+  -- end sanity check
+
+  -- TODO: DH locking: here?
+  let de = DirEnt fname fir u g mode RegularFile
+  modifyRef (dhContents dh) (M.insert fname de)
+  modifyRef (dhState dh) dirStTransAdd
 
 -- | Finds a directory, file, or symlink given a starting inode reference (i.e.,
 -- the directory inode at which to begin the search) and a list of path
@@ -241,16 +281,27 @@ findInDir' dh fname ftype = do
 
 -- Exportable version of findInDir; doesn't expose DirectoryEntry to caller
 findInDir :: HalfsCapable b t r l m =>
-               DirHandle r
-            -> String
-            -> FileType
-            -> m (Maybe InodeRef)
+             DirHandle r
+          -> String
+          -> FileType
+          -> m (Maybe InodeRef)
 findInDir dh fname ftype = 
   findInDir' dh fname ftype >>= return . maybe Nothing (Just . deInode)
 
 
 --------------------------------------------------------------------------------
 -- Utility functions
+
+withDirectory :: HalfsCapable b t r l m =>
+                 Halfs b r l m
+              -> InodeRef
+              -> (DirHandle r -> m a)
+              -> m a
+withDirectory fs ir act = do
+  dh <- openDirectory (hsBlockDev fs) ir
+  rslt <- act dh
+  closeDirectory fs dh
+  return rslt
 
 isFileType :: DirectoryEntry -> FileType -> Bool
 isFileType (DirEnt { deType = t }) ft = t == ft

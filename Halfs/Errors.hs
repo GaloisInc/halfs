@@ -1,11 +1,13 @@
 module Halfs.Errors
 where
 
+import System.FilePath
 import Data.Word
 
 data HalfsError =
     HalfsFileNotFound
   | HalfsDirectoryExists
+  | HalfsFileExists FilePath
   | HalfsPathComponentNotFound String
   | HalfsAbsolutePathExpected
   | HalfsUnmountFailed 

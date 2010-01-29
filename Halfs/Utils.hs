@@ -15,3 +15,7 @@ unfoldrM f x = do
     Nothing    -> return []
     Just (a,b) -> liftM (a:) $ unfoldrM f b
 
+whenOK :: Monad m => m (Either a b) -> (b -> m (Either a c)) -> m (Either a c)
+whenOK act f = act >>= either (return . Left) f
+               
+

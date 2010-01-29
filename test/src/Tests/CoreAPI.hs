@@ -42,8 +42,10 @@ qcProps quick =
     exec 50  "Init and mount" propM_initAndMountOK
   , exec 50  "Mount/unmount"  propM_mountUnmountOK
   , exec 50  "Unmount mutex"  propM_unmountMutexOK
+
 -}
-    exec 1 "Directory construction" propM_dirConstructionOK
+--  exec 1 "Directory construction" propM_dirConstructionOK
+    exec 1 "Simple file creation" propM_fileCreationOK
   ]
   where
     exec = mkMemDevExec quick "CoreAPI"
@@ -115,10 +117,6 @@ propM_mountUnmountOK _g dev = do
       Left HalfsUnmountFailed -> ok
       Left err                -> unexpectedErr err
       Right _                 -> fail "Two successive unmounts succeeded"
-  where
-    unmountOK fs =
-      run (unmount fs)
-      >>= either (fail . (++) "Unxpected unmount failure: " . show) (const ok)
 
 -- | Sanity check: unmount is mutex'd sensibly
 
@@ -145,7 +143,7 @@ propM_unmountMutexOK _g dev = do
       unmount fs >>= either (\_ -> writeChan ch False) (\_ -> writeChan ch True)
 
 -- | Ensure that a new filesystem has the expected root directory intact
--- and that various directory operations work as expected.
+-- and that dirs and subdirs can be created and opened.
 propM_dirConstructionOK :: HalfsCapable b t r l m =>
                            BDGeom
                         -> BlockDevice m
@@ -161,31 +159,59 @@ propM_dirConstructionOK _g dev = do
     assert $ dirState == Clean
     assert $ M.null contents
     
-  test fs "/foo"
-  test fs "/foo/bar"
-  test fs "/foo/bar/xxx"
-  test fs "/foo/bar/xxx/yyy"
-  test fs "/foo/baz"
-  test fs "/foo/baz/zzz"
+  -- TODO: replace this with a random valid hierarchy
+  test fs $ rootPath </> "foo"
+  test fs $ rootPath </> "foo" </> "bar" 
+  test fs $ rootPath </> "foo" </> "bar" </> "xxx"
+  test fs $ rootPath </> "foo" </> "bar" </> "xxx" </> "yyy"
+  test fs $ rootPath </> "foo" </> "baz" 
+  test fs $ rootPath </> "foo" </> "baz" </> "zzz"
 
   dump <- run $ dumpfs fs
   trace dump $ return ()
 
+  unmountOK fs
+
   trace ("=== End propM_dirConstructionOK ===") $ return ()
   where
     test fs p      = do
-      exec ("mkdir " ++ show p) $ mkdir fs p perms
-      dh <- exec ("openDir " ++ show p) $ openDir fs p
-      isEmpty dh
+      exec ("mkdir " ++ p) (mkdir fs p perms)
+      isEmpty =<< exec ("openDir " ++ p) (openDir fs p)
 
     isEmpty dh     = assert =<< M.null `fmap` sreadRef (dhContents dh)
-    rootPath       = [pathSeparator]
-    perms          = FileMode [Read,Write,Execute] [Read,Execute] [Read,Execute]
-    exec descrip f = run f >>= \ea -> case ea of
-                     Left e  ->
-                       fail $ "Unexpected error in propM_dirConstructionOK ("
-                              ++ descrip ++ "):" ++ show e
-                     Right x -> return x
+    exec           = execE "propM_dirConstructionOK"
+
+-- | Ensure that a new filesystem populated with a handful of
+-- directories permits creation of a file.
+propM_fileCreationOK :: HalfsCapable b t r l m =>
+                        BDGeom
+                     -> BlockDevice m
+                     -> PropertyM m ()
+propM_fileCreationOK _g dev = do
+  trace ("=== Begin propM_fileCreationOK ===") $ return ()  
+  fs <- run (newfs dev) >> mountOK dev
+  
+  let fooPath = rootPath </> "foo"
+      fp      = fooPath </> "f1"
+
+  exec "mkdir /foo"            $ mkdir fs fooPath perms
+  fh0 <- exec "create /foo/f1" $ openFile fs fp True
+  exec "close /foo/f1 (1)"     $ closeFile fs fh0
+  fh1 <- exec "reopen /foo/f1" $ openFile fs fp False
+  exec "close /foo/f1 (2)"     $ closeFile fs fh1
+
+  e <- run $ openFile fs fp True
+  case e of
+    Left HalfsFileExists{} -> return ()
+    Left err               -> unexpectedErr err
+    Right _                ->
+      fail "Open w/ creat of existing file should fail"
+
+  unmountOK fs
+  trace ("=== End propM_fileCreationOK ===") $ return ()
+  run (dumpfs fs) >>= flip trace (return ())
+  where
+    exec = execE "propM_fileCreationOK"
 
 
 --------------------------------------------------------------------------------
@@ -194,6 +220,19 @@ propM_dirConstructionOK _g dev = do
 ok :: Monad m => PropertyM m ()
 ok = return () 
  
+perms :: FileMode
+perms = FileMode [Read,Write,Execute] [Read,Execute] [Read,Execute]
+
 unexpectedErr :: (Monad m, Show a) => a -> PropertyM m ()
 unexpectedErr = fail . (++) "Expected failure, but not: " . show
+
+execE :: (Monad m, Show a) => String -> String -> m (Either a b) -> PropertyM m b
+execE nm descrip f = run f >>= \ea -> case ea of
+                     Left e  ->
+                       fail $ "Unexpected error in " ++ nm ++ " ("
+                              ++ descrip ++ "):" ++ show e
+                     Right x -> return x
+
+rootPath :: FilePath
+rootPath = [pathSeparator]                
 

@@ -33,13 +33,13 @@ import Debug.Trace
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [ -- Inode stream write/read/(over)write/read property
-    exec 50 "Simple WRWR" propM_basicWRWR
+    exec 5 "Simple WRWR" propM_basicWRWR
   ,
     -- Inode stream write/read/(truncating)write/read property
-    exec 50 "Truncating WRWR" propM_truncWRWR
+    exec 5 "Truncating WRWR" propM_truncWRWR
   ,
     -- Inode length-specific stream write/read
-    exec 50 "Length-specific WR" propM_lengthWR
+    exec 5 "Length-specific WR" propM_lengthWR
   ]
   where
     exec = mkMemDevExec quick "Inode"

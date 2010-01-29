@@ -3,7 +3,7 @@ module Halfs.CoreAPI where
 
 import Control.Exception (assert)
 import Control.Monad.Reader
-import Data.ByteString(ByteString)
+import Data.ByteString   (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.Map        as M
 import Data.Serialize
@@ -19,6 +19,8 @@ import Halfs.Inode
 import Halfs.Monad
 import Halfs.Protection
 import Halfs.SuperBlock
+import Halfs.Utils
+
 import System.Device.BlockDevice
 
 import Debug.Trace
@@ -145,18 +147,11 @@ fsck = undefined
 mkdir :: (HalfsCapable b t r l m) =>
          Halfs b r l m -> FilePath -> FileMode -> HalfsM m ()
 mkdir fs fp fm = do
-  u        <- getUser
-  g        <- getGroup
   withAbsPathIR fs path Directory $ \parentIR -> do
-  trace ("mkdir: parentIR = " ++ show parentIR) $ do               
-  mdirAddr <- alloc1 (hsBlockMap fs)
-  case mdirAddr of
-    Nothing      -> return $ Left HalfsAllocFailed
-    Just dirAddr -> do
-      e <- makeDirectory fs dirAddr parentIR dirName u g defaultDirPerms
-      case e of
-        Left e'-> unalloc1 (hsBlockMap fs) dirAddr >> return (Left e')
-        _      -> chmod fs fp fm
+  u <- getUser
+  g <- getGroup
+  either Left (const $ Right ()) `fmap`
+    makeDirectory fs parentIR dirName u g fm
   where
     (path, dirName) = splitFileName fp
 
@@ -172,7 +167,7 @@ openDir fs fp =
 
 closeDir :: (HalfsCapable b t r l m) =>
             Halfs b r l m -> DirHandle r -> HalfsM m ()
-closeDir fs dh = undefined
+closeDir fs dh = Right `fmap` closeDirectory fs dh
 
 readDir :: (HalfsCapable b t r l m) =>
            Halfs b r l m -> DirHandle r -> HalfsM m [(FilePath, FileStat t)]
@@ -206,37 +201,58 @@ openFile :: (HalfsCapable b t r l m) =>
          -> Bool          -- ^ Should we create the file if it is not found?
          -> HalfsM m FileHandle 
 openFile fs fp creat = do
-  whenOK (openDir fs path) $ \dh -> do
-  findInDir dh fname RegularFile >>= maybe noFile foundFile
+  withDir fs path $ \pdh -> do 
+    findInDir pdh fname RegularFile >>= maybe (noFile pdh) foundFile
   where
-    whenOK act f  = act >>= either (return . Left) f
     (path, fname) = splitFileName fp
     -- 
-    noFile =
+    noFile parentDH =
       if creat
         then do
-          -- TODO: allocate new inode for file being created, etc. Should
-          -- probably delegate to Directory.createFile or somesuch; finish
-          -- Directory.openDirectory before worrying about this.
-          fail "TODO: openFile for new files not yet implemented"
+          usr <- getUser
+          grp <- getGroup
+          whenOK ( createFile
+                     fs
+                     parentDH
+                     fname
+                     usr
+                     grp
+                     defaultFilePerms -- FIXME
+                 ) $
+            \fir -> do
+              fh <- openFilePrim fir
+              -- TODO/FIXME: mark this FH as open & r/w'able perms etc.?
+              return $ Right fh
         else do
           return $ Left $ HalfsFileNotFound
     --
-    foundFile _fileIR = do
-      fail "TODO: openFile for existing files not yet implemented"
+    foundFile fir = do
+      if creat
+       then do
+         return $ Left $ HalfsFileExists fp
+       else do
+         fh <- openFilePrim fir
+         -- TODO/FIXME: mark this FH as open, store r/w'able perms etc.?
+         return $ Right fh
                     
 read :: (HalfsCapable b t r l m) =>
-        Halfs b r l m -> FileHandle -> Word64 -> Word64 -> HalfsM m ByteString
+        Halfs b r l m       -- ^ the filesystem
+     -> FileHandle          -- ^ the handle for the open file to read
+     -> Word64              -- ^ the byte offset into the file
+     -> Word64              -- ^ the number of bytes to read
+     -> HalfsM m ByteString -- ^ the data read
 read = undefined
 
 write :: (HalfsCapable b t r l m) =>
-         Halfs b r l m
-      -> FileHandle
-      -> Word64
-      -> Word64
-      -> ByteString
+         Halfs b r l m -- ^ the filesystem
+      -> FileHandle    -- ^ the handle for the open file to write
+      -> Word64        -- ^ the byte offset into the file
+      -> ByteString    -- ^ the data to write
       -> HalfsM m ()
-write = undefined
+write fs fh byteOff bytes = 
+  -- TODO: check fh modes (e.g., read only)
+  -- TODO: check perms
+  writeStream (hsBlockDev fs) (hsBlockMap fs) (fhInode fh) byteOff False bytes
 
 flush :: (HalfsCapable b t r l m) =>
          Halfs b r l m -> FileHandle -> HalfsM m ()
@@ -248,7 +264,9 @@ syncFile = undefined
 
 closeFile :: (HalfsCapable b t r l m) =>
              Halfs b r l m -> FileHandle -> HalfsM m ()
-closeFile = undefined
+closeFile fs fh = do
+  -- TODO/FIXME: sync, mark fh closed
+  return $ Right ()
 
 setFileSize :: (HalfsCapable b t r l m) =>
                Halfs b r l m -> FilePath -> Word64 -> HalfsM m ()
@@ -314,6 +332,17 @@ fsstat = undefined
 
 --------------------------------------------------------------------------------
 -- Utility functions
+
+withDir :: HalfsCapable b t r l m =>
+           Halfs b r l m
+        -> FilePath
+        -> (DirHandle r -> HalfsM m a)
+        -> HalfsM m a
+withDir fs fp act = do
+  whenOK (openDir fs fp) $ \dh -> do
+    rslt <- act dh
+    closeDir fs dh
+    return rslt
 
 -- | Find the InodeRef corresponding to the given path, and call the given
 -- function with it.  On error, yields HalfsPathComponentNotFound or
@@ -393,8 +422,8 @@ dumpfs fs = do
                      ++ pre
                      ++ path
                      ++ case deType dirEnt of
-                          RegularFile -> " (file)"
-                          Directory   -> " (directory)" ++ "\n" ++ sub
-                          Symlink     -> " (symlink)"
+                          RegularFile -> " (file)\n"
+                          Directory   -> " (directory)\n" ++ sub
+                          Symlink     -> " (symlink)\n"
             )
             pfx (M.toList contents)
