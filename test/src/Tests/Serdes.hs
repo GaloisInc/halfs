@@ -16,6 +16,7 @@ import Test.QuickCheck.Monadic
 import Halfs.Classes
 import Halfs.Directory
 import Halfs.Inode
+import Halfs.Monad
 import Halfs.SuperBlock
 
 import System.Device.BlockDevice
@@ -24,7 +25,7 @@ import Tests.Instances ()
 import Tests.Types
 import Tests.Utils
 
-import Debug.Trace
+-- import Debug.Trace
 
 --------------------------------------------------------------------------------
 -- BlockDevice properties
@@ -44,7 +45,7 @@ qcProps quick =
 -- We special case inode serdes property because we want to test equality of the
 -- inodes' transient fields when possible.  This precludes the use of the pure
 -- decode function.
-propM_inodeSerdes :: Timed UTCTime m =>
+propM_inodeSerdes :: HalfsCapable b UTCTime r l m =>
                      BDGeom
                   -> BlockDevice m
                   -> PropertyM m ()
@@ -55,5 +56,5 @@ propM_inodeSerdes _g dev =
   -- arbitrary.
   nAddrs <- computeNumAddrs (bdBlockSize dev) =<<
             minimalInodeSize (createTime inode)
-  run (decodeInode (bdBlockSize dev) (encode inode)) >>=
+  runH (decodeInode (bdBlockSize dev) (encode inode)) >>=
     assert . either (const False) (== inode { numAddrs = nAddrs })

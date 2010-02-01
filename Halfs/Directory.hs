@@ -141,37 +141,6 @@ makeDirectory fs parentIR dname user group perms = do
   where
     dev = hsBlockDev fs
 
-{-
-  do 
-  -- TODO: Locking
-  withDirectory fs parentIR $ \pdh -> do
-  contents <- readRef (dhContents pdh)
-  trace ("makeDirectory: contents of parent directory are: " ++ show contents) $ do            
-  if M.member dname contents
-   then do return $ Left HalfsDirectoryExists
-   else do 
-     mir <- (fmap . fmap) blockAddrToInodeRef $ alloc1 (hsBlockMap fs)
-     case mir of
-       Nothing     -> return $ Left HalfsAllocFailed
-       Just thisIR -> do
-         trace ("makeDirectory: creating dname = " ++ show dname ++ " new inode @ addr " ++ show thisIR ) $ do
-         -- Build the directory inode and persist it
-         bstr <- buildEmptyInodeEnc dev thisIR parentIR user group
-         assert (BS.length bstr == fromIntegral (bdBlockSize dev)) $ return ()
-         bdWriteBlock dev (inodeRefToBlockAddr thisIR) bstr
-       
-         -- Add the new directory 'dname' to the parent dir's contents
-         let newDE = DirEnt dname thisIR user group perms Directory
-         writeRef (dhContents pdh) $ M.insert dname newDE contents
-         modifyRef (dhState pdh) dirStTransAdd
-    
-         -- Persist the new directory structures
-         syncDirectory fs pdh
-         return $ Right thisIR
-  where
-    dev = hsBlockDev fs
--}
-
 -- | Syncs directory contents to disk
 
 -- NB: This should be modified to use the DirHandle cache when it exists, in
@@ -206,7 +175,6 @@ syncDirectory fs dh = do
 openDirectory :: HalfsCapable b t r l m =>
                  BlockDevice m -> InodeRef -> HalfsM m (DirHandle r)
 openDirectory dev inr = do
-  -- HERE
   -- TODO/design scratch re: locking and DirHandle cache.
  
   -- Should be: if we don't have a current DirHandle in the DH cache for this
@@ -256,8 +224,8 @@ addFile :: HalfsCapable b t r l m =>
         -> HalfsM m ()
 addFile dh fname fir u g mode = do
   -- begin sanity check
-  mfound <- liftM (M.lookup fname) (readRef $ dhContents dh)
-  maybe (return ()) (fail "Directory.addFile: file already exists") mfound
+  mfound <- lkupDir fname dh
+  maybe (return ()) (const $ throwError $ HalfsFileExists fname) mfound
   -- end sanity check
 
   -- TODO: DH locking: here?
@@ -296,7 +264,7 @@ findInDir' :: HalfsCapable b t r l m =>
            -> FileType
            -> HalfsM m (Maybe DirectoryEntry)
 findInDir' dh fname ftype = do
-  mde <- liftM (M.lookup fname) (readRef $ dhContents dh)
+  mde <- lkupDir fname dh
   case mde of
     Nothing -> return Nothing
     Just de -> return $ if de `isFileType` ftype then Just de else Nothing
@@ -321,6 +289,12 @@ withDirectory :: HalfsCapable b t r l m =>
               -> HalfsM m a
 withDirectory fs ir = hbracket (openDirectory (hsBlockDev fs) ir)
                                (closeDirectory fs)
+
+lkupDir :: Reffable r m =>
+           FilePath
+        -> DirHandle r
+        -> m (Maybe DirectoryEntry)
+lkupDir p dh = liftM (M.lookup p) (readRef $ dhContents dh)
 
 isFileType :: DirectoryEntry -> FileType -> Bool
 isFileType (DirEnt { deType = t }) ft = t == ft

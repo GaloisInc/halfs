@@ -304,13 +304,13 @@ readStream :: HalfsCapable b t r l m =>
                                               --   including entire last block)
            -> HalfsM m ByteString             -- ^ Stream contents
 readStream dev startIR start mlen = do
-  startInode <- lift $ drefInode dev startIR
+  startInode <- drefInode dev startIR
   if 0 == blockCount startInode
    then return BS.empty
    else do 
      -- Compute bytes per inode (bpi) and decompose the starting byte offset
      bpi    <- (*bs) `fmap` computeNumAddrsM bs
-     inodes <- lift $ expandConts dev startInode
+     inodes <- expandConts dev startInode
 
      dbug ("==== readStream begin ===") $ do
      (sInodeIdx, sBlkOff, sByteOff) <- decompStreamOffset bs bpi start inodes
@@ -327,7 +327,7 @@ readStream dev startIR start mlen = do
         Just len | len == 0 -> return BS.empty
         _                   -> do
           case genericDrop sInodeIdx inodes of
-            [] -> fail "Inode.readStream internal error: invalid start inode index"
+            [] -> fail "Inode.readStream INTERNAL: invalid start inode index"
             (inode:rest) -> do
               -- 'header' is just the partial first block and all remaining
               -- blocks in the first inode, accounting for the possible upper
@@ -393,14 +393,14 @@ writeStream dev bm startIR start trunc bytes       = do
   -- as needed to reduce the number of unallocation actions required, but we'll
   -- leave this as a TODO for now.
 
-  startInode <- lift $ drefInode dev startIR
+  startInode <- drefInode dev startIR
   api        <- computeNumAddrsM bs -- (block) addrs per inode
   bpi        <- return $ bs * api   -- bytes per inode
 
   -- NB: expandConts is probably not viable once inode chains get large, but
   -- neither is the continuation scheme in general.  Revisit after stuff is
   -- working.
-  inodes <- lift $ expandConts dev startInode
+  inodes <- expandConts dev startInode
   sIdx@(sInodeIdx, sBlkOff, sByteOff) <- decompStreamOffset bs bpi start inodes
 
   -- Sanity check
@@ -468,13 +468,7 @@ writeStream dev bm startIR start trunc bytes       = do
   chunks <- (firstChunk:) `fmap`
             unfoldrM (lift . getBlockContents dev trunc)
                      (bytes', drop 1 blkAddrs)
-{-
-  forM chunks $ \chunk ->
-    dbug ("chunk: " ++ show chunk) $ return ()
-  dbug ("blkAddrs     = " ++ show blkAddrs)          $ do
-  dbug ("len blkAddrs = " ++ show (length blkAddrs)) $ do
-  dbug ("len chunks   = " ++ show (length chunks))   $ do
--}
+
   assert (all ((== safeToInt bs) . BS.length) chunks) $ do
 
   -- Write the remaining blocks
@@ -671,18 +665,15 @@ writeInode dev n =
 -- long continuation chain): we read the entire chain when examination of the
 -- stream from the start to end offsets would be sufficient.
 expandConts :: HalfsCapable b t r l m =>
-               BlockDevice m -> Inode t -> m [Inode t]
+               BlockDevice m -> Inode t -> HalfsM m [Inode t]
 expandConts _   inode@Inode{ continuation = Nothing      } = return [inode]
 expandConts dev inode@Inode{ continuation = Just nextRef } = 
   (inode:) `fmap` (drefInode dev nextRef >>= expandConts dev)
 
-drefInode :: (Serialize t, Timed t m, Functor m) =>
-             BlockDevice m -> InodeRef -> m (Inode t)
-drefInode dev (IR addr) = do
-  einode <- bdReadBlock dev addr >>= decodeInode (bdBlockSize dev)
-  case einode of
-    Left s  -> fail $ "drefInode decode failure: " ++ s
-    Right r -> return r
+drefInode :: HalfsCapable b t r l m => 
+             BlockDevice m -> InodeRef -> HalfsM m (Inode t)
+drefInode dev (IR addr) = 
+  lift (bdReadBlock dev addr) >>= decodeInode (bdBlockSize dev)
 
 -- | Decompose the given absolute byte offset into an inode data stream into
 -- inode index (i.e., 0-based index into sequence of Inode continuations), block
@@ -722,15 +713,15 @@ addOffset blksPerInode blkSz offset (inodeIdx, blkIdx, byteIdx) =
 -- | A wrapper around Data.Serialize.decode that populates transient fields.  We
 -- do this to avoid occupying valuable on-disk inode space where possible.  Bare
 -- applications of 'decode' should not occur when deserializing inodes.
-decodeInode :: (Serialize t, Timed t m, Monad m) =>
+decodeInode :: HalfsCapable b t r l m =>
                Word64
             -> ByteString
-            -> m (Either String (Inode t))
+            -> HalfsM m (Inode t)
 decodeInode blkSize bs = do
   numAddrs' <- computeNumAddrsM blkSize
   case decode bs of
-    Left s  -> return $ Left  $ s
-    Right n -> return $ Right $ n { numAddrs = numAddrs' }
+    Left s  -> throwError $ HalfsDecodeFail_Inode s
+    Right n -> return n { numAddrs = numAddrs' }
 
 -- "Safe" (i.e., emits runtime assertions on overflow) versions of
 -- BS.{take,drop,replicate}.  We want the efficiency of these functions without

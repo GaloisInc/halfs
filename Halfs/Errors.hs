@@ -6,15 +6,16 @@ import Data.Word
 
 data HalfsError =
     HalfsFileNotFound
-  | HalfsDirectoryExists
   | HalfsFileExists FilePath
+  | HalfsDirectoryExists
   | HalfsPathComponentNotFound String
   | HalfsAbsolutePathExpected
+  | HalfsMountFailed RsnHalfsMountFail
   | HalfsUnmountFailed 
-  | HalfsMountFailed   RsnHalfsMountFail
   | HalfsAllocFailed
   | HalfsInvalidStreamIndex Word64
   | HalfsDecodeFail_Directory String
+  | HalfsDecodeFail_Inode String
   | HalfsTestFailed String
   deriving Show
 
