@@ -2,7 +2,6 @@
 module Halfs.CoreAPI where
 
 import Control.Exception (assert)
-import Control.Monad.Reader
 import Data.ByteString   (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.Map        as M
@@ -19,11 +18,9 @@ import Halfs.Inode
 import Halfs.Monad
 import Halfs.Protection
 import Halfs.SuperBlock
-import Halfs.Utils
+import Halfs.Types
 
 import System.Device.BlockDevice
-
-import Debug.Trace
 
 data SyncType = Data | Everything
 
@@ -52,14 +49,14 @@ data FileSystemStats = FSS {
 -- small files and directories.
 
 newfs :: (HalfsCapable b t r l m) =>
-         BlockDevice m -> m SuperBlock
+         BlockDevice m -> HalfsM m SuperBlock
 newfs dev = do
   when (superBlockSize > bdBlockSize dev) $
     fail "The device's block size is insufficiently large!"
 
-  blockMap <- newBlockMap dev
+  blockMap <- lift $ newBlockMap dev
   numFree  <- readRef (bmNumFree blockMap)
-  rdirAddr <- alloc1 blockMap >>=
+  rdirAddr <- lift (alloc1 blockMap) >>=
               maybe (fail "Unable to allocate block for rdir inode") return
 
   -- Build the root directory inode and persist it; note that we do not use
@@ -67,13 +64,14 @@ newfs dev = do
   -- no parent directory.
 
   let rdirInode = blockAddrToInodeRef rdirAddr
-  dirInode <- buildEmptyInodeEnc dev rdirInode nilInodeRef rootUser rootGroup
+  dirInode <- lift $
+              buildEmptyInodeEnc dev rdirInode nilInodeRef rootUser rootGroup
   assert (BS.length dirInode == fromIntegral (bdBlockSize dev)) $ do
-  bdWriteBlock dev rdirAddr dirInode
+  lift $ bdWriteBlock dev rdirAddr dirInode
 
   -- Persist the remaining data structures
-  writeBlockMap dev blockMap
-  writeSB       dev $ superBlock rdirInode (numFree - rdirBlks) rdirBlks
+  lift $ writeBlockMap dev blockMap
+  lift $ writeSB       dev $ superBlock rdirInode (numFree - rdirBlks) rdirBlks
  where
    rdirBlks                = 1
    superBlock rdirIR nf nu = SuperBlock {
@@ -93,21 +91,18 @@ newfs dev = do
 mount :: (HalfsCapable b t r l m) =>
          BlockDevice m -> HalfsM m (Halfs b r l m)
 mount dev = do
-  esb <- decode `fmap` bdReadBlock dev 0
+  esb <- decode `fmap` lift (bdReadBlock dev 0)
   case esb of
-    Left msg -> return $ Left $ HalfsMountFailed $ BadSuperBlock msg
+    Left msg -> throwError $ HalfsMountFailed $ BadSuperBlock msg
     Right sb -> do
       if unmountClean sb
        then do
-         sb' <- writeSB dev sb{ unmountClean = False }
-         Right `fmap`
-           (HalfsState dev
-            `fmap` readBlockMap dev       
-            `ap`   newRef sb'
-            `ap`   newLock
-           )
-       else do 
-         return $ Left $ HalfsMountFailed DirtyUnmount
+         sb' <- lift $ writeSB dev sb{ unmountClean = False }
+         HalfsState dev
+           `fmap` lift (readBlockMap dev)
+           `ap`   newRef sb'
+           `ap`   newLock
+       else throwError $ HalfsMountFailed DirtyUnmount
 
 -- | Unmounts the given filesystem.  After this operation completes, the
 -- superblock will have its unmountClean flag set to True.
@@ -117,18 +112,17 @@ unmount fs@HalfsState{hsBlockDev = dev, hsSuperBlock = sbRef} =
   locked fs $ do
   sb <- readRef sbRef
   if (unmountClean sb)
-   then do
-     return $ Left HalfsUnmountFailed
+   then throwError HalfsUnmountFailed
    else do
      -- TODO:
      -- * Persist any dirty data structures (dirents, files w/ buffered IO, etc)
-     bdFlush dev
+     lift $ bdFlush dev
    
      -- Finalize the superblock
      let sb' = sb{ unmountClean = True }
      writeRef sbRef sb'
-     writeSB dev sb'
-     return $ Right $ ()
+     lift $ writeSB dev sb'
+     return ()
   
 fsck :: Int
 fsck = undefined
@@ -148,10 +142,10 @@ mkdir :: (HalfsCapable b t r l m) =>
          Halfs b r l m -> FilePath -> FileMode -> HalfsM m ()
 mkdir fs fp fm = do
   withAbsPathIR fs path Directory $ \parentIR -> do
-  u <- getUser
-  g <- getGroup
-  either Left (const $ Right ()) `fmap`
+    u <- getUser
+    g <- getGroup
     makeDirectory fs parentIR dirName u g fm
+    return ()
   where
     (path, dirName) = splitFileName fp
 
@@ -163,11 +157,11 @@ openDir :: (HalfsCapable b t r l m) =>
            Halfs b r l m -> FilePath -> HalfsM m (DirHandle r)
 openDir fs fp =
   withAbsPathIR fs fp Directory $ \dirIR -> do
-  Right `fmap` openDirectory (hsBlockDev fs) dirIR
+    openDirectory (hsBlockDev fs) dirIR
 
 closeDir :: (HalfsCapable b t r l m) =>
             Halfs b r l m -> DirHandle r -> HalfsM m ()
-closeDir fs dh = Right `fmap` closeDirectory fs dh
+closeDir fs dh = closeDirectory fs dh
 
 readDir :: (HalfsCapable b t r l m) =>
            Halfs b r l m -> DirHandle r -> HalfsM m [(FilePath, FileStat t)]
@@ -211,31 +205,29 @@ openFile fs fp creat = do
         then do
           usr <- getUser
           grp <- getGroup
-          whenOK ( createFile
-                     fs
-                     parentDH
-                     fname
-                     usr
-                     grp
-                     defaultFilePerms -- FIXME
-                 ) $
-            \fir -> do
-              fh <- openFilePrim fir
-              -- TODO/FIXME: mark this FH as open in FD structures &
-              -- r/w'able perms etc.?
-              return $ Right fh
+          fir <- createFile
+                   fs
+                   parentDH
+                   fname
+                   usr
+                   grp
+                   defaultFilePerms -- FIXME
+          fh <- openFilePrim fir
+          -- TODO/FIXME: mark this FH as open in FD structures &
+          -- r/w'able perms etc.?
+          return fh
         else do
-          return $ Left $ HalfsFileNotFound
+          throwError $ HalfsFileNotFound
     --
     foundFile fir = do
       if creat
        then do
-         return $ Left $ HalfsFileExists fp
+         throwError $ HalfsFileExists fp
        else do
          fh <- openFilePrim fir
          -- TODO/FIXME: mark this FH as open in FD structures, store
          -- r/w'able perms etc.?
-         return $ Right fh
+         return fh
                     
 read :: (HalfsCapable b t r l m) =>
         Halfs b r l m       -- ^ the filesystem
@@ -272,7 +264,7 @@ closeFile :: (HalfsCapable b t r l m) =>
           -> HalfsM m ()
 closeFile _fs _fh = do
   -- TODO/FIXME: sync, mark fh closed in FD structures
-  return $ Right ()
+  return ()
 
 setFileSize :: (HalfsCapable b t r l m) =>
                Halfs b r l m -> FilePath -> Word64 -> HalfsM m ()
@@ -345,10 +337,10 @@ withDir :: HalfsCapable b t r l m =>
         -> (DirHandle r -> HalfsM m a)
         -> HalfsM m a
 withDir fs fp act = do
-  whenOK (openDir fs fp) $ \dh -> do
-    rslt <- act dh
-    closeDir fs dh
-    return rslt
+  dh <- openDir fs fp
+  rslt <- act dh
+  closeDir fs dh
+  return rslt
 
 -- | Find the InodeRef corresponding to the given path, and call the given
 -- function with it.  On error, yields HalfsPathComponentNotFound or
@@ -366,10 +358,10 @@ withAbsPathIR fs fp ftype f = do
      mir    <- find (hsBlockDev fs) rdirIR ftype
                  (drop 1 $ splitDirectories fp)
      case mir of
-       Nothing -> return $ Left $ HalfsPathComponentNotFound fp
+       Nothing -> throwError $ HalfsPathComponentNotFound fp
        Just ir -> f ir
-   else do
-     return $ Left $ HalfsAbsolutePathExpected
+   else
+     throwError HalfsAbsolutePathExpected
 
 writeSB :: (HalfsCapable b t r l m) =>
            BlockDevice m -> SuperBlock -> m SuperBlock
@@ -410,7 +402,7 @@ defaultFilePerms = FileMode [Read,Write] [Read] [Read]
 -- Debugging helpers
 
 dumpfs :: HalfsCapable b t r l m =>
-          Halfs b r l m -> m String
+          Halfs b r l m -> HalfsM m String
 dumpfs fs = do
   dump <- dumpfs' 2 "/\n" =<< rootDir `fmap` readRef (hsSuperBlock fs)
   return $ "=== fs dump begin ===\n" ++ dump  ++ "=== fs dump end ===\n"

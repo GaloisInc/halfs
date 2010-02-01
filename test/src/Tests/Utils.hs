@@ -14,6 +14,8 @@ import Test.QuickCheck.Monadic
 import Halfs.Classes
 import Halfs.CoreAPI (mount, unmount)
 import Halfs.Monad
+import Halfs.Errors
+import Halfs.Types
   
 import System.Device.BlockDevice
 import System.Device.File
@@ -98,16 +100,20 @@ mountOK :: HalfsCapable b t r l m =>
            BlockDevice m
         -> PropertyM m (Halfs b r l m)
 mountOK dev =
-  run (mount dev) >>=
-  either (fail . (++) "Unexpected mount failure: " . show) (return)
+  runH (mount dev) >>=
+    either (fail . (++) "Unexpected mount failure: " . show) return
 
 unmountOK :: HalfsCapable b t r l m =>
              Halfs b r l m -> PropertyM m ()
 unmountOK fs =
-      run (unmount fs)
-      >>= either (fail . (++) "Unxpected unmount failure: " . show)
-                 (const $ return ())
+  runH (unmount fs) >>=
+    either (fail . (++) "Unxpected unmount failure: " . show)
+           (const $ return ())
          
-
 sreadRef :: HalfsCapable b t r l m => r a -> PropertyM m a
 sreadRef = ($!) (run . readRef)
+
+runH :: HalfsCapable b t r l m =>
+        HalfsM m a -> PropertyM m (Either HalfsError a)
+runH = run . runHalfs
+

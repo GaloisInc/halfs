@@ -14,6 +14,8 @@ data HalfsError =
   | HalfsMountFailed   RsnHalfsMountFail
   | HalfsAllocFailed
   | HalfsInvalidStreamIndex Word64
+  | HalfsDecodeFail_Directory String
+  | HalfsTestFailed String
   deriving Show
 
 data RsnHalfsMountFail = 

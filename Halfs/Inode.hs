@@ -23,7 +23,6 @@ module Halfs.Inode
  where
 
 import Control.Exception
-import Control.Monad
 import Data.ByteString(ByteString)
 import qualified Data.ByteString as BS
 import Data.Char
@@ -38,10 +37,10 @@ import qualified Halfs.BlockMap as BM
 import Halfs.Classes
 import Halfs.Errors
 import Halfs.Protection
+import Halfs.Monad
 import Halfs.Utils
 import System.Device.BlockDevice
 
-import Debug.Trace
 --import System.IO.Unsafe
 dbug :: String -> a -> a
 --dbug   = seq . unsafePerformIO . putStrLn
@@ -303,63 +302,65 @@ readStream :: HalfsCapable b t r l m =>
            -> Maybe Word64                    -- ^ Stream length (Nothing =>
                                               --   until end of stream,
                                               --   including entire last block)
-           -> m (Either HalfsError ByteString) -- ^ Stream contents
+           -> HalfsM m ByteString             -- ^ Stream contents
 readStream dev startIR start mlen = do
-  startInode <- drefInode dev startIR
-  if 0 == blockCount startInode then return $ Right BS.empty else do 
-  -- Compute bytes per inode (bpi) and decompose the starting byte offset
-  bpi    <- (*bs) `fmap` computeNumAddrsM bs
-  inodes <- expandConts dev startInode
+  startInode <- lift $ drefInode dev startIR
+  if 0 == blockCount startInode
+   then return BS.empty
+   else do 
+     -- Compute bytes per inode (bpi) and decompose the starting byte offset
+     bpi    <- (*bs) `fmap` computeNumAddrsM bs
+     inodes <- lift $ expandConts dev startInode
 
-  dbug ("==== readStream begin ===") $ do
-  (sInodeIdx, sBlkOff, sByteOff) <- decompStreamOffset bs bpi start inodes
-  dbug ("start = " ++ show start) $ do
-  dbug ("(sInodeIdx, sBlkOff, sByteOff) = " ++ show (sInodeIdx, sBlkOff, sByteOff)) $ do
+     dbug ("==== readStream begin ===") $ do
+     (sInodeIdx, sBlkOff, sByteOff) <- decompStreamOffset bs bpi start inodes
+     dbug ("start = " ++ show start) $ do
+     dbug ("(sInodeIdx, sBlkOff, sByteOff) = " ++ show (sInodeIdx, sBlkOff, sByteOff)) $ do
 
-  -- Sanity check
-  if (sInodeIdx >= fromIntegral (length inodes) ||
-      let blkCnt = blockCount (inodes !! safeToInt sInodeIdx) in
-      sBlkOff >= blkCnt && not (sBlkOff == 0 && blkCnt == 0)
-     )
-   then return $ Left $ HalfsInvalidStreamIndex start
-   else case mlen of
-     Just len | len == 0 -> return $ Right BS.empty
-     _                   -> do
-       case genericDrop sInodeIdx inodes of
-         [] -> fail "Inode.readStream internal error: invalid start inode index"
-         (inode:rest) -> do
-           -- 'header' is just the partial first block and all remaining
-           -- blocks in the first inode, accounting for the possible upper
-           -- bound on the length of the data returned.
-           assert (maybe True (> 0) mlen) $ return ()
-           header <- do
-             let remBlks = calcRemBlks inode (+ sByteOff)
-                           -- +sByteOff to force rounding for partial blocks
-                 range   = let lastIdx = blockCount inode - 1 in 
-                           [ sBlkOff .. min lastIdx (sBlkOff + remBlks - 1) ]
-             (blk:blks) <- mapM (readBlock inode) range
-             return $ bsDrop sByteOff blk `BS.append` BS.concat blks
-       
-           -- 'fullBlocks' is the remaining content from all remaining inodes,
-           -- accounting for the possible upper bound on the length of the
-           -- data returned.
-           (fullBlocks, _readCnt) <-
-             foldM
-               (\(acc, bytesSoFar) inode' -> do
-                  let remBlks = calcRemBlks inode' (flip (-) bytesSoFar) 
-                      range   = if remBlks > 0 then [0..remBlks - 1] else []
-                  blks <- mapM (readBlock inode') range
-                  return ( acc `BS.append` BS.concat blks
-                         , bytesSoFar + remBlks * bs
-                         )
-               )
-               (BS.empty, fromIntegral $ BS.length header) rest
-           dbug ("==== readStream end ===") $ return ()
-           return $ Right $
-             (maybe id bsTake mlen) $ header `BS.append` fullBlocks
+     -- Sanity check
+     if (sInodeIdx >= fromIntegral (length inodes) ||
+         let blkCnt = blockCount (inodes !! safeToInt sInodeIdx) in
+         sBlkOff >= blkCnt && not (sBlkOff == 0 && blkCnt == 0)
+        ) 
+      then throwError $ HalfsInvalidStreamIndex start
+      else case mlen of
+        Just len | len == 0 -> return BS.empty
+        _                   -> do
+          case genericDrop sInodeIdx inodes of
+            [] -> fail "Inode.readStream internal error: invalid start inode index"
+            (inode:rest) -> do
+              -- 'header' is just the partial first block and all remaining
+              -- blocks in the first inode, accounting for the possible upper
+              -- bound on the length of the data returned.
+              assert (maybe True (> 0) mlen) $ return ()
+              header <- do
+                let remBlks = calcRemBlks inode (+ sByteOff)
+                              -- +sByteOff to force rounding for partial blocks
+                    range   = let lastIdx = blockCount inode - 1 in 
+                              [ sBlkOff .. min lastIdx (sBlkOff + remBlks - 1) ]
+                (blk:blks) <- mapM (readBlock inode) range
+                return $ bsDrop sByteOff blk `BS.append` BS.concat blks
+
+              -- 'fullBlocks' is the remaining content from all remaining
+              -- inodes, accounting for the possible upper bound on the length
+              -- of the data returned.
+              (fullBlocks, _readCnt) <- 
+                foldM
+                  (\(acc, bytesSoFar) inode' -> do
+                     let remBlks = calcRemBlks inode' (flip (-) bytesSoFar) 
+                         range   = if remBlks > 0 then [0..remBlks - 1] else []
+                     blks <- mapM (readBlock inode') range
+                     return ( acc `BS.append` BS.concat blks
+                            , bytesSoFar + remBlks * bs
+                            )
+                  )
+                  (BS.empty, fromIntegral $ BS.length header) rest
+              dbug ("==== readStream end ===") $ return ()
+              return $ 
+                (maybe id bsTake mlen) $ header `BS.append` fullBlocks
   where
-    readBlock = readInodeBlock dev
-    bs        = bdBlockSize dev
+    bs            = bdBlockSize dev
+    readBlock n b = lift $ readInodeBlock dev n b
     -- 
     -- Calculate the remaining blocks (up to len, if applicable) to read from
     -- the given inode.  f is just a length modifier.
@@ -379,8 +380,8 @@ writeStream :: HalfsCapable b t r l m =>
             -> Word64        -- ^ Starting stream (byte) offset
             -> Bool          -- ^ Truncating write?
             -> ByteString    -- ^ Data to write
-            -> m (Either HalfsError ())
-writeStream _ _ _ _ _ bytes | 0 == BS.length bytes = return $ Right ()
+            -> HalfsM m ()
+writeStream _ _ _ _ _ bytes | 0 == BS.length bytes = return ()
 writeStream dev bm startIR start trunc bytes       = do
   -- TODO: locking
 
@@ -391,14 +392,14 @@ writeStream dev bm startIR start trunc bytes       = do
   -- as needed to reduce the number of unallocation actions required, but we'll
   -- leave this as a TODO for now.
 
-  startInode <- drefInode dev startIR
+  startInode <- lift $ drefInode dev startIR
   api        <- computeNumAddrsM bs -- (block) addrs per inode
   bpi        <- return $ bs * api   -- bytes per inode
 
   -- NB: expandConts is probably not viable once inode chains get large, but
   -- neither is the continuation scheme in general.  Revisit after stuff is
   -- working.
-  inodes                              <- expandConts dev startInode
+  inodes <- lift $ expandConts dev startInode
   sIdx@(sInodeIdx, sBlkOff, sByteOff) <- decompStreamOffset bs bpi start inodes
 
   -- Sanity check
@@ -406,9 +407,8 @@ writeStream dev bm startIR start trunc bytes       = do
       let blkCnt = blockCount (inodes !! safeToInt sInodeIdx) in
       sBlkOff >= blkCnt && not (sBlkOff == 0 && blkCnt == 0)
      )
-   then return $ Left $ HalfsInvalidStreamIndex start
+   then throwError $ HalfsInvalidStreamIndex start
    else do 
-
   dbug ("==== writeStream begin ===") $ do
   dbug ("addrs per inode           = " ++ show api)                            $ do
   dbug ("inodeIdx, blkIdx, byteIdx = " ++ show (sInodeIdx, sBlkOff, sByteOff)) $ do
@@ -433,20 +433,18 @@ writeStream dev bm startIR start trunc bytes       = do
   dbug ("blksToAlloc   = " ++ show blksToAlloc)            $ do
   dbug ("inodesToAlloc = " ++ show inodesToAlloc)          $ do
 
-  whenOK ( allocFill
-             dev
-             bm
-             availBlks
-             blksToAlloc
-             inodesToAlloc
-             (user startInode)
-             (group startInode)
-             inodes
-         )
-    $ \inodes' -> do 
+  inodes' <- allocFill
+               dev
+               bm
+               availBlks
+               blksToAlloc
+               inodesToAlloc
+               (user startInode)
+               (group startInode)
+               inodes
 
   let stInode = (inodes' !! safeToInt sInodeIdx)
-  sBlk <- readInodeBlock dev stInode sBlkOff
+  sBlk <- lift $ readInodeBlock dev stInode sBlkOff
 
   let (sData, bytes') = bsSplitAt (bs - sByteOff) bytes
       -- The first block-sized chunk to write is the region in the start block
@@ -467,8 +465,8 @@ writeStream dev bm startIR start trunc bytes       = do
                  ++ concatMap blocks (genericDrop (sInodeIdx + 1) inodes')
 
   chunks <- (firstChunk:) `fmap`
-            unfoldrM (getBlockContents dev trunc) (bytes', drop 1 blkAddrs)
-
+            unfoldrM (lift . getBlockContents dev trunc)
+                     (bytes', drop 1 blkAddrs)
 {-
   forM chunks $ \chunk ->
     dbug ("chunk: " ++ show chunk) $ return ()
@@ -479,8 +477,8 @@ writeStream dev bm startIR start trunc bytes       = do
   assert (all ((== safeToInt bs) . BS.length) chunks) $ do
 
   -- Write the remaining blocks
-  mapM_ (uncurry $ bdWriteBlock dev) (blkAddrs `zip` chunks)
-               
+  mapM_ (\(a,d) -> lift $ bdWriteBlock dev a d) (blkAddrs `zip` chunks)
+
   -- If this is a truncating write, fix up the chain terminator & free all
   -- blocks & inodes in the free region
   inodes'' <- if trunc
@@ -491,11 +489,11 @@ writeStream dev bm startIR start trunc bytes       = do
   dbug ("inodesUpdated = " ++ show inodesUpdated) $ return ()
 
   -- Update persisted inodes from the start inode to end of write region
-  mapM_ (writeInode dev) $
+  mapM_ (lift . writeInode dev) $
     genericTake inodesUpdated $ genericDrop sInodeIdx inodes''
 
   dbug ("==== writeStream end ===") $ do
-  return $ Right ()
+  return ()
   where
     bs           = bdBlockSize dev
     len          = fromIntegral $ BS.length bytes
@@ -517,11 +515,11 @@ allocFill :: HalfsCapable b t r l m =>
           -> UserID              -- ^ User for new inodes
           -> GroupID             -- ^ Group for new inodes
           -> [Inode t]           -- ^ Inode chain to extend and fill
-          -> m (Either HalfsError [Inode t])
-allocFill _ _ _ 0 _ _ _ existingInodes = return $ Right existingInodes
-allocFill dev bm avail blksToAlloc inodesToAlloc usr grp existingInodes =
-  whenOK (allocInodes inodesToAlloc) $ \newInodes -> do
-  whenOK (allocBlocks blksToAlloc)   $ \blks      -> do
+          -> HalfsM m [Inode t]
+allocFill _ _ _ 0 _ _ _ existingInodes = return existingInodes
+allocFill dev bm avail blksToAlloc inodesToAlloc usr grp existingInodes = do
+  newInodes <- allocInodes inodesToAlloc
+  blks      <- allocBlocks blksToAlloc             
   
   -- Fixup continuation fields and form the region that we'll fill with
   -- the newly allocated blocks (i.e., starting at the last inode but
@@ -547,38 +545,37 @@ allocFill dev bm avail blksToAlloc inodesToAlloc usr grp existingInodes =
   
   assert (null blks') $ return ()
   assert (length inodes' >= length existingInodes) $ return ()
-  return (Right inodes')
+  return inodes'
   where
     allocBlocks n = do
       -- currently "flattens" BlockGroup; see comment in writeStream
-      mbg <- BM.allocBlocks bm n
+      mbg <- lift $ BM.allocBlocks bm n
       case mbg of
-        Nothing -> return $ Left HalfsAllocFailed
-        Just bg -> return $ Right $ BM.blkRangeBG bg
+        Nothing -> throwError HalfsAllocFailed
+        Just bg -> return $ BM.blkRangeBG bg
     -- 
     allocInodes n =
       if 0 == n
-      then return $ Right []
+      then return []
       else do
         minodes <- fmap sequence $ replicateM (safeToInt n) $ do
-                     mir <- (fmap . fmap) blockAddrToInodeRef (BM.alloc1 bm)
-                     case mir of
-                       Nothing -> return Nothing
-                       Just ir -> Just
-                                  `fmap`
-                                  buildEmptyInode dev ir nilInodeRef usr grp
-        maybe (return $ Left HalfsAllocFailed) (return . Right) minodes
+          mir <- (fmap . fmap) blockAddrToInodeRef (BM.alloc1 bm)
+          case mir of
+            Nothing -> return Nothing
+            Just ir -> Just `fmap`
+                       lift (buildEmptyInode dev ir nilInodeRef usr grp)
+        maybe (throwError HalfsAllocFailed) (return) minodes
 
 -- | Truncates the stream at the given stream index and length offset, and
 -- unallocates all resources in the corresponding free region
 truncUnalloc :: HalfsCapable b t r l m =>
-                BlockDevice m -- the block device
-             -> BlockMap b r  -- the block map
-             -> Word64        -- # of addrs (blocks) per inode 
-             -> StreamIdx     -- starting stream index
-             -> Word64        -- length at which to truncate
-             -> [Inode t]     -- Current inode chain
-             -> m [Inode t]   -- Truncated inode chain
+                BlockDevice m      -- the block device
+             -> BlockMap b r       -- the block map
+             -> Word64             -- # of addrs (blocks) per inode 
+             -> StreamIdx          -- starting stream index
+             -> Word64             -- length at which to truncate
+             -> [Inode t]          -- Current inode chain
+             -> HalfsM m [Inode t] -- Truncated inode chain
 truncUnalloc dev bm api sIdx len inodes = do
 
   dbug ("eIdx        = " ++ show eIdx)        $ return ()
@@ -590,7 +587,7 @@ truncUnalloc dev bm api sIdx len inodes = do
   -- but we need to be tracking BlockGroups (or reconstitute them here by
   -- looking for contiguous addresses in allFreeBlks) before we can do better.
     
-  BM.unallocBlocks bm $ BM.Discontig $ map (`BM.Extent` 1) allFreeBlks
+  lift $ BM.unallocBlocks bm $ BM.Discontig $ map (`BM.Extent` 1) allFreeBlks
     
   -- We do not do any writes to any of the inodes that were detached from
   -- the chain & freed; this may have implications for fsck!
@@ -672,7 +669,7 @@ writeInode dev n =
 -- writing a small number of bytes at a low offset into a huge file (and hence a
 -- long continuation chain): we read the entire chain when examination of the
 -- stream from the start to end offsets would be sufficient.
-expandConts :: (Serialize t, Timed t m, Functor m) =>
+expandConts :: HalfsCapable b t r l m =>
                BlockDevice m -> Inode t -> m [Inode t]
 expandConts _   inode@Inode{ continuation = Nothing      } = return [inode]
 expandConts dev inode@Inode{ continuation = Just nextRef } = 
@@ -689,13 +686,13 @@ drefInode dev (IR addr) = do
 -- | Decompose the given absolute byte offset into an inode data stream into
 -- inode index (i.e., 0-based index into sequence of Inode continuations), block
 -- offset within that inode, and byte offset within that block.
-decompStreamOffset ::
-  (Serialize t, Timed t m, Monad m) =>
+decompStreamOffset :: 
+     (Serialize t, Timed t m, Monad m) => 
      Word64    -- ^ Block size, in bytes
   -> Word64    -- ^ Maximum number of bytes "stored" by an inode 
   -> Word64    -- ^ Offset into the inode data stream
   -> [Inode t] -- ^ The inode chain, for sanity checks
-  -> m StreamIdx
+  -> HalfsM m StreamIdx
 decompStreamOffset blkSizeBytes numBytesPerInode streamOff inodes =
   check $ return (inodeIdx, blkOff, byteOff)
   where

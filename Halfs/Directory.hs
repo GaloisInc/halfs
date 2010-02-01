@@ -1,6 +1,5 @@
 module Halfs.Directory
-  (
-   DirHandle(..)
+  ( DirHandle(..)
   , FileStat(..)
   , FileMode(..)
   , AccessRight(..)
@@ -18,7 +17,6 @@ module Halfs.Directory
  where
 
 import Control.Applicative
-import Control.Monad
 import Control.Exception (assert)
 import Data.Bits
 import qualified Data.ByteString as BS
@@ -40,8 +38,7 @@ import Halfs.Inode ( InodeRef(..)
                    , writeStream
                    )
 import Halfs.Protection
-import Halfs.SuperBlock (SuperBlock(rootDir))
-import Halfs.Utils
+import Halfs.Types
 import System.Device.BlockDevice
 
 import Debug.Trace
@@ -115,7 +112,37 @@ makeDirectory :: HalfsCapable b t r l m =>
               -> FileMode          -- ^ initial filemode
               -> HalfsM m InodeRef -- ^ on success, the inode ref to the
                                    --   created directory
-makeDirectory fs parentIR dname user group perms = do
+makeDirectory fs parentIR dname user group perms = do 
+  withDirectory fs parentIR $ \pdh -> do 
+  contents <- readRef (dhContents pdh)
+  trace ("makeDirectory: contents of parent directory are: " ++ show contents) $ do            
+  if M.member dname contents
+   then throwError HalfsDirectoryExists
+   else do
+     mir <- (fmap . fmap) blockAddrToInodeRef $ alloc1 (hsBlockMap fs)
+     case mir of
+       Nothing     -> throwError HalfsAllocFailed
+       Just thisIR -> do
+         trace ("makeDirectory: dname = " ++ show dname ++ " new inode @ " ++ show thisIR ) $ return ()
+         
+         -- Build the directory inode and persist it
+         bstr <- lift $ buildEmptyInodeEnc dev thisIR parentIR user group
+         assert (BS.length bstr == fromIntegral (bdBlockSize dev)) $ return ()
+         lift $ bdWriteBlock dev (inodeRefToBlockAddr thisIR) bstr
+       
+         -- Add the new directory 'dname' to the parent dir's contents
+         let newDE = DirEnt dname thisIR user group perms Directory
+         writeRef (dhContents pdh) $ M.insert dname newDE contents
+         modifyRef (dhState pdh) dirStTransAdd
+    
+         -- Persist the new directory structures
+         syncDirectory fs pdh
+         return thisIR
+  where
+    dev = hsBlockDev fs
+
+{-
+  do 
   -- TODO: Locking
   withDirectory fs parentIR $ \pdh -> do
   contents <- readRef (dhContents pdh)
@@ -143,6 +170,7 @@ makeDirectory fs parentIR dname user group perms = do
          return $ Right thisIR
   where
     dev = hsBlockDev fs
+-}
 
 -- | Syncs directory contents to disk
 
@@ -152,7 +180,7 @@ makeDirectory fs parentIR dname user group perms = do
 -- Alternately, this might stay the same as a primitive op for CoreAPI.syncDir,
 -- which might manage the set of DirHandles that need to be sync'd...
 syncDirectory :: HalfsCapable b t r l m =>
-                 Halfs b r l m -> DirHandle r -> m ()
+                 Halfs b r l m -> DirHandle r -> HalfsM m ()
 syncDirectory fs dh = do 
   -- TODO: locking
   state <- readRef $ dhState dh
@@ -176,7 +204,7 @@ syncDirectory fs dh = do
 
 -- | Obtains an active directory handle for the directory at the given InodeRef
 openDirectory :: HalfsCapable b t r l m =>
-                 BlockDevice m -> InodeRef -> m (DirHandle r)
+                 BlockDevice m -> InodeRef -> HalfsM m (DirHandle r)
 openDirectory dev inr = do
   -- TODO/design scratch re: locking and DirHandle cache.
  
@@ -195,25 +223,21 @@ openDirectory dev inr = do
 
   -- FIXME FIXME FIXME
 
-  eRawDirBytes <- readStream dev inr 0 Nothing
-  case eRawDirBytes of
-    Left e            -> fail "readStream err"
-    Right rawDirBytes -> do
-      dirEnts <- if BS.null rawDirBytes
-                 then do return []
-                 else case decode rawDirBytes of 
-                   Left msg -> fail $ "Failed to decode [DirectoryEntry]: "
-                               ++ msg
-                   Right x  -> return x
+  rawDirBytes <- readStream dev inr 0 Nothing
+  dirEnts <- if BS.null rawDirBytes
+             then do return []
+             else case decode rawDirBytes of 
+               Left msg -> throwError $ HalfsDecodeFail_Directory msg
+               Right x  -> return x
     
-      contents <- return $ M.fromList $ map deName dirEnts `zip` dirEnts
-      trace ("openDirectory: DirHandle contents = " ++ show contents) $ do            
-      DirHandle inr `fmap` newRef contents `ap` newRef Clean
+  contents <- return $ M.fromList $ map deName dirEnts `zip` dirEnts
+  trace ("openDirectory: DirHandle contents = " ++ show contents) $ do            
+  DirHandle inr `fmap` newRef contents `ap` newRef Clean
 
 closeDirectory :: HalfsCapable b t r l m =>
                   Halfs b r l m 
                -> DirHandle r
-               -> m ()
+               -> HalfsM m ()
 closeDirectory fs dh = do
   -- TODO/design scratch re: locking and DirHandle cache
   syncDirectory fs dh
@@ -228,7 +252,7 @@ addFile :: HalfsCapable b t r l m =>
         -> UserID
         -> GroupID
         -> FileMode
-        -> m ()
+        -> HalfsM m ()
 addFile dh fname fir u g mode = do
   -- begin sanity check
   mfound <- liftM (M.lookup fname) (readRef $ dhContents dh)
@@ -250,7 +274,7 @@ find :: HalfsCapable b t r l m =>
      -> InodeRef      -- ^ The starting inode reference
      -> FileType      -- ^ A match must be of this filetype
      -> [FilePath]    -- ^ Path components
-     -> m (Maybe InodeRef)
+     -> HalfsM m (Maybe InodeRef)
 --
 find _ startINR _ [] = 
   trace ("Directory.find base case, terminating") $ do
@@ -269,7 +293,7 @@ findInDir' :: HalfsCapable b t r l m =>
               DirHandle r
            -> String
            -> FileType
-           -> m (Maybe DirectoryEntry)
+           -> HalfsM m (Maybe DirectoryEntry)
 findInDir' dh fname ftype = do
   mde <- liftM (M.lookup fname) (readRef $ dhContents dh)
   case mde of
@@ -281,7 +305,7 @@ findInDir :: HalfsCapable b t r l m =>
              DirHandle r
           -> String
           -> FileType
-          -> m (Maybe InodeRef)
+          -> HalfsM m (Maybe InodeRef)
 findInDir dh fname ftype = 
   findInDir' dh fname ftype >>= return . maybe Nothing (Just . deInode)
 
@@ -292,19 +316,16 @@ findInDir dh fname ftype =
 withDirectory :: HalfsCapable b t r l m =>
                  Halfs b r l m
               -> InodeRef
-              -> (DirHandle r -> m a)
-              -> m a
-withDirectory fs ir act = do
-  dh <- openDirectory (hsBlockDev fs) ir
-  rslt <- act dh
-  closeDirectory fs dh
-  return rslt
+              -> (DirHandle r -> HalfsM m a)
+              -> HalfsM m a
+withDirectory fs ir = hbracket (openDirectory (hsBlockDev fs) ir)
+                               (closeDirectory fs)
 
 isFileType :: DirectoryEntry -> FileType -> Bool
 isFileType (DirEnt { deType = t }) ft = t == ft
 
-showDH :: Reffable r m => DirHandle r -> m String
-showDH dh = do
+_showDH :: Reffable r m => DirHandle r -> m String
+_showDH dh = do
   state    <- readRef $ dhState dh
   contents <- readRef $ dhContents dh
   return $ "DirHandle { dhInode    = " ++ show (dhInode dh)
@@ -316,10 +337,10 @@ dirStTransAdd Clean     = OnlyAdded
 dirStTransAdd OnlyAdded = OnlyAdded
 dirStTransAdd _         = VeryDirty
 
-dirStTransRm :: DirectoryState -> DirectoryState
-dirStTransRm Clean       = OnlyDeleted
-dirStTransRm OnlyDeleted = OnlyDeleted
-dirStTransRm _           = VeryDirty
+_dirStTransRm :: DirectoryState -> DirectoryState
+_dirStTransRm Clean       = OnlyDeleted
+_dirStTransRm OnlyDeleted = OnlyDeleted
+_dirStTransRm _           = VeryDirty
 
 dirStTransClean :: DirectoryState -> DirectoryState
 dirStTransClean = const Clean

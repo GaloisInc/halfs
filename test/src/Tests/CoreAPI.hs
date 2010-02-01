@@ -6,7 +6,6 @@ module Tests.CoreAPI
 where
 
 import Control.Concurrent
-import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.Map as M
 import Data.Serialize
@@ -23,6 +22,7 @@ import Halfs.Errors
 import Halfs.Inode
 import Halfs.Monad
 import Halfs.SuperBlock
+import Halfs.Types
 
 import System.Device.BlockDevice (BlockDevice(..))
 import Tests.Instances (printableBytes)
@@ -57,44 +57,45 @@ propM_initAndMountOK :: HalfsCapable b t r l m =>
                      -> BlockDevice m
                      -> PropertyM m ()
 propM_initAndMountOK _g dev = do
-  sb <- run (newfs dev)
-  assert $ 1 == version sb
-  assert $ unmountClean sb
-  assert $ nilInodeRef /= rootDir sb
-
-  -- Mount the filesystem & ensure integrity with newfs contents
-  run (mount dev) >>= \efs -> case efs of 
-    Left  err -> fail $ "Mount failed: " ++ show err
-    Right fs  -> do
-      sb'      <- sreadRef (hsSuperBlock fs)
-      freeBlks <- sreadRef (bmNumFree $ hsBlockMap fs)
-      assert $ not $ unmountClean sb'
-      assert $ sb' == sb{ unmountClean = False }
-      assert $ freeBlocks sb' == freeBlks
-
-  -- Mount the filesystem again and ensure "dirty unmount" failure
-  run (mount dev) >>= \efs -> case efs of
-    Left (HalfsMountFailed DirtyUnmount) -> ok
-    Left err                             -> unexpectedErr err
-    Right _                              ->
-      fail "Mount of unclean filesystem succeeded"
-
-  -- Corrupt the superblock and ensure "bad superblock" failure
-  run $ bdWriteBlock dev 0 $ BS.replicate (fromIntegral $ bdBlockSize dev) 0
-  run (mount dev) >>= \efs -> case efs of
-    Left (HalfsMountFailed BadSuperBlock{}) -> ok
-    Left err                                -> unexpectedErr err
-    Right _                                 ->
-      fail "Mount of filesystem with corrupt superblock succeeded"
-  where
+  esb <- runH (newfs dev)
+  case esb of
+    Left _   -> fail "Filesystem creation failed"
+    Right sb -> do 
+      assert $ 1 == version sb
+      assert $ unmountClean sb
+      assert $ nilInodeRef /= rootDir sb
+    
+      -- Mount the filesystem & ensure integrity with newfs contents
+      runH (mount dev) >>= \efs -> case efs of 
+        Left  err -> fail $ "Mount failed: " ++ show err
+        Right fs  -> do
+          sb'      <- sreadRef (hsSuperBlock fs)
+          freeBlks <- sreadRef (bmNumFree $ hsBlockMap fs)
+          assert $ not $ unmountClean sb'
+          assert $ sb' == sb{ unmountClean = False }
+          assert $ freeBlocks sb' == freeBlks
+    
+      -- Mount the filesystem again and ensure "dirty unmount" failure
+      runH (mount dev) >>= \efs -> case efs of
+        Left (HalfsMountFailed DirtyUnmount) -> ok
+        Left err                             -> unexpectedErr err
+        Right _                              ->
+          fail "Mount of unclean filesystem succeeded"
+    
+      -- Corrupt the superblock and ensure "bad superblock" failure
+      run $ bdWriteBlock dev 0 $ BS.replicate (fromIntegral $ bdBlockSize dev) 0
+      runH (mount dev) >>= \efs -> case efs of
+        Left (HalfsMountFailed BadSuperBlock{}) -> ok
+        Left err                                -> unexpectedErr err
+        Right _                                 ->
+          fail "Mount of filesystem with corrupt superblock succeeded"
 
 propM_mountUnmountOK :: HalfsCapable b t r l m =>
                         BDGeom
                      -> BlockDevice m
                      -> PropertyM m ()
 propM_mountUnmountOK _g dev = do
-  run (newfs dev)
-  fs <- mountOK dev
+  fs <- runH (newfs dev) >> mountOK dev
   let readSBRef = sreadRef $ hsSuperBlock fs
 
   assert =<< (not . unmountClean) `fmap` readSBRef
@@ -110,8 +111,8 @@ propM_mountUnmountOK _g dev = do
 
   -- Ensure that double unmount results in an error
   mountOK dev >>= \fs' -> do
-    unmountOK fs'                             -- Unmount #1
-    run (unmount fs') >>= \efs -> case efs of -- Unmount #2
+    unmountOK fs'                              -- Unmount #1
+    runH (unmount fs') >>= \efs -> case efs of -- Unmount #2
       Left HalfsUnmountFailed -> ok
       Left err                -> unexpectedErr err
       Right _                 -> fail "Two successive unmounts succeeded"
@@ -129,7 +130,7 @@ propM_unmountMutexOK :: BDGeom
                      -> BlockDevice IO
                      -> PropertyM IO ()
 propM_unmountMutexOK _g dev = do
-  fs <- run (newfs dev) >> mountOK dev
+  fs <- runH (newfs dev) >> mountOK dev
   ch <- run newChan
   run $ forkIO $ threadTest fs ch
   run $ threadTest fs ch
@@ -138,7 +139,8 @@ propM_unmountMutexOK _g dev = do
   assert $ (r1 || r2) && not (r1 && r2) -- r1 `xor` r2
   where
     threadTest fs ch =
-      unmount fs >>= either (\_ -> writeChan ch False) (\_ -> writeChan ch True)
+      runHalfs (unmount fs) >>=
+        either (\_ -> writeChan ch False) (\_ -> writeChan ch True)
 
 -- | Ensure that a new filesystem has the expected root directory intact
 -- and that dirs and subdirs can be created and opened.
@@ -147,10 +149,10 @@ propM_dirConstructionOK :: HalfsCapable b t r l m =>
                         -> BlockDevice m
                         -> PropertyM m ()
 propM_dirConstructionOK _g dev = do
-  fs <- run (newfs dev) >> mountOK dev
+  fs <- runH (newfs dev) >> mountOK dev
 
   -- Check that the root directory is present and empty
-  exec "openDir /" (openDir fs rootPath) >>= \dh -> do
+  exec "openDir /" (runHalfs $ openDir fs rootPath) >>= \dh -> do
     dirState <- sreadRef $ dhState dh
     contents <- sreadRef $ dhContents dh
     assert $ dirState == Clean
@@ -164,12 +166,12 @@ propM_dirConstructionOK _g dev = do
   test fs $ rootPath </> "foo" </> "baz" 
   test fs $ rootPath </> "foo" </> "baz" </> "zzz"
 
-  run (dumpfs fs) >>= flip trace (return ())
+  runH (dumpfs fs) >>= either (error "dumpfs failed") (flip trace (return ()))
   unmountOK fs
   where
     test fs p      = do
-      exec ("mkdir " ++ p) (mkdir fs p perms)
-      isEmpty =<< exec ("openDir " ++ p) (openDir fs p)
+      exec ("mkdir " ++ p) (runHalfs $ mkdir fs p perms)
+      isEmpty =<< exec ("openDir " ++ p) (runHalfs $ openDir fs p)
 
     isEmpty dh     = assert =<< M.null `fmap` sreadRef (dhContents dh)
     exec           = execE "propM_dirConstructionOK"
@@ -181,25 +183,25 @@ propM_fileCreationOK :: HalfsCapable b t r l m =>
                      -> BlockDevice m
                      -> PropertyM m ()
 propM_fileCreationOK _g dev = do
-  fs <- run (newfs dev) >> mountOK dev
+  fs <- runH (newfs dev) >> mountOK dev
   
   let fooPath = rootPath </> "foo"
       fp      = fooPath </> "f1"
 
-  exec "mkdir /foo"            $ mkdir fs fooPath perms
-  fh0 <- exec "create /foo/f1" $ openFile fs fp True
-  exec "close /foo/f1 (1)"     $ closeFile fs fh0
-  fh1 <- exec "reopen /foo/f1" $ openFile fs fp False
-  exec "close /foo/f1 (2)"     $ closeFile fs fh1
+  exec "mkdir /foo"            $ runHalfs $ mkdir fs fooPath perms
+  fh0 <- exec "create /foo/f1" $ runHalfs $ openFile fs fp True
+  exec "close /foo/f1 (1)"     $ runHalfs $ closeFile fs fh0
+  fh1 <- exec "reopen /foo/f1" $ runHalfs $ openFile fs fp False
+  exec "close /foo/f1 (2)"     $ runHalfs $ closeFile fs fh1
 
-  e <- run $ openFile fs fp True
+  e <- runH $ openFile fs fp True
   case e of
     Left HalfsFileExists{} -> return ()
     Left err               -> unexpectedErr err
     Right _                ->
       fail "Open w/ creat of existing file should fail"
 
-  run (dumpfs fs) >>= flip trace (return ())
+  runH (dumpfs fs) >>= either (error "dumpfs failed") (flip trace (return ()))
   unmountOK fs
   where
     exec = execE "propM_fileCreationOK"
@@ -211,22 +213,22 @@ propM_fileWR :: HalfsCapable b t r l m =>
              -> BlockDevice m
              -> PropertyM m ()
 propM_fileWR _g dev = do
-  fs <- run (newfs dev) >> mountOK dev
-  fh <- exec "create /myfile" $ openFile fs (rootPath </> "myfile") True
+  fs <- runH (newfs dev) >> mountOK dev
+  fh <- exec "create /myfile" $
+        runHalfs $ openFile fs (rootPath </> "myfile") True
 
   let maxBytes = bdBlockSize dev * bdNumBlocks dev `div` 4
   forAllM (choose (1, fromIntegral maxBytes)) $ \fileSz   -> do
   forAllM (printableBytes fileSz)             $ \fileData -> do 
 
-  exec "bytes -> /myfile"  $ write fs fh 0 fileData
-  fileData' <- exec "bytes <- /myfile" $ read fs fh 0 (fromIntegral fileSz)
+  exec "bytes -> /myfile" $ runHalfs $ write fs fh 0 fileData
+  fileData' <- exec "bytes <- /myfile" $ runHalfs $ read fs fh 0 (fromIntegral fileSz)
   assert $ fileData == fileData'
 
-  run (dumpfs fs) >>= flip trace (return ())
+  runH (dumpfs fs) >>= either (error "dumpfs failed") (flip trace (return ()))
   unmountOK fs
   where
     exec = execE "propM_fileWR"
-  
 
 
 --------------------------------------------------------------------------------
@@ -242,12 +244,12 @@ unexpectedErr :: (Monad m, Show a) => a -> PropertyM m ()
 unexpectedErr = fail . (++) "Expected failure, but not: " . show
 
 execE :: (Monad m, Show a) => String -> String -> m (Either a b) -> PropertyM m b
-execE nm descrip f = run f >>= \ea -> case ea of
-                     Left e  ->
-                       fail $ "Unexpected error in " ++ nm ++ " ("
-                              ++ descrip ++ "):" ++ show e
-                     Right x -> return x
+execE nm descrip f =
+  run f >>= \ea -> case ea of
+    Left e  ->
+      fail $ "Unexpected error in " ++ nm ++ " ("
+           ++ descrip ++ "):" ++ show e
+    Right x -> return x
 
 rootPath :: FilePath
 rootPath = [pathSeparator]                
-

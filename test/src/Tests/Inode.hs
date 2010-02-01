@@ -14,18 +14,15 @@ import Test.QuickCheck.Monadic
 import Halfs.BlockMap
 import Halfs.Classes
 import Halfs.CoreAPI
-import Halfs.Errors
 import Halfs.Inode
 import Halfs.Monad
 import Halfs.SuperBlock
-import Halfs.Utils  
+import Halfs.Types
 
 import System.Device.BlockDevice (BlockDevice(..))
 import Tests.Instances           (printableBytes)
 import Tests.Types
 import Tests.Utils
-
-import Debug.Trace 
 
 
 --------------------------------------------------------------------------------
@@ -69,11 +66,11 @@ propM_basicWRWR _g dev = do
 -}
                                         
   -- Non-truncating write & read-back
-  e1 <- run $ writeStream dev bm rdirIR 0 False testData
+  e1 <- runH $ writeStream dev bm rdirIR 0 False testData
   case e1 of
     Left  e -> fail $ "writeStream failure in propM_basicWR: " ++ show e
     Right _ -> do
-      ebs <- run $ readStream dev rdirIR 0 Nothing
+      ebs <- runH $ readStream dev rdirIR 0 Nothing
       case ebs of
         Left e -> fail $ "readStream failure in propM_basicWR: " ++ show e
         Right bs ->
@@ -86,11 +83,11 @@ propM_basicWRWR _g dev = do
   forAllM (choose (1, dataSz `div` 2))     $ \overwriteSz -> do 
   forAllM (choose (0, dataSz `div` 2 - 1)) $ \startByte   -> do
   forAllM (printableBytes overwriteSz)     $ \newData     -> do
-  e2 <- run $ writeStream dev bm rdirIR (fromIntegral startByte) False newData
+  e2 <- runH $ writeStream dev bm rdirIR (fromIntegral startByte) False newData
   case e2 of
     Left  e -> fail $ "writeStream failure in propM_basicWR: " ++ show e
     Right _ -> do
-      ebs <- run $ readStream dev rdirIR 0 Nothing
+      ebs <- runH $ readStream dev rdirIR 0 Nothing
       case ebs of
         Left e   -> fail $ "readStream failure in propM_basicWR: " ++ show e
         Right bs -> do 
@@ -110,7 +107,7 @@ propM_truncWRWR :: HalfsCapable b t r l m =>
 propM_truncWRWR _g dev = do
   withFSData dev $ \bm rdirIR dataSz testData -> do 
   -- Non-truncating write
-  e1 <- run $ writeStream dev bm rdirIR 0 False testData
+  e1 <- runH $ writeStream dev bm rdirIR 0 False testData
   case e1 of
     Left e  -> fail $ "writeStream failure in propM_truncWRWR: " ++ show e
     Right _ -> do
@@ -120,12 +117,12 @@ propM_truncWRWR _g dev = do
       freeBlks <- sreadRef (bmNumFree bm) -- Free blks before truncate
 
       -- Truncating write
-      e2 <- run $ writeStream dev bm rdirIR 1 True testData'
+      e2 <- runH $ writeStream dev bm rdirIR 1 True testData'
       case e2 of
         Left e  -> fail $ "writeStream failure in propM_truncWRWR: " ++ show e
         Right _ -> do 
           -- Read until the end of the stream and check truncation       
-          ebs <- run $ readStream dev rdirIR 1 Nothing
+          ebs <- runH $ readStream dev rdirIR 1 Nothing
           case ebs of
             Left e   -> fail $ "readStream failure in propM_truncWRWR: " ++ show e
             Right bs -> do
@@ -145,7 +142,7 @@ propM_lengthWR :: HalfsCapable b t r l m =>
                -> PropertyM m ()
 propM_lengthWR _g dev = do
   withFSData dev $ \bm rdirIR dataSz testData -> do 
-  e1 <- run $ writeStream dev bm rdirIR 0 False testData
+  e1 <- runH $ writeStream dev bm rdirIR 0 False testData
   case e1 of
     Left e  -> fail $ "writeStream failure in propM_lengthWR: " ++ show e
     Right _ -> do
@@ -162,7 +159,7 @@ propM_lengthWR _g dev = do
       let readLen' = min readLen (dataSz - startIdx)
           stIdxW64 = fromIntegral startIdx
 
-      ebs <- run $ readStream dev rdirIR stIdxW64 (Just $ fromIntegral readLen')
+      ebs <- runH $ readStream dev rdirIR stIdxW64 (Just $ fromIntegral readLen')
       case ebs of
         Left e   -> fail $ "readStream failure in propM_lengthWR: " ++ show e
         Right bs -> 
@@ -173,7 +170,7 @@ withFSData :: HalfsCapable b t r l m =>
            -> (BlockMap b r -> InodeRef -> Int -> ByteString -> PropertyM m ())
            -> PropertyM m ()
 withFSData dev f = do
-  fs <- run (newfs dev) >> mountOK dev
+  fs <- runH  (newfs dev) >> mountOK dev
   let bm = hsBlockMap fs 
   rdirIR <- rootDir `fmap` sreadRef (hsSuperBlock fs)
   withData dev $ f bm rdirIR 

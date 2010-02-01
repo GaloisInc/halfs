@@ -13,6 +13,8 @@ import Halfs.Errors
 import Halfs.Inode
 import Halfs.Monad
 import Halfs.Protection
+import Halfs.Types
+
 import System.Device.BlockDevice
 
 --------------------------------------------------------------------------------
@@ -30,18 +32,19 @@ createFile :: HalfsCapable b t r l m =>
            -> UserID
            -> GroupID
            -> FileMode
-           -> m (Either HalfsError InodeRef)
+           -> HalfsM m InodeRef
 createFile fs parentDH fname u g mode = do
-  mfileIR <- (fmap . fmap) blockAddrToInodeRef $ alloc1 (hsBlockMap fs)
+  mfileIR <- (fmap . fmap) blockAddrToInodeRef $ lift $ alloc1 (hsBlockMap fs)
   case mfileIR of
-    Nothing       -> return $ Left HalfsAllocFailed
+    Nothing      -> throwError HalfsAllocFailed
     Just fileIR -> do
-      bdWriteBlock (hsBlockDev fs) (inodeRefToBlockAddr fileIR)
-        =<< buildEmptyInodeEnc (hsBlockDev fs) fileIR (dhInode parentDH) u g
+      let dev = hsBlockDev fs
+      n <- lift $ buildEmptyInodeEnc dev fileIR (dhInode parentDH) u g
+      lift $ bdWriteBlock dev (inodeRefToBlockAddr fileIR) n 
       addFile parentDH fname fileIR u g mode 
-      return $ Right $ fileIR
+      return $ fileIR
 
-openFilePrim :: Monad m => InodeRef -> m FileHandle
+openFilePrim :: Monad m => InodeRef -> HalfsM m FileHandle
 openFilePrim = return . FH
 
 fhInode :: FileHandle -> InodeRef
