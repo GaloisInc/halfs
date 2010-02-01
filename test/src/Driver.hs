@@ -12,6 +12,7 @@ import qualified Tests.Serdes      as SD
 
 qcProps :: [(Args, Property)]
 qcProps =
+{-
   BD.qcProps True -- run in "quick" mode for Block Devices
   ++
   BM.qcProps True -- run in "quick" mode for Block Map
@@ -20,15 +21,16 @@ qcProps =
   ++
   IN.qcProps True -- run in "quick" mode for Inode
   ++
+-}
   CA.qcProps True -- run in "quick" mode for CoreAPI
 
 main :: IO ()
 main = do
   results <- mapM (uncurry quickCheckWithResult) qcProps
   if all isSuccess results
-    then do
-      putStrLn "All tests successful."
-      exitWith ExitSuccess
-    else do 
-      putStrLn "One or more tests failed."
-      exitFailure
+   then do
+     putStrLn "All tests successful."
+     exitWith ExitSuccess
+   else do 
+     putStrLn "One or more tests failed."
+     exitFailure

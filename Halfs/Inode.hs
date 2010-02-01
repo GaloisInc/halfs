@@ -355,6 +355,7 @@ readStream dev startIR start mlen = do
                             )
                   )
                   (BS.empty, fromIntegral $ BS.length header) rest
+
               dbug ("==== readStream end ===") $ return ()
               return $ 
                 (maybe id bsTake mlen) $ header `BS.append` fullBlocks
