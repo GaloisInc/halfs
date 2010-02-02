@@ -28,6 +28,8 @@ import System.Device.ST
 import Tests.Instances
 import Tests.Types
 
+import Debug.Trace
+
 type DevCtor = BDGeom -> IO (Maybe (BlockDevice IO))
 
 --------------------------------------------------------------------------------
@@ -127,6 +129,9 @@ runH = run . runHalfs
 dumpfs :: HalfsCapable b t r l m =>
           HalfsState b r l m -> HalfsM m String
 dumpfs fs = do
+  sb <- readRef (hsSuperBlock fs)
+--  trace ("dumpfs sb = " ++ show sb) $ do
+
   dump <- dumpfs' 2 "/\n" =<< rootDir `fmap` readRef (hsSuperBlock fs)
   return $ "=== fs dump begin ===\n"
         ++ dump

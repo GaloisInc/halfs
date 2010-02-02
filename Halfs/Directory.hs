@@ -95,11 +95,12 @@ syncDirectory fs dh = do
       Clean       -> return ()
       OnlyAdded   -> do
         toWrite <- (encode . M.elems) `fmap` readRef (dhContents dh)
+--        trace ("syncDirectory: writing " ++ show (BS.length toWrite ) ++ " bytes") $ do
   
         -- TODO: Currently, we overwrite the entire DirectoryEntry list,
         -- truncating the directory's inode data stream as needed -- this is
         -- braindead, though.  Instead, we should do something like tracking the
-        -- end of the stream and append new contents there.
+        -- end of the stream and appending new contents there.
         writeStream (hsBlockDev fs) (hsBlockMap fs) (dhInode dh) 0 True toWrite
         modifyRef (dhState dh) dirStTransClean
   

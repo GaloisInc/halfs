@@ -152,8 +152,11 @@ fsck = undefined
 -- * Yields HalfsAbsolutePathExpected if an absolute path is not provided.
 --
 mkdir :: (HalfsCapable b t r l m) =>
-         HalfsState b r l m -> FilePath -> FileMode -> HalfsM m ()
-mkdir fs fp fm = do
+         HalfsState b r l m
+      -> FileMode
+      -> FilePath
+      -> HalfsM m ()
+mkdir fs fm fp = do
   parentIR <- absPathIR fs path Directory 
   u <- getUser
   g <- getGroup
