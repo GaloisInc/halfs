@@ -15,7 +15,7 @@ import Halfs.Classes
 import Halfs.CoreAPI (mount, unmount)
 import Halfs.Monad
 import Halfs.Errors
-import Halfs.Types
+import Halfs.HalfsState
   
 import System.Device.BlockDevice
 import System.Device.File
@@ -98,13 +98,13 @@ mkMemDevExec quick pfx =
 
 mountOK :: HalfsCapable b t r l m =>
            BlockDevice m
-        -> PropertyM m (Halfs b r l m)
+        -> PropertyM m (HalfsState b r l m)
 mountOK dev =
   runH (mount dev) >>=
     either (fail . (++) "Unexpected mount failure: " . show) return
 
 unmountOK :: HalfsCapable b t r l m =>
-             Halfs b r l m -> PropertyM m ()
+             HalfsState b r l m -> PropertyM m ()
 unmountOK fs =
   runH (unmount fs) >>=
     either (fail . (++) "Unxpected unmount failure: " . show)

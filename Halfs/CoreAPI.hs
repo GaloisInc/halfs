@@ -14,6 +14,7 @@ import Halfs.Classes
 import Halfs.Directory
 import Halfs.Errors
 import Halfs.File
+import Halfs.HalfsState
 import Halfs.Inode
 import Halfs.Monad
 import Halfs.Protection
@@ -89,7 +90,7 @@ newfs dev = do
 -- | Mounts a filesystem from a given block device.  After this operation
 -- completes, the superblock will have its unmountClean flag set to False.
 mount :: (HalfsCapable b t r l m) =>
-         BlockDevice m -> HalfsM m (Halfs b r l m)
+         BlockDevice m -> HalfsM m (HalfsState b r l m)
 mount dev = do
   esb <- decode `fmap` lift (bdReadBlock dev 0)
   case esb of
@@ -102,12 +103,14 @@ mount dev = do
            `fmap` lift (readBlockMap dev)
            `ap`   newRef sb'
            `ap`   newLock
+           `ap`   newRef M.empty
+           `ap`   newLock 
        else throwError $ HalfsMountFailed DirtyUnmount
 
 -- | Unmounts the given filesystem.  After this operation completes, the
 -- superblock will have its unmountClean flag set to True.
 unmount :: (HalfsCapable b t r l m) =>
-           Halfs b r l m -> HalfsM m ()
+           HalfsState b r l m -> HalfsM m ()
 unmount fs@HalfsState{hsBlockDev = dev, hsSuperBlock = sbRef} = 
   withLock (hsLock fs) $ do 
   sb <- readRef sbRef
@@ -116,6 +119,9 @@ unmount fs@HalfsState{hsBlockDev = dev, hsSuperBlock = sbRef} =
    else do
      -- TODO:
      -- * Persist any dirty data structures (dirents, files w/ buffered IO, etc)
+
+     -- * e.g., check the fs dh map here for still-open files/dirs
+
      lift $ bdFlush dev
    
      -- Finalize the superblock
@@ -139,7 +145,7 @@ fsck = undefined
 -- * Yields HalfsAbsolutePathExpected if an absolute path is not provided.
 --
 mkdir :: (HalfsCapable b t r l m) =>
-         Halfs b r l m -> FilePath -> FileMode -> HalfsM m ()
+         HalfsState b r l m -> FilePath -> FileMode -> HalfsM m ()
 mkdir fs fp fm = do
   withAbsPathIR fs path Directory $ \parentIR -> do
     u <- getUser
@@ -150,26 +156,27 @@ mkdir fs fp fm = do
     (path, dirName) = splitFileName fp
 
 rmdir :: (HalfsCapable b t r l m) =>
-         Halfs b r l m -> FilePath -> HalfsM m ()
+         HalfsState b r l m -> FilePath -> HalfsM m ()
 rmdir = undefined
 
 openDir :: (HalfsCapable b t r l m) =>
-           Halfs b r l m -> FilePath -> HalfsM m (DirHandle r l)
+           HalfsState b r l m -> FilePath -> HalfsM m (DirHandle r l)
 openDir fs fp =
-  withAbsPathIR fs fp Directory $ \dirIR -> do
-    openDirectory (hsBlockDev fs) dirIR
+  withAbsPathIR fs fp Directory $ openDirectory fs
 
 closeDir :: (HalfsCapable b t r l m) =>
-            Halfs b r l m -> DirHandle r l -> HalfsM m ()
+            HalfsState b r l m -> DirHandle r l -> HalfsM m ()
 closeDir fs dh = closeDirectory fs dh
 
 readDir :: (HalfsCapable b t r l m) =>
-           Halfs b r l m -> DirHandle r l -> HalfsM m [(FilePath, FileStat t)]
+           HalfsState b r l m
+        -> DirHandle r l
+        -> HalfsM m [(FilePath, FileStat t)]
 readDir = undefined
 
 -- | Synchronize the given directory to disk.
 syncDir :: (HalfsCapable b t r l m) =>
-           Halfs b r l m -> FilePath -> SyncType -> HalfsM m ()
+           HalfsState b r l m -> FilePath -> SyncType -> HalfsM m ()
 syncDir = undefined
 
 --------------------------------------------------------------------------------
@@ -190,9 +197,10 @@ syncDir = undefined
 -- TODO: modes and flags for open: append, r/w, ronly, truncate, etc., and
 -- enforcement of the same
 openFile :: (HalfsCapable b t r l m) =>
-            Halfs b r l m -- ^ The FS
-         -> FilePath      -- ^ The absolute path of the file
-         -> Bool          -- ^ Should we create the file if it is not found?
+            HalfsState b r l m -- ^ The FS
+         -> FilePath           -- ^ The absolute path of the file
+         -> Bool               -- ^ Should we create the file if it is not
+                               --   found?
          -> HalfsM m FileHandle 
 openFile fs fp creat = do
   withDir fs path $ \pdh -> do 
@@ -230,7 +238,7 @@ openFile fs fp creat = do
          return fh
                     
 read :: (HalfsCapable b t r l m) =>
-        Halfs b r l m       -- ^ the filesystem
+        HalfsState b r l m  -- ^ the filesystem
      -> FileHandle          -- ^ the handle for the open file to read
      -> Word64              -- ^ the byte offset into the file
      -> Word64              -- ^ the number of bytes to read
@@ -240,10 +248,10 @@ read fs fh byteOff len = do
   readStream (hsBlockDev fs) (fhInode fh) byteOff (Just len)
 
 write :: (HalfsCapable b t r l m) =>
-         Halfs b r l m -- ^ the filesystem
-      -> FileHandle    -- ^ the handle for the open file to write
-      -> Word64        -- ^ the byte offset into the file
-      -> ByteString    -- ^ the data to write
+         HalfsState b r l m -- ^ the filesystem
+      -> FileHandle         -- ^ the handle for the open file to write
+      -> Word64             -- ^ the byte offset into the file
+      -> ByteString         -- ^ the data to write
       -> HalfsM m ()
 write fs fh byteOff bytes = 
   -- TODO: check fh modes & perms (e.g., read only, not owner, etc)
@@ -251,31 +259,31 @@ write fs fh byteOff bytes =
   -- TODO: process errors from writeStream?
 
 flush :: (HalfsCapable b t r l m) =>
-         Halfs b r l m -> FileHandle -> HalfsM m ()
+         HalfsState b r l m -> FileHandle -> HalfsM m ()
 flush = undefined
 
 syncFile :: (HalfsCapable b t r l m) =>
-            Halfs b r l m -> FilePath -> SyncType ->HalfsM m ()
+            HalfsState b r l m -> FilePath -> SyncType ->HalfsM m ()
 syncFile = undefined
 
 closeFile :: (HalfsCapable b t r l m) =>
-             Halfs b r l m -- ^ the filesystem
-          -> FileHandle    -- ^ the handle to the open file to close
+             HalfsState b r l m -- ^ the filesystem
+          -> FileHandle         -- ^ the handle to the open file to close
           -> HalfsM m ()
 closeFile _fs _fh = do
   -- TODO/FIXME: sync, mark fh closed in FD structures
   return ()
 
 setFileSize :: (HalfsCapable b t r l m) =>
-               Halfs b r l m -> FilePath -> Word64 -> HalfsM m ()
+               HalfsState b r l m -> FilePath -> Word64 -> HalfsM m ()
 setFileSize = undefined
 
 setFileTimes :: (HalfsCapable b t r l m) =>
-                Halfs b r l m -> FilePath -> t -> t -> HalfsM m ()
+                HalfsState b r l m -> FilePath -> t -> t -> HalfsM m ()
 setFileTimes = undefined
 
 rename :: (HalfsCapable b t r l m) =>
-          Halfs b r l m -> FilePath -> FilePath -> HalfsM m ()
+          HalfsState b r l m -> FilePath -> FilePath -> HalfsM m ()
 rename = undefined
 
 
@@ -283,16 +291,16 @@ rename = undefined
 -- Access control
 
 chmod :: (HalfsCapable b t r l m) =>
-         Halfs b r l m -> FilePath -> FileMode -> HalfsM m ()
+         HalfsState b r l m -> FilePath -> FileMode -> HalfsM m ()
 chmod = undefined
 
 chown :: (HalfsCapable b t r l m) =>
-         Halfs b r l m -> FilePath -> UserID -> GroupID -> HalfsM m ()
+         HalfsState b r l m -> FilePath -> UserID -> GroupID -> HalfsM m ()
 chown = undefined
 
 -- | JS XXX/TODO: What's the intent of this function?
 access :: (HalfsCapable b t r l m) =>
-          Halfs b r l m -> FilePath -> [AccessRight] -> HalfsM m ()
+          HalfsState b r l m -> FilePath -> [AccessRight] -> HalfsM m ()
 access = undefined
 
 
@@ -300,19 +308,19 @@ access = undefined
 -- Link manipulation
 
 mklink :: (HalfsCapable b t r l m) =>
-          Halfs b r l m -> FilePath -> FilePath -> HalfsM m ()
+          HalfsState b r l m -> FilePath -> FilePath -> HalfsM m ()
 mklink = undefined
 
 rmlink :: (HalfsCapable b t r l m) =>
-          Halfs b r l m -> FilePath -> HalfsM m ()
+          HalfsState b r l m -> FilePath -> HalfsM m ()
 rmlink = undefined
 
 createSymLink :: (HalfsCapable b t r l m) =>
-                 Halfs b r l m -> FilePath -> FilePath -> HalfsM m ()
+                 HalfsState b r l m -> FilePath -> FilePath -> HalfsM m ()
 createSymLink = undefined
 
 readSymLink :: (HalfsCapable b t r l m) =>
-               Halfs b r l m -> FilePath -> HalfsM m FilePath
+               HalfsState b r l m -> FilePath -> HalfsM m FilePath
 readSymLink = undefined
 
 
@@ -320,11 +328,11 @@ readSymLink = undefined
 -- Filesystem stats
 
 fstat :: (HalfsCapable b t r l m) =>
-         Halfs b r l m -> FilePath -> HalfsM m (FileStat t)
+         HalfsState b r l m -> FilePath -> HalfsM m (FileStat t)
 fstat = undefined
 
 fsstat :: (HalfsCapable b t r l m) =>
-          Halfs b r l m -> HalfsM m FileSystemStats
+          HalfsState b r l m -> HalfsM m FileSystemStats
 fsstat = undefined
 
 
@@ -332,7 +340,7 @@ fsstat = undefined
 -- Utility functions
 
 withDir :: HalfsCapable b t r l m =>
-           Halfs b r l m
+           HalfsState b r l m
         -> FilePath
         -> (DirHandle r l -> HalfsM m a)
         -> HalfsM m a
@@ -346,7 +354,7 @@ withDir fs fp act = do
 -- function with it.  On error, yields HalfsPathComponentNotFound or
 -- HalfsAbsolutePathExpected.
 withAbsPathIR :: HalfsCapable b t r l m =>
-                 Halfs b r l m
+                 HalfsState b r l m
               -> FilePath
               -> FileType
               -> (InodeRef -> HalfsM m a)
@@ -355,8 +363,7 @@ withAbsPathIR fs fp ftype f = do
   if isAbsolute fp
    then do
      rdirIR <- rootDir `fmap` readRef (hsSuperBlock fs)
-     mir    <- find (hsBlockDev fs) rdirIR ftype
-                 (drop 1 $ splitDirectories fp)
+     mir    <- find fs rdirIR ftype (drop 1 $ splitDirectories fp)
      case mir of
        Nothing -> throwError $ HalfsPathComponentNotFound fp
        Just ir -> f ir
@@ -394,14 +401,14 @@ defaultFilePerms = FileMode [Read,Write] [Read] [Read]
 -- Debugging helpers
 
 dumpfs :: HalfsCapable b t r l m =>
-          Halfs b r l m -> HalfsM m String
+          HalfsState b r l m -> HalfsM m String
 dumpfs fs = do
   dump <- dumpfs' 2 "/\n" =<< rootDir `fmap` readRef (hsSuperBlock fs)
   return $ "=== fs dump begin ===\n" ++ dump  ++ "=== fs dump end ===\n"
   where
     dumpfs' i pfx inr = do 
       let pre = replicate i ' '            
-      dh       <- openDirectory (hsBlockDev fs) inr
+      dh       <- openDirectory fs inr
       contents <- readRef $ dhContents dh
       foldM (\dumpAcc (path, dirEnt) -> do
                sub <- if deType dirEnt == Directory

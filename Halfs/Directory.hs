@@ -16,19 +16,16 @@ module Halfs.Directory
   )
  where
 
-import Control.Applicative
 import Control.Exception (assert)
-import Data.Bits
 import qualified Data.ByteString as BS
-import Data.List (sort)
 import qualified Data.Map as M
 import Data.Serialize
-import Data.Word
 import System.FilePath
 
 import Halfs.BlockMap
 import Halfs.Classes
 import Halfs.Errors
+import Halfs.HalfsState
 import Halfs.Monad
 import Halfs.Inode ( InodeRef(..)
                    , blockAddrToInodeRef
@@ -45,74 +42,19 @@ import Debug.Trace
 
 
 --------------------------------------------------------------------------------
--- Types
-
--- File names are arbitrary-length, null-terminated strings.  Valid file names
--- are guaranteed to not include null or the System.FilePath.pathSeparator
--- character.
-
-data DirectoryEntry = DirEnt {
-    deName  :: String
-  , deInode :: InodeRef
-  , deUser  :: UserID
-  , deGroup :: GroupID
-  , deMode  :: FileMode
-  , deType  :: FileType
-  }
-  deriving (Show, Eq)
-
-data DirHandle r l = DirHandle {
-    dhInode       :: InodeRef
-  , dhContents    :: r (M.Map FilePath DirectoryEntry)
-  , dhState       :: r DirectoryState
-  , dhLock        :: r l
-  }
-
-data AccessRight = Read | Write | Execute
-  deriving (Show, Eq, Ord)
-
-data DirectoryState = Clean | OnlyAdded | OnlyDeleted | VeryDirty
-  deriving (Show, Eq)
-
-data FileMode = FileMode {
-    fmOwnerPerms :: [AccessRight]
-  , fmGroupPerms :: [AccessRight]
-  , fmUserPerms  :: [AccessRight]
-  }
-  deriving (Show)
-
-data FileType = RegularFile | Directory | Symlink
-  deriving (Show, Eq)
-
-data FileStat t = FileStat {
-    fsInode      :: InodeRef
-  , fsType       :: FileType
-  , fsMode       :: FileMode
-  , fsLinks      :: Word64
-  , fsUID        :: UserID
-  , fsGID        :: GroupID
-  , fsSize       :: Word64
-  , fsNumBlocks  :: Word64
-  , fsAccessTime :: t
-  , fsModTime    :: t
-  , fsChangeTime :: t
-  }
-
-
---------------------------------------------------------------------------------
 -- Directory manipulation and query functions
 
 -- | Given a parent directory's inoderef, its owner, and its group,
 -- generate a new, empty directory with the given name.
 makeDirectory :: HalfsCapable b t r l m =>
-                 Halfs b r l m     -- ^ the filesystem
-              -> InodeRef          -- ^ inr to parent directory
-              -> String            -- ^ directory name
-              -> UserID            -- ^ user id for created directory
-              -> GroupID           -- ^ group id for created directory
-              -> FileMode          -- ^ initial filemode
-              -> HalfsM m InodeRef -- ^ on success, the inode ref to the
-                                   --   created directory
+                 HalfsState b r l m -- ^ the filesystem
+              -> InodeRef           -- ^ inr to parent directory
+              -> String             -- ^ directory name
+              -> UserID             -- ^ user id for created directory
+              -> GroupID            -- ^ group id for created directory
+              -> FileMode           -- ^ initial filemode
+              -> HalfsM m InodeRef  -- ^ on success, the inode ref to the
+                                    --   created directory
 makeDirectory fs parentIR dname user group perms = do 
   withDirectory fs parentIR $ \pdh -> do 
   contents <- readRef (dhContents pdh)
@@ -150,7 +92,9 @@ makeDirectory fs parentIR dname user group perms = do
 -- Alternately, this might stay the same as a primitive op for CoreAPI.syncDir,
 -- which might manage the set of DirHandles that need to be sync'd...
 syncDirectory :: HalfsCapable b t r l m =>
-                 Halfs b r l m -> DirHandle r l -> HalfsM m ()
+                 HalfsState b r l m
+              -> DirHandle r l
+              -> HalfsM m ()
 syncDirectory fs dh = do 
   -- TODO: locking
   state <- readRef $ dhState dh
@@ -174,8 +118,10 @@ syncDirectory fs dh = do
 
 -- | Obtains an active directory handle for the directory at the given InodeRef
 openDirectory :: HalfsCapable b t r l m =>
-                 BlockDevice m -> InodeRef -> HalfsM m (DirHandle r l)
-openDirectory dev inr = do
+                 HalfsState b r l m
+              -> InodeRef
+              -> HalfsM m (DirHandle r l)
+openDirectory fs inr = do
   -- TODO/design scratch re: locking and DirHandle cache.
  
   -- Should be: if we don't have a current DirHandle in the DH cache for this
@@ -193,7 +139,7 @@ openDirectory dev inr = do
 
   -- FIXME FIXME FIXME
 
-  rawDirBytes <- readStream dev inr 0 Nothing
+  rawDirBytes <- readStream (hsBlockDev fs) inr 0 Nothing
   dirEnts     <- if BS.null rawDirBytes
                  then do return []
                  else case decode rawDirBytes of 
@@ -205,7 +151,7 @@ openDirectory dev inr = do
   DirHandle inr `fmap` newRef contents `ap` newRef Clean `ap` (newRef =<< newLock)
 
 closeDirectory :: HalfsCapable b t r l m =>
-                  Halfs b r l m 
+                  HalfsState b r l m 
                -> DirHandle r l
                -> HalfsM m ()
 closeDirectory fs dh = do
@@ -240,23 +186,23 @@ addFile dh fname fir u g mode = do
 -- the recursive descent of the directory hierarchy, otherwise yields the
 -- InodeRef of the final path component.
 find :: HalfsCapable b t r l m => 
-        BlockDevice m -- ^ The block device to search
-     -> InodeRef      -- ^ The starting inode reference
-     -> FileType      -- ^ A match must be of this filetype
-     -> [FilePath]    -- ^ Path components
+        HalfsState b r l m -- ^ The filesystem to search
+     -> InodeRef           -- ^ The starting inode reference
+     -> FileType           -- ^ A match must be of this filetype
+     -> [FilePath]         -- ^ Path components
      -> HalfsM m (Maybe InodeRef)
 --
 find _ startINR _ [] = 
   trace ("Directory.find base case, terminating") $ do
   return $ Just startINR
 --
-find dev startINR ftype (pathComp:rest) = do
+find fs startINR ftype (pathComp:rest) = do
   trace ("Directory.find recursive case, locating: " ++ show pathComp) $ do
-  dh  <- openDirectory dev startINR
+  dh  <- openDirectory fs startINR
   mde <- findInDir' dh pathComp ftype
   case mde of
     Nothing -> return Nothing
-    Just de -> find dev (deInode de) ftype rest
+    Just de -> find fs (deInode de) ftype rest
 
 -- | Locate the given typed file by filename in the DirHandle's content map
 findInDir' :: HalfsCapable b t r l m =>
@@ -284,11 +230,11 @@ findInDir dh fname ftype =
 -- Utility functions
 
 withDirectory :: HalfsCapable b t r l m =>
-                 Halfs b r l m
+                 HalfsState b r l m
               -> InodeRef
               -> (DirHandle r l -> HalfsM m a)
               -> HalfsM m a
-withDirectory fs ir = hbracket (openDirectory (hsBlockDev fs) ir)
+withDirectory fs ir = hbracket (openDirectory fs ir)
                                (closeDirectory fs)
 
 lkupDir :: Reffable r m =>
@@ -321,54 +267,3 @@ _dirStTransRm _           = VeryDirty
 dirStTransClean :: DirectoryState -> DirectoryState
 dirStTransClean = const Clean
 
-
---------------------------------------------------------------------------------
--- Instances
-
-instance Serialize DirectoryEntry where
-  put de = do
-    put $ deName  de
-    put $ deInode de
-    put $ deUser  de
-    put $ deGroup de
-    put $ deMode  de
-    put $ deType  de
-  get = DirEnt <$> get <*> get <*> get <*> get <*> get <*> get
-
-instance Serialize FileType where
-  put RegularFile = putWord8 0x0
-  put Directory   = putWord8 0x1
-  put Symlink     = putWord8 0x2
-  --
-  get =
-    getWord8 >>= \x -> case x of
-      0x0 -> return RegularFile
-      0x1 -> return Directory
-      0x2 -> return Symlink
-      _   -> fail "Invalid FileType during deserialize"
-
-instance Serialize FileMode where
-  put FileMode{ fmOwnerPerms = op, fmGroupPerms = gp, fmUserPerms = up } = do
-    when (any (>3) $ map length [op, gp, up]) $
-      fail "Fixed-length check failed in FileMode serialization"
-    putWord8 $ perms op
-    putWord8 $ perms gp
-    putWord8 $ perms up
-    where
-      perms ps  = foldr (.|.) 0x0 $ flip map ps $ \x -> -- toBit
-                  case x of Read -> 4 ; Write -> 2; Execute -> 1
-  --
-  get = 
-    FileMode <$> gp <*> gp <*> gp 
-    where
-      gp         = fromBits `fmap` getWord8
-      fromBits x = let x0 = if testBit x 0 then [Execute] else []
-                       x1 = if testBit x 1 then Write:x0  else x0
-                       x2 = if testBit x 2 then Read:x1   else x1
-                   in x2
-
-instance Eq FileMode where
-  fm1 == fm2 =
-    sort (fmOwnerPerms fm1) == sort (fmOwnerPerms fm2) &&
-    sort (fmGroupPerms fm1) == sort (fmGroupPerms fm2) &&
-    sort (fmUserPerms  fm1) == sort (fmUserPerms  fm2)

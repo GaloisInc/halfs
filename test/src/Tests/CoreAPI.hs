@@ -17,8 +17,8 @@ import Test.QuickCheck.Monadic
 import Halfs.BlockMap
 import Halfs.Classes
 import Halfs.CoreAPI
-import Halfs.Directory
 import Halfs.Errors
+import Halfs.HalfsState
 import Halfs.Inode
 import Halfs.Monad
 import Halfs.SuperBlock

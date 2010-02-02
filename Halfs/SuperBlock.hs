@@ -14,7 +14,7 @@ import Data.Serialize.Get
 import Data.Serialize.Put
 import Data.Word
 
-import Halfs.Inode
+import Halfs.Types
 
 data SuperBlock = SuperBlock {
        version       :: !Word64   -- ^ Version of this superblock

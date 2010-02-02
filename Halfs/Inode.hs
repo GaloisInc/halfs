@@ -39,7 +39,9 @@ import Halfs.Classes
 import Halfs.Errors
 import Halfs.Protection
 import Halfs.Monad
+import Halfs.Types
 import Halfs.Utils
+
 import System.Device.BlockDevice
 
 --import System.IO.Unsafe
@@ -49,24 +51,7 @@ dbug _ = id
 
 
 --------------------------------------------------------------------------------
--- Inode types, instances, constructors, and geometry calculation functions
-
--- We store Inode reference as simple Word64, newtype'd in case we either decide
--- to do something more fancy or just to make the types a bit more clear.
---
--- At this point, we assume an Inode reference is equal to its block address,
--- and we fix Inode references as Word64s. Note that if you change the
--- underlying field size of an InodeRef, you really really need to change
--- 'inodeRefSize', below.
---
--- The InodeRef type is defined in Halfs.Types, to avoid a dependency cycle.
-
-newtype InodeRef = IR Word64
-  deriving (Eq, Ord, Num, Show, Integral, Enum, Real)
-
-instance Serialize InodeRef where
-  put (IR x) = putWord64be x
-  get        = IR `fmap` getWord64be
+-- Inode constructors, geometry calculation, and helper functions
 
 type StreamIdx = (Word64, Word64, Word64)
 
@@ -84,10 +69,6 @@ blockAddrToInodeRef = IR
 -- | Convert an inode reference into a block address
 inodeRefToBlockAddr :: InodeRef -> Word64
 inodeRefToBlockAddr (IR x) = x
-
--- | The size of an Inode reference in bytes
-inodeRefSize :: Word64
-inodeRefSize = 8
 
 -- | The nil Inode reference.  With the current Word64 representation and the
 -- block layout assumptions, block 0 is the superblock, and thus an invalid

@@ -10,6 +10,7 @@ import Halfs.BlockMap
 import Halfs.Classes
 import Halfs.Directory
 import Halfs.Errors
+import Halfs.HalfsState
 import Halfs.Inode
 import Halfs.Monad
 import Halfs.Protection
@@ -26,7 +27,7 @@ newtype FileHandle = FH InodeRef
 -- File creation and manipulation functions
 
 createFile :: HalfsCapable b t r l m =>
-              Halfs b r l m 
+              HalfsState b r l m 
            -> DirHandle r l
            -> FilePath
            -> UserID
