@@ -27,7 +27,7 @@ newtype FileHandle = FH InodeRef
 
 createFile :: HalfsCapable b t r l m =>
               Halfs b r l m 
-           -> DirHandle r
+           -> DirHandle r l
            -> FilePath
            -> UserID
            -> GroupID

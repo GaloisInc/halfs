@@ -61,10 +61,11 @@ data DirectoryEntry = DirEnt {
   }
   deriving (Show, Eq)
 
-data DirHandle r = DirHandle {
+data DirHandle r l = DirHandle {
     dhInode       :: InodeRef
   , dhContents    :: r (M.Map FilePath DirectoryEntry)
   , dhState       :: r DirectoryState
+  , dhLock        :: r l
   }
 
 data AccessRight = Read | Write | Execute
@@ -149,7 +150,7 @@ makeDirectory fs parentIR dname user group perms = do
 -- Alternately, this might stay the same as a primitive op for CoreAPI.syncDir,
 -- which might manage the set of DirHandles that need to be sync'd...
 syncDirectory :: HalfsCapable b t r l m =>
-                 Halfs b r l m -> DirHandle r -> HalfsM m ()
+                 Halfs b r l m -> DirHandle r l -> HalfsM m ()
 syncDirectory fs dh = do 
   -- TODO: locking
   state <- readRef $ dhState dh
@@ -173,7 +174,7 @@ syncDirectory fs dh = do
 
 -- | Obtains an active directory handle for the directory at the given InodeRef
 openDirectory :: HalfsCapable b t r l m =>
-                 BlockDevice m -> InodeRef -> HalfsM m (DirHandle r)
+                 BlockDevice m -> InodeRef -> HalfsM m (DirHandle r l)
 openDirectory dev inr = do
   -- TODO/design scratch re: locking and DirHandle cache.
  
@@ -200,12 +201,12 @@ openDirectory dev inr = do
                    Right x  -> return x
     
   contents <- return $ M.fromList $ map deName dirEnts `zip` dirEnts
-  trace ("openDirectory: DirHandle contents = " ++ show contents) $ do            
-  DirHandle inr `fmap` newRef contents `ap` newRef Clean
+--  trace ("openDirectory: DirHandle contents = " ++ show contents) $ do            
+  DirHandle inr `fmap` newRef contents `ap` newRef Clean `ap` (newRef =<< newLock)
 
 closeDirectory :: HalfsCapable b t r l m =>
                   Halfs b r l m 
-               -> DirHandle r
+               -> DirHandle r l
                -> HalfsM m ()
 closeDirectory fs dh = do
   -- TODO/design scratch re: locking and DirHandle cache
@@ -215,7 +216,7 @@ closeDirectory fs dh = do
 -- | Add a directory entry for the given file to a directory; expects
 -- that the file does not already exist in the directory
 addFile :: HalfsCapable b t r l m =>
-           DirHandle r
+           DirHandle r l
         -> String
         -> InodeRef
         -> UserID
@@ -259,7 +260,7 @@ find dev startINR ftype (pathComp:rest) = do
 
 -- | Locate the given typed file by filename in the DirHandle's content map
 findInDir' :: HalfsCapable b t r l m =>
-              DirHandle r
+              DirHandle r l
            -> String
            -> FileType
            -> HalfsM m (Maybe DirectoryEntry)
@@ -271,7 +272,7 @@ findInDir' dh fname ftype = do
 
 -- Exportable version of findInDir; doesn't expose DirectoryEntry to caller
 findInDir :: HalfsCapable b t r l m =>
-             DirHandle r
+             DirHandle r l
           -> String
           -> FileType
           -> HalfsM m (Maybe InodeRef)
@@ -285,21 +286,21 @@ findInDir dh fname ftype =
 withDirectory :: HalfsCapable b t r l m =>
                  Halfs b r l m
               -> InodeRef
-              -> (DirHandle r -> HalfsM m a)
+              -> (DirHandle r l -> HalfsM m a)
               -> HalfsM m a
 withDirectory fs ir = hbracket (openDirectory (hsBlockDev fs) ir)
                                (closeDirectory fs)
 
 lkupDir :: Reffable r m =>
            FilePath
-        -> DirHandle r
+        -> DirHandle r l
         -> m (Maybe DirectoryEntry)
 lkupDir p dh = liftM (M.lookup p) (readRef $ dhContents dh)
 
 isFileType :: DirectoryEntry -> FileType -> Bool
 isFileType (DirEnt { deType = t }) ft = t == ft
 
-_showDH :: Reffable r m => DirHandle r -> m String
+_showDH :: Reffable r m => DirHandle r l -> m String
 _showDH dh = do
   state    <- readRef $ dhState dh
   contents <- readRef $ dhContents dh

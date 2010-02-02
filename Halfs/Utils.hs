@@ -1,6 +1,7 @@
 module Halfs.Utils where
 
-import Control.Monad
+import Halfs.Classes 
+import Halfs.Monad
 
 fmapFst :: (a -> b) -> (a, c) -> (b, c)
 fmapFst f (x,y) = (f x, y)
@@ -14,7 +15,3 @@ unfoldrM f x = do
   case r of
     Nothing    -> return []
     Just (a,b) -> liftM (a:) $ unfoldrM f b
-
-whenOK :: Monad m => m (Either a b) -> (b -> m (Either a c)) -> m (Either a c)
-whenOK act f = act >>= either (return . Left) f
-

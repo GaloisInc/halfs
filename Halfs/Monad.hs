@@ -6,6 +6,7 @@ module Halfs.Monad
   , HalfsM
   , HalfsT (runHalfs)
   , hbracket
+  , withLock
   )
   where
 
@@ -73,3 +74,11 @@ hbracket before after act = do
   r <- act a `catchError` \e -> after a >> throwError e
   after a
   return r
+
+withLock :: HalfsCapable b t r l m =>
+            l -> HalfsM m a -> HalfsM m a
+withLock l act = do
+  lock l
+  res <- act
+  release l
+  return res

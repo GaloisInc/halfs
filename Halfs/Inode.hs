@@ -6,6 +6,7 @@ module Halfs.Inode
   , blockAddrToInodeRef
   , buildEmptyInodeEnc
   , drefInode
+  , inodeKey
   , inodeRefToBlockAddr
   , nilInodeRef
   , readStream
@@ -57,6 +58,8 @@ dbug _ = id
 -- and we fix Inode references as Word64s. Note that if you change the
 -- underlying field size of an InodeRef, you really really need to change
 -- 'inodeRefSize', below.
+--
+-- The InodeRef type is defined in Halfs.Types, to avoid a dependency cycle.
 
 newtype InodeRef = IR Word64
   deriving (Eq, Ord, Num, Show, Integral, Enum, Real)
@@ -66,6 +69,13 @@ instance Serialize InodeRef where
   get        = IR `fmap` getWord64be
 
 type StreamIdx = (Word64, Word64, Word64)
+
+-- | Obtain a 64 bit "key" for an inode; useful for building maps etc.
+-- For now, this is the same as inodeRefToBlockAddr, but clients should
+-- be using this function rather than inodeRefToBlockAddr in case the
+-- underlying inode representation changes.
+inodeKey :: InodeRef -> Word64
+inodeKey = inodeRefToBlockAddr
 
 -- | Convert a disk block address into an Inode reference.
 blockAddrToInodeRef :: Word64 -> InodeRef

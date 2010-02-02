@@ -109,7 +109,7 @@ mount dev = do
 unmount :: (HalfsCapable b t r l m) =>
            Halfs b r l m -> HalfsM m ()
 unmount fs@HalfsState{hsBlockDev = dev, hsSuperBlock = sbRef} = 
-  locked fs $ do
+  withLock (hsLock fs) $ do 
   sb <- readRef sbRef
   if (unmountClean sb)
    then throwError HalfsUnmountFailed
@@ -154,17 +154,17 @@ rmdir :: (HalfsCapable b t r l m) =>
 rmdir = undefined
 
 openDir :: (HalfsCapable b t r l m) =>
-           Halfs b r l m -> FilePath -> HalfsM m (DirHandle r)
+           Halfs b r l m -> FilePath -> HalfsM m (DirHandle r l)
 openDir fs fp =
   withAbsPathIR fs fp Directory $ \dirIR -> do
     openDirectory (hsBlockDev fs) dirIR
 
 closeDir :: (HalfsCapable b t r l m) =>
-            Halfs b r l m -> DirHandle r -> HalfsM m ()
+            Halfs b r l m -> DirHandle r l -> HalfsM m ()
 closeDir fs dh = closeDirectory fs dh
 
 readDir :: (HalfsCapable b t r l m) =>
-           Halfs b r l m -> DirHandle r -> HalfsM m [(FilePath, FileStat t)]
+           Halfs b r l m -> DirHandle r l -> HalfsM m [(FilePath, FileStat t)]
 readDir = undefined
 
 -- | Synchronize the given directory to disk.
@@ -334,10 +334,10 @@ fsstat = undefined
 withDir :: HalfsCapable b t r l m =>
            Halfs b r l m
         -> FilePath
-        -> (DirHandle r -> HalfsM m a)
+        -> (DirHandle r l -> HalfsM m a)
         -> HalfsM m a
 withDir fs fp act = do
-  dh <- openDir fs fp
+  dh   <- openDir fs fp
   rslt <- act dh
   closeDir fs dh
   return rslt
@@ -372,14 +372,6 @@ writeSB dev sb = do
   return sb
   where
     sbdata = encode sb
-
-locked :: (HalfsCapable b t r l m) =>
-          Halfs b r l m -> HalfsM m a -> HalfsM m a
-locked fs act = do
-  lock $ hsLock fs
-  res <- act
-  release $ hsLock fs
-  return res
 
 -- TODO: Placeholder
 getUser :: Monad m => m UserID
