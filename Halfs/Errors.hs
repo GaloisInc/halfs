@@ -6,8 +6,7 @@ import Data.Word
 
 data HalfsError =
     HalfsFileNotFound
-  | HalfsFileExists FilePath
-  | HalfsDirectoryExists
+  | HalfsObjectExists FilePath
   | HalfsPathComponentNotFound String
   | HalfsAbsolutePathExpected
   | HalfsMountFailed RsnHalfsMountFail

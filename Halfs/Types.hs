@@ -60,7 +60,7 @@ data DirHandle r l = DirHandle {
     dhInode       :: InodeRef
   , dhContents    :: r (M.Map FilePath DirectoryEntry)
   , dhState       :: r DirectoryState
-  , dhLock        :: r l
+  , dhLock        :: l
   }
 
 data AccessRight = Read | Write | Execute

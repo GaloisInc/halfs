@@ -79,6 +79,6 @@ withLock :: HalfsCapable b t r l m =>
             l -> HalfsM m a -> HalfsM m a
 withLock l act = do
   lock l
-  res <- act
+  res <- act `catchError` \e -> release l >> throwError e
   release l
   return res

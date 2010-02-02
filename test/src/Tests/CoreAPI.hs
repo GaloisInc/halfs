@@ -38,12 +38,13 @@ import Debug.Trace
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [
-    exec 10  "Init and mount"        propM_initAndMountOK
-  , exec 10 "Mount/unmount"          propM_mountUnmountOK
-  , exec 10 "Unmount mutex"          propM_unmountMutexOK
-  , exec 1  "Directory construction" propM_dirConstructionOK
-  , exec 1  "Simple file creation"   propM_fileCreationOK
-  , exec 1  "File WR"                propM_fileWR
+--     exec 10  "Init and mount"        propM_initAndMountOK
+--   , exec 10 "Mount/unmount"          propM_mountUnmountOK
+--   , exec 10 "Unmount mutex"          propM_unmountMutexOK
+--   ,
+   exec 1  "Directory construction" propM_dirConstructionOK
+ , exec 1  "Simple file creation"   propM_fileCreationOK
+ , exec 1  "File WR"                propM_fileWR
   ]
   where
     exec = mkMemDevExec quick "CoreAPI"
@@ -196,9 +197,9 @@ propM_fileCreationOK _g dev = do
 
   e <- runH $ openFile fs fp True
   case e of
-    Left HalfsFileExists{} -> return ()
-    Left err               -> unexpectedErr err
-    Right _                ->
+    Left HalfsObjectExists{} -> return ()
+    Left err                 -> unexpectedErr err
+    Right _                  ->
       fail "Open w/ creat of existing file should fail"
 
   runH (dumpfs fs) >>= either (error "dumpfs failed") (flip trace (return ()))

@@ -42,7 +42,7 @@ createFile fs parentDH fname u g mode = do
       let dev = hsBlockDev fs
       n <- lift $ buildEmptyInodeEnc dev fileIR (dhInode parentDH) u g
       lift $ bdWriteBlock dev (inodeRefToBlockAddr fileIR) n 
-      addFile parentDH fname fileIR u g mode 
+      addDirEnt parentDH fname fileIR u g mode RegularFile
       return $ fileIR
 
 openFilePrim :: Monad m => InodeRef -> HalfsM m FileHandle

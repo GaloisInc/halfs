@@ -189,7 +189,7 @@ syncDir = undefined
 --
 -- * Yields HalfsAbsolutePathExpected if an absolute path is not provided
 --
--- * Yields HalfsFileNotFound if the request file does not exist and create is
+-- * Yields HalfsObjectNotFound if the request file does not exist and create is
 -- false
 --
 -- * Otherwise, provides a FileHandle to the requested file
@@ -230,7 +230,7 @@ openFile fs fp creat = do
     foundFile fir = do
       if creat
        then do
-         throwError $ HalfsFileExists fp
+         throwError $ HalfsObjectExists fp
        else do
          fh <- openFilePrim fir
          -- TODO/FIXME: mark this FH as open in FD structures, store
@@ -403,13 +403,15 @@ defaultFilePerms = FileMode [Read,Write] [Read] [Read]
 dumpfs :: HalfsCapable b t r l m =>
           HalfsState b r l m -> HalfsM m String
 dumpfs fs = do
-  dump <- dumpfs' 2 "/\n" =<< rootDir `fmap` readRef (hsSuperBlock fs)
-  return $ "=== fs dump begin ===\n" ++ dump  ++ "=== fs dump end ===\n"
+  dump0 <- dumpfs' 2 "/\n" =<< rootDir `fmap` readRef (hsSuperBlock fs)
+  return $ "=== fs dump begin ===\n"
+        ++ dump0
+        ++ "=== fs dump end ===\n"
   where
     dumpfs' i pfx inr = do 
       let pre = replicate i ' '            
       dh       <- openDirectory fs inr
-      contents <- readRef $ dhContents dh
+      contents <- withLock (dhLock dh) $ readRef $ dhContents dh
       foldM (\dumpAcc (path, dirEnt) -> do
                sub <- if deType dirEnt == Directory
                       then dumpfs' (i+2) "" (deInode dirEnt)
