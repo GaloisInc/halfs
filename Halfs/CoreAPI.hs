@@ -23,6 +23,8 @@ import Halfs.Types
 
 import System.Device.BlockDevice
 
+-- import Debug.Trace
+
 data SyncType = Data | Everything
 
 data FileSystemStats = FSS {
@@ -112,15 +114,20 @@ mount dev = do
 unmount :: (HalfsCapable b t r l m) =>
            HalfsState b r l m -> HalfsM m ()
 unmount fs@HalfsState{hsBlockDev = dev, hsSuperBlock = sbRef} = 
-  withLock (hsLock fs) $ do 
+  withLock (hsLock fs)      $ do 
+  withLock (hsDHMapLock fs) $ do   
+  -- ^ Grab everything; we do not want to permit other filesystem actions to
+  -- occur in other threads during or after teardown. Needs testing: TODO
   sb <- readRef sbRef
   if (unmountClean sb)
    then throwError HalfsUnmountFailed
    else do
+
      -- TODO:
      -- * Persist any dirty data structures (dirents, files w/ buffered IO, etc)
 
-     -- * e.g., check the fs dh map here for still-open files/dirs
+     -- Sync all directories; clean state is a no-op
+     mapM_ (syncDirectory fs) =<< M.elems `fmap` readRef (hsDHMap fs)
 
      lift $ bdFlush dev
    
@@ -147,11 +154,11 @@ fsck = undefined
 mkdir :: (HalfsCapable b t r l m) =>
          HalfsState b r l m -> FilePath -> FileMode -> HalfsM m ()
 mkdir fs fp fm = do
-  withAbsPathIR fs path Directory $ \parentIR -> do
-    u <- getUser
-    g <- getGroup
-    makeDirectory fs parentIR dirName u g fm
-    return ()
+  parentIR <- absPathIR fs path Directory 
+  u <- getUser
+  g <- getGroup
+  makeDirectory fs parentIR dirName u g fm
+  return ()
   where
     (path, dirName) = splitFileName fp
 
@@ -161,8 +168,7 @@ rmdir = undefined
 
 openDir :: (HalfsCapable b t r l m) =>
            HalfsState b r l m -> FilePath -> HalfsM m (DirHandle r l)
-openDir fs fp =
-  withAbsPathIR fs fp Directory $ openDirectory fs
+openDir fs fp = absPathIR fs fp Directory >>= openDirectory fs
 
 closeDir :: (HalfsCapable b t r l m) =>
             HalfsState b r l m -> DirHandle r l -> HalfsM m ()
@@ -172,7 +178,11 @@ readDir :: (HalfsCapable b t r l m) =>
            HalfsState b r l m
         -> DirHandle r l
         -> HalfsM m [(FilePath, FileStat t)]
-readDir = undefined
+readDir _fs dh =
+  withLock (dhLock dh) $ do
+    contents <- readRef $ dhContents dh
+    return $ M.keys contents `zip`
+               repeat (error "readDir Internal: FileStat aggregation NYI")
 
 -- | Synchronize the given directory to disk.
 syncDir :: (HalfsCapable b t r l m) =>
@@ -353,20 +363,19 @@ withDir fs fp act = do
 -- | Find the InodeRef corresponding to the given path, and call the given
 -- function with it.  On error, yields HalfsPathComponentNotFound or
 -- HalfsAbsolutePathExpected.
-withAbsPathIR :: HalfsCapable b t r l m =>
-                 HalfsState b r l m
-              -> FilePath
-              -> FileType
-              -> (InodeRef -> HalfsM m a)
-              -> HalfsM m a
-withAbsPathIR fs fp ftype f = do
+absPathIR :: HalfsCapable b t r l m =>
+             HalfsState b r l m
+          -> FilePath
+          -> FileType
+          -> HalfsM m InodeRef
+absPathIR fs fp ftype = do
   if isAbsolute fp
    then do
      rdirIR <- rootDir `fmap` readRef (hsSuperBlock fs)
      mir    <- find fs rdirIR ftype (drop 1 $ splitDirectories fp)
      case mir of
        Nothing -> throwError $ HalfsPathComponentNotFound fp
-       Just ir -> f ir
+       Just ir -> return ir
    else
      throwError HalfsAbsolutePathExpected
 
@@ -395,33 +404,3 @@ defaultDirPerms = FileMode [Read,Write,Execute] [Read, Execute] [Read, Execute]
 -- TODO: Placeholder
 defaultFilePerms :: FileMode
 defaultFilePerms = FileMode [Read,Write] [Read] [Read]
-
-
---------------------------------------------------------------------------------
--- Debugging helpers
-
-dumpfs :: HalfsCapable b t r l m =>
-          HalfsState b r l m -> HalfsM m String
-dumpfs fs = do
-  dump0 <- dumpfs' 2 "/\n" =<< rootDir `fmap` readRef (hsSuperBlock fs)
-  return $ "=== fs dump begin ===\n"
-        ++ dump0
-        ++ "=== fs dump end ===\n"
-  where
-    dumpfs' i pfx inr = do 
-      let pre = replicate i ' '            
-      dh       <- openDirectory fs inr
-      contents <- withLock (dhLock dh) $ readRef $ dhContents dh
-      foldM (\dumpAcc (path, dirEnt) -> do
-               sub <- if deType dirEnt == Directory
-                      then dumpfs' (i+2) "" (deInode dirEnt)
-                      else return ""
-               return $ dumpAcc
-                     ++ pre
-                     ++ path
-                     ++ case deType dirEnt of
-                          RegularFile -> " (file)\n"
-                          Directory   -> " (directory)\n" ++ sub
-                          Symlink     -> " (symlink)\n"
-            )
-            pfx (M.toList contents)

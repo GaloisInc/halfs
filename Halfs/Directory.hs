@@ -10,6 +10,7 @@ module Halfs.Directory
   , findInDir
   , makeDirectory
   , openDirectory
+  , syncDirectory
   -- * for testing
   , DirectoryEntry(..)
   , DirectoryState(..)
@@ -65,7 +66,7 @@ makeDirectory fs parentIR dname user group perms = do
        case mir of
          Nothing     -> throwError HalfsAllocFailed
          Just thisIR -> do
-           trace ("makeDirectory: dname = " ++ show dname ++ " new inode @ " ++ show thisIR ) $ return ()
+--           trace ("makeDirectory: dname = " ++ show dname ++ " new inode @ " ++ show thisIR ) $ return ()
            
            -- Build the directory inode and persist it
            bstr <- lift $ buildEmptyInodeEnc dev thisIR parentIR user group
@@ -87,6 +88,7 @@ syncDirectory :: HalfsCapable b t r l m =>
               -> DirHandle r l
               -> HalfsM m ()
 syncDirectory fs dh = do 
+--  trace ("syncDirectory invoked on IR (" ++ show (dhInode dh) ++ ")") $ do
   withLock (dhLock dh) $ do 
     state <- readRef $ dhState dh
     case state of

@@ -19,7 +19,10 @@ data HalfsState b r l m = HalfsState {
   , hsSuperBlock       :: r SuperBlock
   , hsLock             :: l
   , hsDHMap            :: r (M.Map InodeRef (DirHandle r l))
+    -- ^ Tracks active directory handles; we probably want to add a
+    -- (refcounting?) expiry mechanism so that the size of the map is
+    -- bounded.  TODO.
   , hsDHMapLock        :: l
-  -- TODO: put user/group info here, populate in mount via its interface
+    -- ^ Mutex for the directory handle map                         
   }
 

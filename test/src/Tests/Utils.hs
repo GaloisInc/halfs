@@ -4,19 +4,22 @@ module Tests.Utils
 where
 
 import Control.Monad.ST
-import qualified Data.ByteString as BS
+import System.Directory
 import System.IO
 import System.IO.Unsafe (unsafePerformIO)
-import System.Directory
 import Test.QuickCheck hiding (numTests)
 import Test.QuickCheck.Monadic
 
+import qualified Data.ByteString as BS
+import qualified Data.Map as M
+
 import Halfs.Classes
 import Halfs.CoreAPI (mount, unmount)
-import Halfs.Monad
+import Halfs.Directory
 import Halfs.Errors
 import Halfs.HalfsState
-  
+import Halfs.Monad
+import Halfs.SuperBlock
 import System.Device.BlockDevice
 import System.Device.File
 import System.Device.Memory
@@ -117,3 +120,32 @@ runH :: HalfsCapable b t r l m =>
         HalfsM m a -> PropertyM m (Either HalfsError a)
 runH = run . runHalfs
 
+
+--------------------------------------------------------------------------------
+-- Debugging helpers
+
+dumpfs :: HalfsCapable b t r l m =>
+          HalfsState b r l m -> HalfsM m String
+dumpfs fs = do
+  dump <- dumpfs' 2 "/\n" =<< rootDir `fmap` readRef (hsSuperBlock fs)
+  return $ "=== fs dump begin ===\n"
+        ++ dump
+        ++ "=== fs dump end ===\n"
+  where
+    dumpfs' i ipfx inr = do 
+      let pfx = replicate i ' '            
+      dh       <- openDirectory fs inr
+      contents <- withLock (dhLock dh) $ readRef $ dhContents dh
+      foldM (\dumpAcc (path, dirEnt) -> do
+               sub <- if deType dirEnt == Directory
+                      then dumpfs' (i+2) "" (deInode dirEnt)
+                      else return ""
+               return $ dumpAcc
+                     ++ pfx
+                     ++ path
+                     ++ case deType dirEnt of
+                          RegularFile -> " (file)\n"
+                          Directory   -> " (directory)\n" ++ sub
+                          Symlink     -> " (symlink)\n"
+            )
+            ipfx (M.toList contents)

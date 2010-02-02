@@ -35,6 +35,9 @@ import Debug.Trace
 --------------------------------------------------------------------------------
 -- CoreAPI properties
 
+type HalfsProp = 
+  HalfsCapable b t r l m => BDGeom -> BlockDevice m -> PropertyM m ()
+
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [
@@ -42,9 +45,9 @@ qcProps quick =
 --   , exec 10 "Mount/unmount"          propM_mountUnmountOK
 --   , exec 10 "Unmount mutex"          propM_unmountMutexOK
 --   ,
-   exec 1  "Directory construction" propM_dirConstructionOK
- , exec 1  "Simple file creation"   propM_fileCreationOK
- , exec 1  "File WR"                propM_fileWR
+    exec 1  "Directory construction" propM_dirConstructionOK
+  , exec 1  "Simple file creation"   propM_fileCreationOK
+  , exec 1  "File WR"                propM_fileWR
   ]
   where
     exec = mkMemDevExec quick "CoreAPI"
@@ -53,10 +56,7 @@ qcProps quick =
 --------------------------------------------------------------------------------
 -- Property Implementations
 
-propM_initAndMountOK :: HalfsCapable b t r l m =>
-                        BDGeom
-                     -> BlockDevice m
-                     -> PropertyM m ()
+propM_initAndMountOK :: HalfsProp
 propM_initAndMountOK _g dev = do
   esb <- runH (newfs dev)
   case esb of
@@ -91,10 +91,7 @@ propM_initAndMountOK _g dev = do
         Right _                                 ->
           fail "Mount of filesystem with corrupt superblock succeeded"
 
-propM_mountUnmountOK :: HalfsCapable b t r l m =>
-                        BDGeom
-                     -> BlockDevice m
-                     -> PropertyM m ()
+propM_mountUnmountOK :: HalfsProp
 propM_mountUnmountOK _g dev = do
   fs <- runH (newfs dev) >> mountOK dev
   let readSBRef = sreadRef $ hsSuperBlock fs
@@ -145,44 +142,39 @@ propM_unmountMutexOK _g dev = do
 
 -- | Ensure that a new filesystem has the expected root directory intact
 -- and that dirs and subdirs can be created and opened.
-propM_dirConstructionOK :: HalfsCapable b t r l m =>
-                           BDGeom
-                        -> BlockDevice m
-                        -> PropertyM m ()
+propM_dirConstructionOK :: HalfsProp
 propM_dirConstructionOK _g dev = do
   fs <- runH (newfs dev) >> mountOK dev
 
   -- Check that the root directory is present and empty
   exec "openDir /" (runHalfs $ openDir fs rootPath) >>= \dh -> do
-    dirState <- sreadRef $ dhState dh
-    contents <- sreadRef $ dhContents dh
-    assert $ dirState == Clean
-    assert $ M.null contents
+    assert =<< (== Clean) `fmap` sreadRef (dhState dh)
+    assert =<< M.null     `fmap` sreadRef (dhContents dh)
     
   -- TODO: replace this with a random valid hierarchy
-  test fs $ rootPath </> "foo"
-  test fs $ rootPath </> "foo" </> "bar" 
-  test fs $ rootPath </> "foo" </> "bar" </> "xxx"
-  test fs $ rootPath </> "foo" </> "bar" </> "xxx" </> "yyy"
-  test fs $ rootPath </> "foo" </> "baz" 
-  test fs $ rootPath </> "foo" </> "baz" </> "zzz"
+  let p0 = rootPath </> "foo"
+      p1 = p0 </> "bar"
+      p2 = p1 </> "xxx"
+      p3 = p2 </> "yyy"
+      p4 = p0 </> "baz"
+      p5 = p4 </> "zzz"
 
-  runH (dumpfs fs) >>= either (error "dumpfs failed") (flip trace (return ()))
-  unmountOK fs
+  mapM_ (test fs) [p0,p1,p2,p3,p4,p5]
+  quickRemountCheck fs
+
   where
     test fs p      = do
       exec ("mkdir " ++ p) (runHalfs $ mkdir fs p perms)
-      isEmpty =<< exec ("openDir " ++ p) (runHalfs $ openDir fs p)
-
-    isEmpty dh     = assert =<< M.null `fmap` sreadRef (dhContents dh)
+      isEmpty fs =<< exec ("openDir " ++ p) (runHalfs $ openDir fs p)
+    -- 
+    isEmpty fs dh  = do
+      assert =<< null `fmap` exec ("readDir") (runHalfs $ readDir fs dh)
+    -- 
     exec           = execE "propM_dirConstructionOK"
 
 -- | Ensure that a new filesystem populated with a handful of
 -- directories permits creation of a file.
-propM_fileCreationOK :: HalfsCapable b t r l m =>
-                        BDGeom
-                     -> BlockDevice m
-                     -> PropertyM m ()
+propM_fileCreationOK :: HalfsProp
 propM_fileCreationOK _g dev = do
   fs <- runH (newfs dev) >> mountOK dev
   
@@ -202,17 +194,13 @@ propM_fileCreationOK _g dev = do
     Right _                  ->
       fail "Open w/ creat of existing file should fail"
 
-  runH (dumpfs fs) >>= either (error "dumpfs failed") (flip trace (return ()))
-  unmountOK fs
+  quickRemountCheck fs
   where
     exec = execE "propM_fileCreationOK"
 
 -- | Ensure that smile write/readback works for a new file in a new
 -- filesystem
-propM_fileWR :: HalfsCapable b t r l m =>
-                BDGeom
-             -> BlockDevice m
-             -> PropertyM m ()
+propM_fileWR :: HalfsProp
 propM_fileWR _g dev = do
   fs <- runH (newfs dev) >> mountOK dev
   fh <- exec "create /myfile" $
@@ -226,10 +214,12 @@ propM_fileWR _g dev = do
   fileData' <- exec "bytes <- /myfile" $ runHalfs $ read fs fh 0 (fromIntegral fileSz)
   assert $ fileData == fileData'
 
-  runH (dumpfs fs) >>= either (error "dumpfs failed") (flip trace (return ()))
-  unmountOK fs
+  quickRemountCheck fs
   where
     exec = execE "propM_fileWR"
+
+propM_dirMutexOK :: HalfsProp
+propM_dirMutexOK = undefined
 
 
 --------------------------------------------------------------------------------
@@ -253,4 +243,20 @@ execE nm descrip f =
     Right x -> return x
 
 rootPath :: FilePath
-rootPath = [pathSeparator]                
+rootPath = [pathSeparator]
+
+-- Lightweight sanity check that unmounts/remounts and does a hacky
+-- "equality" check on filesystem contents.  We rely on other tests to
+-- more adequately test deep structural equality post-remount.
+quickRemountCheck :: HalfsCapable b t r l m =>
+                     HalfsState b r l m
+                  -> PropertyM m ()
+quickRemountCheck fs = do
+  dump0 <- exec "Get dump0" $ runHalfs (dumpfs fs)
+  unmountOK fs
+  fs'   <- mountOK (hsBlockDev fs)
+  dump1 <- exec "Get dump1" $ runHalfs (dumpfs fs')
+  assert (trace dump0 dump0 == trace dump1 dump1)
+  unmountOK fs'
+  where
+    exec = execE "quickRemountCheck"
