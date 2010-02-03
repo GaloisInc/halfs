@@ -26,15 +26,18 @@ import Halfs.SuperBlock
 import Halfs.Types
 import System.Device.BlockDevice (BlockDevice(..))
 
-import Tests.Instances (printableByte, printableBytes, filename)
+import Tests.Instances (printableBytes, filename)
 import Tests.Types
 import Tests.Utils
-
-import Debug.Trace
 
 
 --------------------------------------------------------------------------------
 -- CoreAPI properties
+
+-- Just dummy constructors for "this was the failing data sample" messages
+newtype FileWR a       = FileWR a deriving Show
+newtype DirMutexOk a   = DirMutexOk a deriving Show
+
 
 type HalfsProp = 
   HalfsCapable b t r l m => BDGeom -> BlockDevice m -> PropertyM m ()
@@ -42,14 +45,13 @@ type HalfsProp =
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [
---     exec 10  "Init and mount"        propM_initAndMountOK
---   , exec 10 "Mount/unmount"          propM_mountUnmountOK
---   , exec 10 "Unmount mutex"          propM_unmountMutexOK
---   ,
---     exec 1  "Directory construction" propM_dirConstructionOK
---   , exec 1  "Simple file creation"   propM_fileCreationOK
---   , exec 1  "File WR"                propM_fileWR
-    exec 100 "Directory mutex" propM_dirMutexOK
+     exec 10  "Init and mount"         propM_initAndMountOK
+   , exec 10 "Mount/unmount"           propM_mountUnmountOK
+   , exec 10 "Unmount mutex"           propM_unmountMutexOK
+   , exec 10  "Directory construction" propM_dirConstructionOK
+   , exec 10 "Simple file creation"    propM_fileCreationOK
+   , exec 10 "File WR"                 propM_fileWR
+   , exec 50 "Directory mutex"         propM_dirMutexOK
   ]
   where
     exec = mkMemDevExec quick "CoreAPI"
@@ -208,9 +210,8 @@ propM_fileWR _g dev = do
   fh <- exec "create /myfile" $
         runHalfs $ openFile fs (rootPath </> "myfile") True
 
-  let maxBytes = bdBlockSize dev * bdNumBlocks dev `div` 4
-  forAllM (choose (1, fromIntegral maxBytes)) $ \fileSz   -> do
-  forAllM (printableBytes fileSz)             $ \fileData -> do 
+  forAllM (FileWR `fmap` choose (1, maxBytes)) $ \(FileWR fileSz) -> do
+  forAllM (printableBytes fileSz)              $ \fileData        -> do 
 
   exec "bytes -> /myfile" $ runHalfs $ write fs fh 0 fileData
   fileData' <- exec "bytes <- /myfile" $ runHalfs $ read fs fh 0 (fromIntegral fileSz)
@@ -219,40 +220,44 @@ propM_fileWR _g dev = do
   quickRemountCheck fs
   where
     exec = execE "propM_fileWR"
+    maxBytes = fromIntegral $ bdBlockSize dev * bdNumBlocks dev `div` 8
 
 -- | Sanity check: multiple threads making many new directories
 -- simultaneously are interleaved in a sensible manner.
 propM_dirMutexOK :: BDGeom
                  -> BlockDevice IO
                  -> PropertyM IO ()
-propM_dirMutexOK g dev = do
+propM_dirMutexOK _g dev = do
   fs <- runH (newfs dev) >> mountOK dev
 
-  let maxDirs  = 100
-      maxLen   = 100
-      ng f     = L.nub `fmap` resize maxDirs (listOf1 $ f maxLen)
-
-  forAllM (map ((++) "f1_") `fmap` ng filename) $ \dnames1 -> do
-  forAllM (map ((++) "f2_") `fmap` ng filename) $ \dnames2 -> do
+  forAllM (DirMutexOk `fmap` choose (2, maxThreads)) $ \(DirMutexOk n) -> do
+  forAllM (mapM genNm [1..n])                        $ \nmss           -> do
 
   ch <- run newChan
-  run $ forkIO $ threadTest (2::Int) fs ch dnames2
-  run $ forkIO $ threadTest (1::Int) fs ch dnames1
-      
-  run $ readChan ch
-  run $ readChan ch
+  mapM_ (run . forkIO . uncurry (threadTest fs ch)) (nmss `zip` [1..n])
+  -- ^ n threads attempting to create directories simultaneously in /
+  replicateM n (run $ readChan ch)
   -- ^ barrier
 
   dh     <- exec "openDir /" $ runHalfs $ openDir fs "/"
   dnames <- exec "readDir /" $ runHalfs $ map fst `fmap` readDir fs dh
 
-  assert $ L.sort dnames == L.sort (dnames1 ++ dnames2)
+  assert $ L.sort dnames == L.sort (concat nmss)
   quickRemountCheck fs 
   where
-    exec                   = execE "propM_dirMutexOK"
-    threadTest n fs ch nms = do
-      e <- runHalfs $ mapM_ (mkdir fs perms . (</>) rootPath) nms
+    maxDirs    = 100 -- } v
+    maxLen     = 80  -- } arbitrary but fit into small devices
+    maxThreads = 8
+    exec       = execE "propM_dirMutexOK"
+    ng f       = L.nub `fmap` resize maxDirs (listOf1 $ f maxLen)
+    -- 
+    genNm :: Int -> Gen [String]
+    genNm n = map ((++) ("f" ++ show n ++ "_")) `fmap` ng filename
+    -- 
+    threadTest fs ch nms _n = do
+      runHalfs $ mapM_ (mkdir fs perms . (</>) rootPath) nms
       writeChan ch ()
+      
 
 
 --------------------------------------------------------------------------------
