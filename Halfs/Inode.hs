@@ -179,7 +179,7 @@ instance (Eq t, Ord t, Serialize t) => Serialize (Inode t) where
    where
     checkMagic x = do
       magic <- getBytes 8
-      unless (magic == x) $ fail "Invalid superblock."
+      unless (magic == x) $ fail "Invalid inode"
 
 -- | Size of a minimal inode structure when serialized, in bytes.  This will
 -- vary based on the space required for type t when serialized.  Note that
@@ -544,6 +544,7 @@ allocFill dev bm avail blksToAlloc inodesToAlloc usr grp existingInodes = do
       if 0 == n
       then return []
       else do
+        -- TODO: Catch allocation errors and unalloc partial allocs?
         minodes <- fmap sequence $ replicateM (safeToInt n) $ do
           mir <- (fmap . fmap) blockAddrToInodeRef (BM.alloc1 bm)
           case mir of
@@ -563,7 +564,6 @@ truncUnalloc :: HalfsCapable b t r l m =>
              -> [Inode t]          -- Current inode chain
              -> HalfsM m [Inode t] -- Truncated inode chain
 truncUnalloc dev bm api sIdx len inodes = do
-
   dbug ("eIdx        = " ++ show eIdx)        $ return ()
   dbug ("retain'     = " ++ show retain')     $ return ()
   dbug ("freeNodes   = " ++ show freeNodes)   $ return ()
@@ -760,4 +760,3 @@ magic1 = BS.pack $ take 8 $ drop  0 magicBytes
 magic2 = BS.pack $ take 8 $ drop  8 magicBytes
 magic3 = BS.pack $ take 8 $ drop 16 magicBytes
 magic4 = BS.pack $ take 8 $ drop 24 magicBytes
-

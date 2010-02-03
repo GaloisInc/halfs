@@ -49,7 +49,7 @@ qcProps quick =
 --     exec 1  "Directory construction" propM_dirConstructionOK
 --   , exec 1  "Simple file creation"   propM_fileCreationOK
 --   , exec 1  "File WR"                propM_fileWR
-  exec 100 "Directory mutex" propM_dirMutexOK
+    exec 100 "Directory mutex" propM_dirMutexOK
   ]
   where
     exec = mkMemDevExec quick "CoreAPI"
@@ -225,11 +225,11 @@ propM_fileWR _g dev = do
 propM_dirMutexOK :: BDGeom
                  -> BlockDevice IO
                  -> PropertyM IO ()
-propM_dirMutexOK _g dev = do
+propM_dirMutexOK g dev = do
   fs <- runH (newfs dev) >> mountOK dev
 
   let maxDirs  = 100
-      maxLen   = 2
+      maxLen   = 100
       ng f     = L.nub `fmap` resize maxDirs (listOf1 $ f maxLen)
 
   forAllM (map ((++) "f1_") `fmap` ng filename) $ \dnames1 -> do
@@ -247,12 +247,11 @@ propM_dirMutexOK _g dev = do
   dnames <- exec "readDir /" $ runHalfs $ map fst `fmap` readDir fs dh
 
   assert $ L.sort dnames == L.sort (dnames1 ++ dnames2)
-  quickRemountCheck fs
-
+  quickRemountCheck fs 
   where
     exec                   = execE "propM_dirMutexOK"
     threadTest n fs ch nms = do
-      runHalfs $ mapM_ (mkdir fs perms . (</>) rootPath) nms
+      e <- runHalfs $ mapM_ (mkdir fs perms . (</>) rootPath) nms
       writeChan ch ()
 
 
@@ -279,28 +278,18 @@ execE nm descrip f =
 rootPath :: FilePath
 rootPath = [pathSeparator]
 
--- Lightweight sanity check that unmounts/remounts and does a hacky
--- "equality" check on filesystem contents.  We rely on other tests to
--- more adequately test deep structural equality post-remount.
+-- Somewhat lightweight sanity check that unmounts/remounts and does a
+-- hacky "equality" check on filesystem contents.  We defer to other
+-- tests to more adequately test deep structural equality post-remount.
 quickRemountCheck :: HalfsCapable b t r l m =>
                      HalfsState b r l m
                   -> PropertyM m ()
 quickRemountCheck fs = do
-
-  -- HERE: The next line is currently crashing during execution of
-  -- propM_dirMutexOK above:
-
-  -- FIXME FIXME FIXME
-
   dump0 <- exec "Get dump0" $ runHalfs (dumpfs fs)
-  return ()
-
-{-
   unmountOK fs
   fs'   <- mountOK (hsBlockDev fs)
   dump1 <- exec "Get dump1" $ runHalfs (dumpfs fs')
   assert (dump0 == dump1)
   unmountOK fs'
--}
   where
     exec = execE "quickRemountCheck"

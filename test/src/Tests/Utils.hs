@@ -28,8 +28,6 @@ import System.Device.ST
 import Tests.Instances
 import Tests.Types
 
-import Debug.Trace
-
 type DevCtor = BDGeom -> IO (Maybe (BlockDevice IO))
 
 --------------------------------------------------------------------------------
@@ -129,24 +127,20 @@ runH = run . runHalfs
 dumpfs :: HalfsCapable b t r l m =>
           HalfsState b r l m -> HalfsM m String
 dumpfs fs = do
-  sb <- readRef (hsSuperBlock fs)
---  trace ("dumpfs sb = " ++ show sb) $ do
-
   dump <- dumpfs' 2 "/\n" =<< rootDir `fmap` readRef (hsSuperBlock fs)
   return $ "=== fs dump begin ===\n"
         ++ dump
         ++ "=== fs dump end ===\n"
   where
     dumpfs' i ipfx inr = do 
-      let pfx = replicate i ' '            
-      dh       <- openDirectory fs inr
-      contents <- withLock (dhLock dh) $ readRef $ dhContents dh
+      contents <- withDirectory fs inr $ \dh -> do
+                    withLock (dhLock dh) $ readRef $ dhContents dh
       foldM (\dumpAcc (path, dirEnt) -> do
                sub <- if deType dirEnt == Directory
                       then dumpfs' (i+2) "" (deInode dirEnt)
                       else return ""
                return $ dumpAcc
-                     ++ pfx
+                     ++ replicate i ' '
                      ++ path
                      ++ case deType dirEnt of
                           RegularFile -> " (file)\n"
