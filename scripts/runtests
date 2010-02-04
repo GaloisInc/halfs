@@ -29,7 +29,8 @@ fi
 cabal configure --builddir="$BUILDDIR" -fbuild-tests
 cabal build --builddir="$BUILDDIR" $BUILDOPTS
 
-$BUILDDIR/build/$EXE_NAME/$EXE_NAME 2> /dev/null
+# $BUILDDIR/build/$EXE_NAME/$EXE_NAME 2> /dev/null
+$BUILDDIR/build/$EXE_NAME/$EXE_NAME
 
 if [ ! -z "$COVERAGE" ]
 then

@@ -45,13 +45,13 @@ type HalfsProp =
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [
-     exec 10  "Init and mount"         propM_initAndMountOK
-   , exec 10 "Mount/unmount"           propM_mountUnmountOK
-   , exec 10 "Unmount mutex"           propM_unmountMutexOK
-   , exec 10  "Directory construction" propM_dirConstructionOK
-   , exec 10 "Simple file creation"    propM_fileCreationOK
-   , exec 10 "File WR"                 propM_fileWR
-   , exec 50 "Directory mutex"         propM_dirMutexOK
+     exec 10 "Init and mount"         propM_initAndMountOK
+   , exec 10 "Mount/unmount"          propM_mountUnmountOK
+   , exec 10 "Unmount mutex"          propM_unmountMutexOK
+   , exec 10 "Directory construction" propM_dirConstructionOK
+   , exec 10 "Simple file creation"   propM_fileCreationOK
+   , exec 10 "File WR"                propM_fileWR
+   , exec 50 "Directory mutex"        propM_dirMutexOK
   ]
   where
     exec = mkMemDevExec quick "CoreAPI"
@@ -245,8 +245,8 @@ propM_dirMutexOK _g dev = do
   assert $ L.sort dnames == L.sort (concat nmss)
   quickRemountCheck fs 
   where
-    maxDirs    = 100 -- } v
-    maxLen     = 80  -- } arbitrary but fit into small devices
+    maxDirs    = 50 -- } v
+    maxLen     = 40 -- } arbitrary but fit into small devices
     maxThreads = 8
     exec       = execE "propM_dirMutexOK"
     ng f       = L.nub `fmap` resize maxDirs (listOf1 $ f maxLen)
