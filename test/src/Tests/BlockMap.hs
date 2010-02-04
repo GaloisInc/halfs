@@ -43,7 +43,7 @@ qcProps quick =
 --------------------------------------------------------------------------------
 -- Property implementations
 
-type BMProp = (Reffable r m, Bitmapped b m, Functor m) =>
+type BMProp = (Reffable r m, Bitmapped b m, Functor m, Lockable l m) =>
                BDGeom
             -> BlockDevice m
             -> PropertyM m ()
@@ -105,8 +105,8 @@ propM_bmInOrderAllocUnallocIntegrity _g dev = do
 -- BlockMap if needed) that is invoked at every allocation step; useful for
 -- describing other properties.
 propM_bmOutOfOrderAllocUnallocIntegrity ::
-  (Reffable r m, Bitmapped b m, Functor m) =>
-     (BlockDevice m -> BlockMap b r -> PropertyM m (BlockMap b r))
+  (Reffable r m, Bitmapped b m, Functor m, Lockable l m) =>
+     (BlockDevice m -> BlockMap b r l -> PropertyM m (BlockMap b r l))
   -> BDGeom
   -> BlockDevice m
   -> PropertyM m ()
@@ -161,9 +161,9 @@ propM_bmExtentAggregationIntegrity _g dev = do
 
 -- | Initialize a new BlockMap and check that internal data structures are
 -- coherent
-initBM :: (Reffable r m, Bitmapped b m) =>
+initBM :: (Reffable r m, Bitmapped b m, Lockable l m) =>
           BlockDevice m
-       -> PropertyM m (BlockMap b r, Extent)
+       -> PropertyM m (BlockMap b r l, Extent)
 initBM dev = do
   bm          <- run $ newBlockMap dev
   initialTree <- run $ readRef $ bmFreeTree bm
@@ -177,10 +177,10 @@ initBM dev = do
 -- | Check that a blockmap is successfully written to and read back from the
 -- given device.  Yields the read-back BlockMap (which is required to be the
 -- same as the input BlockMap).
-checkBlockMapWR :: (Reffable r m, Bitmapped b m, Functor m) =>
+checkBlockMapWR :: (Reffable r m, Bitmapped b m, Functor m, Lockable l m) =>
                    BlockDevice m
-                -> BlockMap b r
-                -> PropertyM m (BlockMap b r)
+                -> BlockMap b r l
+                -> PropertyM m (BlockMap b r l)
 checkBlockMapWR dev bm = do
   run $ writeBlockMap dev bm
   bm' <- run $ readBlockMap dev
@@ -201,12 +201,12 @@ checkBlockMapWR dev bm = do
 -- | Check that (1) the given free block count is the same as reported by the
 -- blockmap and the free tree and (2) the given list of extents are all marked
 -- as un/used in the usedMap
-checkIntegrity :: (Reffable r m, Bitmapped b m) =>
-                  BlockMap b r -- ^ the blockmap
-               -> Word64       -- ^ expected available block count
-               -> [Extent]     -- ^ extents to check in the usedmap...
-               -> Bool         -- ^ ...to see if they are used (True) or unused
-                               -- (False)
+checkIntegrity :: (Reffable r m, Bitmapped b m, Lockable l m) =>
+                  BlockMap b r l -- ^ the blockmap
+               -> Word64         -- ^ expected available block count
+               -> [Extent]       -- ^ extents to check in the usedmap...
+               -> Bool           -- ^ ...to see if they are used (True) or unused
+                                 -- (False)
                -> PropertyM m ()
 checkIntegrity bm expectAvail exts used = do
   checkAvail bm expectAvail
@@ -217,8 +217,8 @@ checkIntegrity bm expectAvail exts used = do
 
 -- | Check that the given free block count is the same as reported by the the
 -- blockmap and the free tree
-checkAvail :: (Reffable r m, Bitmapped b m) =>
-              BlockMap b r
+checkAvail :: (Reffable r m, Bitmapped b m, Lockable l m) =>
+              BlockMap b r l
            -> Word64
            -> PropertyM m ()
 checkAvail bm x = xeq (numFree bm) >> xeq (freeTreeSz bm)
@@ -226,8 +226,8 @@ checkAvail bm x = xeq (numFree bm) >> xeq (freeTreeSz bm)
 
 -- | Check that a given size can be allocated from the BlockMap and that
 -- internal data structures remain coherent
-checkedAlloc :: (Reffable r m, Bitmapped b m) =>
-                BlockMap b r
+checkedAlloc :: (Reffable r m, Bitmapped b m, Lockable l m) =>
+                BlockMap b r l
              -> Word64
              -> PropertyM m BlockGroup
 checkedAlloc bm szToAlloc = do
@@ -241,8 +241,8 @@ checkedAlloc bm szToAlloc = do
 
 -- | Check that a given BlockGroup can be unallocated from the BlockMap and that
 -- internal data structure remain coherent
-checkedUnalloc :: (Reffable r m, Bitmapped b m) =>
-                  BlockMap b r
+checkedUnalloc :: (Reffable r m, Bitmapped b m, Lockable l m) =>
+                  BlockMap b r l
                -> BlockGroup
                -> PropertyM m ()
 checkedUnalloc bm bgToUnalloc = do
@@ -253,10 +253,12 @@ checkedUnalloc bm bgToUnalloc = do
                  (blkGroupExts bgToUnalloc)
                  False
 
-numFree :: Reffable r m => BlockMap b r -> PropertyM m Word64
+numFree :: (Reffable r m, Lockable l m) =>
+           BlockMap b r l -> PropertyM m Word64
 numFree = run . readRef . bmNumFree 
 
-freeTreeSz :: Reffable r m => BlockMap b r -> PropertyM m Word64
+freeTreeSz :: (Reffable r m, Lockable l m) =>
+              BlockMap b r l -> PropertyM m Word64
 freeTreeSz bm = 
   DF.foldr ((+) . extSz) 0 `fmap` (run $! readRef $! bmFreeTree bm)
 

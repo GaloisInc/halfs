@@ -26,7 +26,6 @@ module Halfs.BlockMap
  where
 
 import Control.Exception (assert)
-import Control.Monad
 import Data.Bits hiding (setBit, clearBit)
 import qualified Data.Bits as B 
 import qualified Data.ByteString as BS
@@ -37,10 +36,9 @@ import Data.Word
 import Prelude hiding (null)
 
 import Halfs.Classes
+import Halfs.Monad
 import Halfs.Utils
 import System.Device.BlockDevice
-
--- import Debug.Trace
 
 -- ----------------------------------------------------------------------------
 --
@@ -88,12 +86,13 @@ insert ext tr = treeL >< (ext <| treeR)
 
 -- ----------------------------------------------------------------------------
 
-data BlockMap b r = BM {
+data BlockMap b r l = BM {
     bmFreeTree :: r FreeTree
   , bmUsedMap  :: b          -- ^ Is the given block free?
   , bmNumFree  :: r Word64   -- ^ Number of available free blocks; the blockmap
                              -- never counts blocks required for storing
                              -- blockmap itself nor the superblock as 'free'
+  , bmLock     :: l
   }
 
 -- | Calculate the number of bytes required to store a block map for the
@@ -108,9 +107,9 @@ blockMapSizeBlks numBlks blkSzBytes = bytes `divCeil` blkSzBytes
   where bytes = blockMapSizeBytes numBlks
 
 -- | Create a new block map for the given device geometry
-newBlockMap :: (Monad m, Reffable r m, Bitmapped b m) =>
+newBlockMap :: (Monad m, Reffable r m, Bitmapped b m, Lockable l m) =>
                BlockDevice m
-            -> m (BlockMap b r)
+            -> m (BlockMap b r l)
 newBlockMap dev = do
   when (numFree == 0) $ fail "Block device is too small for block map creation"
 
@@ -126,8 +125,9 @@ newBlockMap dev = do
     ] 
   treeR    <- newRef $ singleton $ Extent baseFreeIdx numFree
   numFreeR <- newRef numFree
+  lk       <- newLock 
   return $ assert (baseFreeIdx + numFree == numBlks) $
-    BM treeR bArr numFreeR
+    BM treeR bArr numFreeR lk
  where
   numBlks        = bdNumBlocks dev
   totalBits      = blockMapSzBlks * bdBlockSize dev * 8
@@ -136,9 +136,9 @@ newBlockMap dev = do
   numFree        = numBlks - blockMapSzBlks - 1 {- -1 for superblock -}
 
 -- | Read in the block map from the disk
-readBlockMap :: (Monad m, Reffable r m, Bitmapped b m) =>
+readBlockMap :: (Monad m, Reffable r m, Bitmapped b m, Lockable l m) =>
                 BlockDevice m
-             -> m (BlockMap b r)
+             -> m (BlockMap b r l)
 readBlockMap dev = do
   bArr  <- newBitmap totalBits False
   freeR <- newRef 0
@@ -158,7 +158,8 @@ readBlockMap dev = do
   
   baseTreeR <- newRef empty
   getFreeBlocks bArr baseTreeR Nothing 0
-  return $ BM baseTreeR bArr freeR
+  lk        <- newLock
+  return $ BM baseTreeR bArr freeR lk
  where
   numBlks        = bdNumBlocks dev
   totalBits      = blockMapSzBlks * bdBlockSize dev * 8
@@ -185,11 +186,13 @@ readBlockMap dev = do
     getFreeBlocks bmap treeR (if used then Nothing else b) (cur + 1)
 
 -- | Write the block map to the disk
-writeBlockMap :: (Monad m, Reffable r m, Bitmapped b m, Functor m) =>
-                 BlockDevice m
-              -> BlockMap b r
-              -> m ()
+writeBlockMap ::
+  (Monad m, Reffable r m, Bitmapped b m, Functor m, Lockable l m) =>
+     BlockDevice m
+  -> BlockMap b r l
+  -> m ()
 writeBlockMap dev bmap = do
+  withLockM (bmLock bmap) $ do
   -- Pack the used bitmap into the block map's block region
   forM_ [0..blockMapSzBlks - 1] $ \blkIdx -> do
     blockBS <- BS.pack `fmap` forM [0..bdBlockSize dev - 1] (getBytes blkIdx)
@@ -211,13 +214,14 @@ writeBlockMap dev bmap = do
 -- Contiguous blocks are represented via the Contig constructor of the
 -- BlockGroup datatype, discontiguous blocks via Discontig.  If there
 -- aren't enough blocks available, this function yields Nothing.
-allocBlocks :: (Monad m, Reffable r m, Bitmapped b m) =>
-               BlockMap b r
+allocBlocks :: (Monad m, Reffable r m, Bitmapped b m, Lockable l m) =>
+               BlockMap b r l
             -- ^ the block map 
             -> Word64
             -- ^ requested number of blocks to allocate
             -> m (Maybe BlockGroup)
 allocBlocks bm numBlocks = do
+  withLockM (bmLock bm) $ do 
   available <- readRef $! bmNumFree bm
   if available < numBlocks
     then do
@@ -231,8 +235,8 @@ allocBlocks bm numBlocks = do
       return $ Just blkGroup
 
 -- | Allocate a single block
-alloc1 :: (Bitmapped b m, Reffable r m) =>
-          BlockMap b r -> m (Maybe Word64)
+alloc1 :: (Bitmapped b m, Reffable r m, Lockable l m) =>
+          BlockMap b r l -> m (Maybe Word64)
 alloc1 bm = do 
   res <- allocBlocks bm 1
   case res of
@@ -240,28 +244,46 @@ alloc1 bm = do
     _                 -> return Nothing
 
 -- | Unallocate a single block
-unalloc1 :: (Bitmapped b m, Reffable r m) =>
-            BlockMap b r -> Word64 -> m ()
+unalloc1 :: (Bitmapped b m, Reffable r m, Lockable l m) =>
+            BlockMap b r l -> Word64 -> m ()
 unalloc1 bm addr = unallocBlocks bm $ Contig $ Extent addr 1 
 
 -- | Mark a given block group as unused
-unallocBlocks :: (Monad m, Reffable r m, Bitmapped b m) =>
-                 BlockMap b r -- ^ the block map
+unallocBlocks :: (Monad m, Reffable r m, Bitmapped b m, Lockable l m) =>
+                 BlockMap b r l -- ^ the block map
               -> BlockGroup
               -> m ()
-unallocBlocks bm (Discontig exts) = mapM_ (unallocBlocks bm . Contig) exts
-unallocBlocks bm (Contig ext)     = do
-  avail    <- numFreeBlocks bm
+unallocBlocks = unallocBlocks' True
+
+unallocBlocks' :: (Monad m, Reffable r m, Bitmapped b m, Lockable l m) =>
+                  Bool           -- ^ acquire the blockmap lock?
+               -> BlockMap b r l -- ^ the block map
+               -> BlockGroup
+               -> m ()
+unallocBlocks' acqBMLock bm (Discontig exts) = do
+  (if acqBMLock then withLockM (bmLock bm) else id) $ do
+  mapM_ (unallocBlocks' False bm . Contig) exts
+unallocBlocks' acqBMLock bm (Contig ext)     = do
+  (if acqBMLock then withLockM (bmLock bm) else id) $ do
+  avail    <- numFreeBlocks' False bm
   freeTree <- readRef $! bmFreeTree bm
   forM_ (blkRangeExt ext)  $ clearBit $ bmUsedMap bm
   writeRef (bmFreeTree bm) $ insert ext freeTree
   writeRef (bmNumFree bm)  $ avail + extSz ext
 
 -- | Return the number of blocks currently left
-numFreeBlocks :: (Monad m, Reffable r m, Bitmapped b m) =>
-                 BlockMap b r
-              -> m Word64
-numFreeBlocks = readRef . bmNumFree
+numFreeBlocks :: (Monad m, Reffable r m, Bitmapped b m, Lockable l m) =>
+                 BlockMap b r l
+               -> m Word64
+numFreeBlocks = numFreeBlocks' True
+
+numFreeBlocks' :: (Monad m, Reffable r m, Bitmapped b m, Lockable l m) =>
+                  Bool
+               -> BlockMap b r l
+               -> m Word64
+numFreeBlocks' acquireBMLock bm = 
+  (if acquireBMLock then withLockM (bmLock bm) else id) $ do
+    readRef $ bmNumFree bm
 
 findSpace :: Word64 -> FreeTree -> (BlockGroup, FreeTree)
 findSpace goalSz freeTree =

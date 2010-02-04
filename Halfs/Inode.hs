@@ -366,12 +366,12 @@ readStream dev startIR start mlen = do
 -- write is a truncating write, all resources after the end of the written data
 -- are freed.
 writeStream :: HalfsCapable b t r l m =>
-               BlockDevice m -- ^ The block device
-            -> BlockMap b r  -- ^ The block map
-            -> InodeRef      -- ^ Starting inode ref
-            -> Word64        -- ^ Starting stream (byte) offset
-            -> Bool          -- ^ Truncating write?
-            -> ByteString    -- ^ Data to write
+               BlockDevice m   -- ^ The block device
+            -> BlockMap b r l  -- ^ The block map
+            -> InodeRef        -- ^ Starting inode ref
+            -> Word64          -- ^ Starting stream (byte) offset
+            -> Bool            -- ^ Truncating write?
+            -> ByteString      -- ^ Data to write
             -> HalfsM m ()
 writeStream _ _ _ _ _ bytes | 0 == BS.length bytes = return ()
 writeStream dev bm startIR start trunc bytes       = do
@@ -494,7 +494,7 @@ writeStream dev bm startIR start trunc bytes       = do
 -- into.
 allocFill :: HalfsCapable b t r l m => 
              BlockDevice m       -- ^ The block device
-          -> BlockMap b r        -- ^ The block map to use for allocation
+          -> BlockMap b r l      -- ^ The block map to use for allocation
           -> (Inode t -> Word64) -- ^ Available blocks function
           -> Word64              -- ^ Number of blocks to allocate
           -> Word64              -- ^ Number of inodes to allocate
@@ -557,7 +557,7 @@ allocFill dev bm avail blksToAlloc inodesToAlloc usr grp existingInodes = do
 -- unallocates all resources in the corresponding free region
 truncUnalloc :: HalfsCapable b t r l m =>
                 BlockDevice m      -- the block device
-             -> BlockMap b r       -- the block map
+             -> BlockMap b r l     -- the block map
              -> Word64             -- # of addrs (blocks) per inode 
              -> StreamIdx          -- starting stream index
              -> Word64             -- length at which to truncate

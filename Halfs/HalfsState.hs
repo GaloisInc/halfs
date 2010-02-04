@@ -15,7 +15,7 @@ import System.Device.BlockDevice (BlockDevice)
 
 data HalfsState b r l m = HalfsState {
     hsBlockDev         :: BlockDevice m
-  , hsBlockMap         :: BlockMap b r
+  , hsBlockMap         :: BlockMap b r l
   , hsSuperBlock       :: r SuperBlock
   , hsLock             :: l
   , hsDHMap            :: r (M.Map InodeRef (DirHandle r l))

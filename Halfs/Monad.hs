@@ -7,6 +7,7 @@ module Halfs.Monad
   , HalfsT (runHalfs)
   , hbracket
   , withLock
+  , withLockM
   )
   where
 
@@ -82,3 +83,13 @@ withLock l act = do
   res <- act `catchError` \e -> release l >> throwError e
   release l
   return res
+
+withLockM :: (Monad m, Lockable l m) =>
+             l -> m a -> m a
+withLockM l act = do
+  lock l
+  res <- act
+  release l
+  return res
+         
+  

@@ -168,7 +168,7 @@ propM_lengthWR _g dev = do
 
 withFSData :: HalfsCapable b t r l m =>
               BlockDevice m
-           -> (BlockMap b r -> InodeRef -> Int -> ByteString -> PropertyM m ())
+           -> (BlockMap b r l -> InodeRef -> Int -> ByteString -> PropertyM m ())
            -> PropertyM m ()
 withFSData dev f = do
   fs <- runH  (newfs dev) >> mountOK dev
