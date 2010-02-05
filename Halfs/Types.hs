@@ -83,14 +83,14 @@ data FileStat t = FileStat {
     fsInode      :: InodeRef
   , fsType       :: FileType
   , fsMode       :: FileMode
-  , fsLinks      :: Word64
+  , fsNumLinks   :: Word64
   , fsUID        :: UserID
   , fsGID        :: GroupID
   , fsSize       :: Word64
   , fsNumBlocks  :: Word64
-  , fsAccessTime :: t
-  , fsModTime    :: t
-  , fsChangeTime :: t
+  , fsAccessTime :: t -- Time of last access
+  , fsModTime    :: t -- Time of last data modification
+  , fsChangeTime :: t -- Time of last status change
   }
 
 

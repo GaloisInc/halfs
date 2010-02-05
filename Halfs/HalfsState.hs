@@ -25,4 +25,3 @@ data HalfsState b r l m = HalfsState {
   , hsDHMapLock        :: l
     -- ^ Mutex for the directory handle map                         
   }
-

@@ -283,8 +283,8 @@ emptyInode nAddrs createTm modTm me mommy usr grp =
 -- NB: This is a pretty primitive way to go about this, but it's probably
 -- worthwhile to get something working before revisiting it.  In particular, if
 -- this works well enough we might want to consider making this a little less
--- specific to the particulars of way that the Inode tracks its block addresses,
--- counts, continuations, etc., and perhaps build enumerators for
+-- specific to the particulars of the way that the Inode tracks its block
+-- addresses, counts, continuations, etc., and perhaps build enumerators for
 -- inode/block/byte sequences over inodes.
 readStream :: HalfsCapable b t r l m => 
               BlockDevice m                   -- ^ Block device
@@ -477,6 +477,9 @@ writeStream dev bm startIR start trunc bytes       = do
   -- Update persisted inodes from the start inode to end of write region
   mapM_ (lift . writeInode dev) $
     genericTake inodesUpdated $ genericDrop sInodeIdx inodes''
+
+  -- TODO: Update metadata here? E.g., size, timestamps, etc?  Or should this
+  -- happen up a level?  Also consider locked access at the 'header' inode.
 
   dbug ("==== writeStream end ===") $ do
   return ()

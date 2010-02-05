@@ -55,7 +55,7 @@ makeDirectory :: HalfsCapable b t r l m =>
               -> FileMode           -- ^ initial filemode
               -> HalfsM m InodeRef  -- ^ on success, the inode ref to the
                                     --   created directory
-makeDirectory fs parentIR dname user group perms = do 
+makeDirectory fs parentIR dname user group perms = 
   withDirectory fs parentIR $ \pdh -> do
   withLock (dhLock pdh) $ do 
   -- Begin critical section over parent's DirHandle 
@@ -63,7 +63,7 @@ makeDirectory fs parentIR dname user group perms = do
   if M.member dname contents
    then throwError $ HalfsObjectExists dname 
    else do
-     mir <- (fmap . fmap) blockAddrToInodeRef {-$ withLock (hsLock fs) -} $ alloc1 (hsBlockMap fs)
+     mir <- (fmap . fmap) blockAddrToInodeRef $ alloc1 (hsBlockMap fs)
      case mir of
        Nothing     -> throwError HalfsAllocFailed
        Just thisIR -> do
@@ -111,28 +111,28 @@ openDirectory :: HalfsCapable b t r l m =>
                  HalfsState b r l m
               -> InodeRef
               -> HalfsM m (DirHandle r l)
-openDirectory fs inr = do
+openDirectory fs inr = 
   withLock (hsDHMapLock fs) $ do
-  -- Begin critical section over the DirHandle map (hsDHMapLock)
-  mdh <- liftM (M.lookup inr) (readRef $ hsDHMap fs)
-  case mdh of
-    Just dh -> return dh
-    Nothing  -> do
-      -- No DirHandle for this InodeRef, so pull in the directory info
-      -- from the dev and make one.
-      rawDirBytes <- readStream (hsBlockDev fs) inr 0 Nothing
-      dirEnts     <- if BS.null rawDirBytes
-                     then do return []
-                     else case decode rawDirBytes of 
-                       Left msg -> throwError $ HalfsDecodeFail_Directory msg
-                       Right x  -> return x
-      dh <- DirHandle inr
-              `fmap` newRef (M.fromList $ map deName dirEnts `zip` dirEnts)
-              `ap`   newRef Clean
-              `ap`   newLock
-      modifyRef (hsDHMap fs) (M.insert inr dh)
-      return dh
-  -- End critical section over the DirHandle map (hsDHMapLock)
+    -- Begin critical section over the DirHandle map (hsDHMapLock)
+    mdh <- liftM (M.lookup inr) (readRef $ hsDHMap fs)
+    case mdh of
+      Just dh -> return dh
+      Nothing  -> do
+        -- No DirHandle for this InodeRef, so pull in the directory info
+        -- from the dev and make one.
+        rawDirBytes <- readStream (hsBlockDev fs) inr 0 Nothing
+        dirEnts     <- if BS.null rawDirBytes
+                       then do return []
+                       else case decode rawDirBytes of 
+                         Left msg -> throwError $ HalfsDecodeFail_Directory msg
+                         Right x  -> return x
+        dh <- DirHandle inr
+                `fmap` newRef (M.fromList $ map deName dirEnts `zip` dirEnts)
+                `ap`   newRef Clean
+                `ap`   newLock
+        modifyRef (hsDHMap fs) (M.insert inr dh)
+        return dh
+    -- End critical section over the DirHandle map (hsDHMapLock)
 
 closeDirectory :: HalfsCapable b t r l m =>
                   HalfsState b r l m 
