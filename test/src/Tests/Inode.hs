@@ -14,6 +14,7 @@ import Test.QuickCheck.Monadic
 import Halfs.BlockMap
 import Halfs.Classes
 import Halfs.CoreAPI
+import Halfs.Errors
 import Halfs.HalfsState
 import Halfs.Inode
 import Halfs.Monad
@@ -25,7 +26,7 @@ import Tests.Instances           (printableBytes)
 import Tests.Types
 import Tests.Utils
 
-import Debug.Trace
+-- import Debug.Trace
 
 
 --------------------------------------------------------------------------------
@@ -57,17 +58,21 @@ propM_basicWRWR :: HalfsCapable b t r l m =>
 propM_basicWRWR _g dev = do
   withFSData dev $ \bm rdirIR dataSz testData -> do 
 
-{- Currently not testing for the invalid index error, due to an aggressive
-   assert in Inode.decompStreamOffset catching the problem.
-
-  -- Expected-error: attempt write past end of (empty) stream
-
-  e0 <- run $ writeStream dev bm rdirIR (bdBlockSize dev) False testData
+  -- Expected error: attempted write past end of (empty) stream
+  e0 <- runH $ writeStream dev bm rdirIR (bdBlockSize dev) False testData
   case e0 of
-    Left (HalfsInvalidStreamIndex _) -> assert True
-    _                                -> assert False
--}
+    Left (HalfsInvalidStreamIndex idx) -> assert (idx == bdBlockSize dev)
+    _                                  -> assert False
                                         
+  -- TODO: Fix this: need to catch byte offset errors, not just
+  --       block/cont offset errors
+{-
+  e0' <- runH $ writeStream dev bm rdirIR 5 False testData
+  case e0' of
+    Left (HalfsInvalidStreamIndex idx) -> assert (idx == 1)
+   _                                  -> assert False
+-}
+
   -- Non-truncating write & read-back
   e1 <- runH $ writeStream dev bm rdirIR 0 False testData
   case e1 of
