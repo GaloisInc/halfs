@@ -25,19 +25,17 @@ import Tests.Instances ()
 import Tests.Types
 import Tests.Utils
 
--- import Debug.Trace
-
 --------------------------------------------------------------------------------
 -- BlockDevice properties
 
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
-  [ serdes prop_serdes       100 "SuperBlock"     (arbitrary :: Gen SuperBlock)
-  , serdes prop_serdes       100 "UTCTime"        (arbitrary :: Gen UTCTime) 
-  , serdes prop_serdes       100 "DirectoryEntry" (arbitrary :: Gen DirectoryEntry)
-  --  
+  [ serdes prop_serdes 100 "SuperBlock"     (arbitrary :: Gen SuperBlock)
+  , serdes prop_serdes 100 "UTCTime"        (arbitrary :: Gen UTCTime) 
+  , serdes prop_serdes 100 "DirectoryEntry" (arbitrary :: Gen DirectoryEntry)
+  -- 
   , mkMemDevExec quick "Serdes" 100 "Inode" propM_inodeSerdes
-  , mkMemDevExec quick "Serdes" 5000 "Cont"  propM_contSerdes
+  , mkMemDevExec quick "Serdes" 100 "Cont"  propM_contSerdes
   ]
   where
     numTests n      = (,) $ if quick then stdArgs{maxSuccess = n} else stdArgs
@@ -74,4 +72,3 @@ propM_contSerdes _g dev =
               =<< minimalContSize (undefined :: UTCTime)
   runH (decodeCont (bdBlockSize dev) (encode cont))
     >>= assert . either (const False) (== cont { inocNumAddrs = nAddrs })
-        

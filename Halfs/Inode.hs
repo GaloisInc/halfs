@@ -12,6 +12,7 @@ module Halfs.Inode
   , readStream
   , writeStream
   -- * for testing
+  , BlockCarrier(bcRep)
   , Cont(..)
   , ContRef(..)
   , bsDrop
@@ -19,8 +20,11 @@ module Halfs.Inode
   , computeNumAddrs
   , computeNumInodeAddrsM
   , computeNumContAddrsM
+  , decodeBC
   , decodeCont
   , decodeInode
+  , inodeBC
+  , contBC
   , minimalContSize
   , minimalInodeSize
   , minInodeBlocks
@@ -202,7 +206,7 @@ newBC x@(Right inoc) =
   }
 
 instance (Ord t, Serialize t, Show t) => Show (BlockCarrier t) where
-  show = either show show . bcRep
+  show = show . bcRep
 
 instance (Eq t, Ord t, Serialize t) => Serialize (BlockCarrier t) where
   put bc = do
@@ -243,7 +247,7 @@ instance Serialize Cont where
     remb <- fromIntegral `fmap` remaining
     let numBlockBytes      = remb - 8 -- account for trailing cmagic4
         (numBlocks, check) = numBlockBytes `divMod` refSize
-    unless (check == fromIntegral bcPadSize) $
+    unless (check == 0 || check == fromIntegral bcPadSize) $
       -- Only trailing bytes for BlockCarrier padding (if any) should remain in
       -- the input stream
       fail "Cont: Incorrect number of bytes left for block list."
@@ -309,7 +313,7 @@ instance (Eq t, Ord t, Serialize t) => Serialize (Inode t) where
     remb <- fromIntegral `fmap` remaining
     let numBlockBytes      = remb - 8 -- account for trailing magic4
         (numBlocks, check) = numBlockBytes `divMod` refSize
-    unless (check == fromIntegral bcPadSize) $
+    unless (check == 0 || check == fromIntegral bcPadSize) $
       -- Only trailing bytes for BlockCarrier padding (if any) should remain in
       -- the input stream
       fail "Inode: Incorrect number of bytes left for block list."
@@ -966,23 +970,21 @@ decodeInode :: HalfsCapable b t r l m =>
                Word64
             -> ByteString
             -> HalfsM m (Inode t)
-decodeInode _blkSz _bs = do
-  return undefined
---   numAddrs' <- computeNumInodeAddrsM blkSz
---   case decode bs of
---     Left s  -> throwError $ HalfsDecodeFail_Inode s
---     Right n -> return n{ inoNumAddrs = numAddrs' }
+decodeInode blkSz bs = do
+  numAddrs' <- computeNumInodeAddrsM blkSz
+  case decode bs of
+    Left s  -> throwError $ HalfsDecodeFail_Inode s
+    Right n -> return n{ inoNumAddrs = numAddrs' }
 
 decodeCont :: HalfsCapable b t r l m =>
               Word64
            -> ByteString
            -> HalfsM m Cont
-decodeCont _blkSz _bs = do
-  return undefined
---   numAddrs' <- computeNumContAddrsM blkSz
---   case decode bs of
---     Left s  -> throwError $ HalfsDecodeFail_Cont s
---     Right c -> return c{ inocNumAddrs = numAddrs' }
+decodeCont blkSz bs = do
+  numAddrs' <- computeNumContAddrsM blkSz
+  case decode bs of
+    Left s  -> throwError $ HalfsDecodeFail_Cont s
+    Right c -> return c{ inocNumAddrs = numAddrs' }
 
 decodeBC :: HalfsCapable b t r l m =>
             Word64
