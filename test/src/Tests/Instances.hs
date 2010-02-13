@@ -21,8 +21,13 @@ import Test.QuickCheck.Monadic hiding (assert)
 import Halfs.BlockMap            (Extent(..))
 import Halfs.Inode               ( Inode(..)
                                  , InodeRef(..)
+                                 , Cont(..)
+                                 , ContRef(..)
                                  , computeNumAddrs
+                                 , minimalContSize
                                  , minimalInodeSize
+                                 , minContBlocks
+                                 , minInodeBlocks
                                  )
 import Halfs.Directory
 import Halfs.Protection          (UserID(..), GroupID(..))
@@ -160,15 +165,15 @@ permute xs = do
 instance Arbitrary UnallocDecision where
   arbitrary = UnallocDecision `fmap` arbitrary
 
-instance Arbitrary BDGeom where
-  arbitrary = 
-    BDGeom
-    <$> powTwo 10 13   -- 1024..8192 sectors
-    <*> powTwo  9 12   -- 512b..4K sector size
-                       -- => 512K .. 32M filesystem siz
-
 -- instance Arbitrary BDGeom where
---   arbitrary = return $ BDGeom 512 512
+--   arbitrary = 
+--     BDGeom
+--     <$> powTwo 10 13   -- 1024..8192 sectors
+--     <*> powTwo  9 12   -- 512b..4K sector size
+--                        -- => 512K .. 32M filesystem siz
+
+instance Arbitrary BDGeom where
+  arbitrary = return $ BDGeom 512 512
 
 -- Generate an arbitrary version 1 superblock with coherent free and
 -- used block counts.  Block size and count are constrained by the
@@ -194,12 +199,14 @@ instance (Arbitrary a, Ord a, Serialize a) => Arbitrary (Inode a) where
   arbitrary = do
     BDGeom _ blkSz <- arbitrary
     createTm       <- arbitrary
-    addrCnt        <- computeNumAddrs blkSz =<< minimalInodeSize createTm
+    addrCnt        <- computeNumAddrs blkSz minInodeBlocks
+                        =<< minimalInodeSize createTm
     numBlocks      <- fromIntegral `fmap` choose (0, addrCnt)
     Inode
       <$> IR `fmap` arbitrary                        -- address
       <*> IR `fmap` arbitrary                        -- parent
-      <*> fmap IR `fmap` arbitrary                   -- continuation
+      <*> CR `fmap` arbitrary                        -- continuation
+      <*> arbitrary                                  -- fileSize
       <*> return createTm                            -- createTime
       <*> arbitrary `suchThat` (>= createTm)         -- modifyTime
       <*> UID `fmap` arbitrary                       -- user
@@ -209,12 +216,30 @@ instance (Arbitrary a, Ord a, Serialize a) => Arbitrary (Inode a) where
       -- Transient:
       <*> return addrCnt                             -- numAddrs
                                              
+-- Generate an arbitrary inode 'continuation' (a Cont) with coherent
+-- fields based on the minimal cont size computaton for an arbitrary
+-- device geometry
+
+instance Arbitrary Cont where
+  arbitrary = do
+    BDGeom _ blkSz <- arbitrary
+    addrCnt        <- computeNumAddrs blkSz minContBlocks
+                        =<< minimalContSize (undefined :: UTCTime)
+    numBlocks      <- fromIntegral `fmap` choose (0, addrCnt)
+    Cont
+      <$> CR `fmap` arbitrary                        -- inocAddress
+      <*> CR `fmap` arbitrary                        -- inocContinuation
+      <*> return (fromIntegral numBlocks)            -- inocBlockCount
+      <*> replicateM numBlocks arbitrary             -- inocBlocks
+      -- Transient:
+      <*> return addrCnt                             -- inocNumAddrs
+
 -- Generate an arbitrary directory entry
 instance Arbitrary DirectoryEntry where
   arbitrary = 
     DirEnt
       <$> (listOf1 arbitrary :: Gen String)          -- deName
-      <*> IR `fmap` arbitrary                        -- deInode
+      <*> IR  `fmap` arbitrary                       -- deInode
       <*> UID `fmap` arbitrary                       -- deUser
       <*> GID `fmap` arbitrary                       -- deGroup
       <*> (arbitrary :: Gen FileMode)                -- deMode

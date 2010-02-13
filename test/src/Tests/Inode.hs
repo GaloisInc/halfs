@@ -25,6 +25,8 @@ import Tests.Instances           (printableBytes)
 import Tests.Types
 import Tests.Utils
 
+import Debug.Trace
+
 
 --------------------------------------------------------------------------------
 -- Inode properties
@@ -32,13 +34,13 @@ import Tests.Utils
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [ -- Inode stream write/read/(over)write/read property
-    exec 5 "Simple WRWR" propM_basicWRWR
+    exec 10 "Simple WRWR" propM_basicWRWR
   ,
     -- Inode stream write/read/(truncating)write/read property
-    exec 5 "Truncating WRWR" propM_truncWRWR
+    exec 10 "Truncating WRWR" propM_truncWRWR
   ,
     -- Inode length-specific stream write/read
-    exec 5 "Length-specific WR" propM_lengthWR
+    exec 10 "Length-specific WR" propM_lengthWR
   ]
   where
     exec = mkMemDevExec quick "Inode"
@@ -69,11 +71,11 @@ propM_basicWRWR _g dev = do
   -- Non-truncating write & read-back
   e1 <- runH $ writeStream dev bm rdirIR 0 False testData
   case e1 of
-    Left  e -> fail $ "writeStream failure in propM_basicWR: " ++ show e
+    Left  e -> fail $ "writeStream failure in propM_basicWRWR: " ++ show e
     Right _ -> do
       ebs <- runH $ readStream dev rdirIR 0 Nothing
       case ebs of
-        Left e -> fail $ "readStream failure in propM_basicWR: " ++ show e
+        Left e -> fail $ "readStream failure in propM_basicWRWR: " ++ show e
         Right bs ->
           -- ^ We leave off the trailing bytes of what we read, since reading
           -- until the end of the stream will include contents of the whole last
@@ -86,11 +88,11 @@ propM_basicWRWR _g dev = do
   forAllM (printableBytes overwriteSz)     $ \newData     -> do
   e2 <- runH $ writeStream dev bm rdirIR (fromIntegral startByte) False newData
   case e2 of
-    Left  e -> fail $ "writeStream failure in propM_basicWR: " ++ show e
+    Left  e -> fail $ "writeStream failure in propM_basicWRWR: " ++ show e
     Right _ -> do
       ebs <- runH $ readStream dev rdirIR 0 Nothing
       case ebs of
-        Left e   -> fail $ "readStream failure in propM_basicWR: " ++ show e
+        Left e   -> fail $ "readStream failure in propM_basicWRWR: " ++ show e
         Right bs -> do 
           let readBack = bsTake dataSz bs
               expected = bsTake startByte testData
@@ -143,6 +145,7 @@ propM_lengthWR :: HalfsCapable b t r l m =>
                -> PropertyM m ()
 propM_lengthWR _g dev = do
   withFSData dev $ \bm rdirIR dataSz testData -> do 
+  let blkSz = bdBlockSize dev                        
   e1 <- runH $ writeStream dev bm rdirIR 0 False testData
   case e1 of
     Left e  -> fail $ "writeStream failure in propM_lengthWR: " ++ show e
@@ -150,10 +153,13 @@ propM_lengthWR _g dev = do
       -- If possible, read a minimum of one full inode + 1 byte worth of data
       -- into the next inode to push on boundary conditions & spill arithmetic.
 
-      blksPerInode <- run $ computeNumAddrsM (bdBlockSize dev)
-      let blkSize    = bdBlockSize dev
-          minReadLen = min dataSz (fromIntegral $ blksPerInode * blkSize + 1)
+      forAllM (arbitrary :: Gen Bool) $ \b -> do
+      blksPerCarrier <- run $
+        if b then computeNumInodeAddrsM blkSz else computeNumContAddrsM  blkSz
+--      trace ("blksPerCarrier = " ++ show blksPerCarrier) $ do
+      let minReadLen = min dataSz (fromIntegral $ blksPerCarrier * blkSz + 1)
 
+--      trace ("minReadLen = " ++ show minReadLen) $ do
       forAllM (choose (minReadLen, dataSz))  $ \readLen  -> do
       forAllM (choose (0, dataSz - 1))       $ \startIdx -> do
 
@@ -171,10 +177,14 @@ withFSData :: HalfsCapable b t r l m =>
            -> (BlockMap b r l -> InodeRef -> Int -> ByteString -> PropertyM m ())
            -> PropertyM m ()
 withFSData dev f = do
-  fs <- runH  (newfs dev) >> mountOK dev
+  fs <- runH (newfs dev) >> mountOK dev
   let bm = hsBlockMap fs 
   rdirIR <- rootDir `fmap` sreadRef (hsSuperBlock fs)
+--  trace ("withFSData: rdirIR = " ++ show rdirIR) $ do
   withData dev $ f bm rdirIR 
+
+newtype FillBlocks a = FillBlocks a deriving Show
+newtype SpillCnt a   = SpillCnt a deriving Show
 
 -- Generates random data of random size between 1/8 - 1/4 of the device
 withData :: HalfsCapable b t r l m =>
@@ -182,12 +192,17 @@ withData :: HalfsCapable b t r l m =>
          -> (Int -> ByteString -> PropertyM m ())  -- Action
          -> PropertyM m ()
 withData dev f = do
-  nAddrs <- run $ computeNumAddrsM (bdBlockSize dev)
+  nAddrs <- run $ computeNumContAddrsM (bdBlockSize dev)
   let maxBlocks = safeToInt $ bdNumBlocks dev
-  forAllM (choose (maxBlocks `div` 8, maxBlocks `div` 4)) $ \fillBlocks -> do
-  forAllM (choose (0, safeToInt nAddrs))                  $ \spillCnt   -> do
+      lo        = maxBlocks `div` 8
+      hi        = maxBlocks `div` 4
+      fbr       = FillBlocks `fmap` choose (lo, hi)
+      scr       = SpillCnt   `fmap` choose (0, safeToInt nAddrs)
+  forAllM fbr $ \(FillBlocks fillBlocks) -> do
+  forAllM scr $ \(SpillCnt   spillCnt)   -> do
   -- fillBlocks is the number of blocks to fill on the write (1/8 - 1/4 of dev)
-  -- spillCnt is the number of blocks to write into the last inode in the chain
+  -- spillCnt is the number of blocks to write into the last cont in the chain
   let dataSz = fillBlocks * safeToInt (bdBlockSize dev) + spillCnt
---  let dataSz = 64535
+--  let dataSz = 48 * 512 + 56 * 512 + 1
   forAllM (printableBytes dataSz) (f dataSz)
+          

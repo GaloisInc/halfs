@@ -19,6 +19,13 @@ import Halfs.Protection
 --------------------------------------------------------------------------------
 -- Common Inode Types
 
+newtype Ref a = Ref Word64 
+  deriving (Eq, Ord, Num, Show, Integral, Enum, Real)
+
+instance Serialize (Ref a) where
+  put (Ref x) = putWord64be x
+  get         = Ref `fmap` getWord64be
+
 -- We store Inode reference as simple Word64, newtype'd in case we either decide
 -- to do something more fancy or just to make the types a bit more clear.
 --
@@ -27,17 +34,18 @@ import Halfs.Protection
 -- underlying field size of an InodeRef, you *really* (!)  need to change
 -- 'inodeRefSize', below.
 --
+-- TODO: update above comments to describe Cont
 
-newtype InodeRef = IR Word64
+newtype InodeRef = IR { unIR :: Word64 }
   deriving (Eq, Ord, Num, Show, Integral, Enum, Real)
 
 instance Serialize InodeRef where
   put (IR x) = putWord64be x
   get        = IR `fmap` getWord64be
 
--- | The size of an Inode reference in bytes
-inodeRefSize :: Word64
-inodeRefSize = 8
+-- | The size of an Inode/Cont reference in bytes
+refSize :: Word64
+refSize = 8
 
 --------------------------------------------------------------------------------
 -- Common Directory and File Types

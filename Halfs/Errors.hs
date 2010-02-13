@@ -15,7 +15,10 @@ data HalfsError =
   | HalfsInvalidStreamIndex Word64
   | HalfsDecodeFail_Directory String
   | HalfsDecodeFail_Inode String
+  | HalfsDecodeFail_Cont String
+  | HalfsDecodeFail_BlockCarrier String
   | HalfsTestFailed String
+  | HalfsInternalError String
   deriving Show
 
 data RsnHalfsMountFail = 
