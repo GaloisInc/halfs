@@ -25,6 +25,8 @@ import Tests.Instances ()
 import Tests.Types
 import Tests.Utils
 
+import Debug.Trace
+
 --------------------------------------------------------------------------------
 -- BlockDevice properties
 
@@ -33,9 +35,9 @@ qcProps quick =
   [ serdes prop_serdes 100 "SuperBlock"     (arbitrary :: Gen SuperBlock)
   , serdes prop_serdes 100 "UTCTime"        (arbitrary :: Gen UTCTime) 
   , serdes prop_serdes 100 "DirectoryEntry" (arbitrary :: Gen DirectoryEntry)
-  -- 
-  , mkMemDevExec quick "Serdes" 100 "Inode" propM_inodeSerdes
+  --
   , mkMemDevExec quick "Serdes" 100 "Cont"  propM_contSerdes
+  , mkMemDevExec quick "Serdes" 100 "Inode" propM_inodeSerdes
   ]
   where
     numTests n      = (,) $ if quick then stdArgs{maxSuccess = n} else stdArgs
@@ -57,7 +59,11 @@ propM_inodeSerdes _g dev =
   nAddrs <- computeNumAddrs (bdBlockSize dev) minInodeBlocks
               =<< minimalInodeSize (inoCreateTime inode)
   runH (decodeInode (bdBlockSize dev) (encode inode))
-    >>= assert . either (const False) (== inode { inoNumAddrs = nAddrs })
+    >>= assert . either (const False)
+                        (== inode{ inoCont =
+                                     (inoCont inode){ numAddrs = nAddrs }
+                                 }
+                        )
 
 propM_contSerdes :: HalfsCapable b UTCTime r l m =>
                      BDGeom
@@ -68,7 +74,6 @@ propM_contSerdes _g dev =
   -- Obtain the expected value cont's numAddrs field post-decoding, based on
   -- dev's geometry instead of the one the cont generator uses, which is
   -- arbitrary.
-  nAddrs <- computeNumAddrs (bdBlockSize dev) minContBlocks
-              =<< minimalContSize (undefined :: UTCTime)
+  nAddrs <- computeNumAddrs (bdBlockSize dev) minContBlocks =<< minimalContSize
   runH (decodeCont (bdBlockSize dev) (encode cont))
-    >>= assert . either (const False) (== cont { inocNumAddrs = nAddrs })
+    >>= assert . either (const False) (== cont { numAddrs = nAddrs })

@@ -10,7 +10,7 @@ import Control.Monad             (foldM, replicateM)
 import Data.Bits                 (shiftL)
 import Data.ByteString           (ByteString)
 import qualified Data.ByteString as BS
-import Data.List (nub)
+import Data.List (nub, genericTake)
 import Data.Serialize
 import Data.Time
 import Data.Word
@@ -28,6 +28,7 @@ import Halfs.Inode               ( Inode(..)
                                  , minimalInodeSize
                                  , minContBlocks
                                  , minInodeBlocks
+                                 , nilContRef
                                  )
 import Halfs.Directory
 import Halfs.Protection          (UserID(..), GroupID(..))
@@ -201,20 +202,24 @@ instance (Arbitrary a, Ord a, Serialize a) => Arbitrary (Inode a) where
     createTm       <- arbitrary
     addrCnt        <- computeNumAddrs blkSz minInodeBlocks
                         =<< minimalInodeSize createTm
-    numBlocks      <- fromIntegral `fmap` choose (0, addrCnt)
     Inode
-      <$> IR `fmap` arbitrary                        -- address
-      <*> IR `fmap` arbitrary                        -- parent
-      <*> CR `fmap` arbitrary                        -- continuation
-      <*> arbitrary                                  -- fileSize
-      <*> return createTm                            -- createTime
-      <*> arbitrary `suchThat` (>= createTm)         -- modifyTime
-      <*> UID `fmap` arbitrary                       -- user
-      <*> GID `fmap` arbitrary                       -- group
-      <*> return (fromIntegral numBlocks)            -- blockCount
-      <*> replicateM numBlocks arbitrary             -- blocks
-      -- Transient:
-      <*> return addrCnt                             -- numAddrs
+      <$> IR `fmap` arbitrary                        -- inoAddress
+      <*> IR `fmap` arbitrary                        -- inoParent
+      <*> arbitrary                                  -- inoFileSize
+      <*> return createTm                            -- inoCreateTime
+      <*> arbitrary `suchThat` (>= createTm)         -- inoModifyTime
+      <*> UID `fmap` arbitrary                       -- inoUser
+      <*> GID `fmap` arbitrary                       -- inoGroup
+      <*> (arbitrary >>= \cont -> do
+             let blockCount' = min (blockCount cont) addrCnt
+             return
+               cont{ address    = nilContRef
+                   , blockCount = blockCount'
+                   , blockAddrs = genericTake blockCount' (blockAddrs cont)
+                   , numAddrs   = min (numAddrs cont) addrCnt
+                   }
+          )
+
                                              
 -- Generate an arbitrary inode 'continuation' (a Cont) with coherent
 -- fields based on the minimal cont size computaton for an arbitrary
@@ -223,16 +228,15 @@ instance (Arbitrary a, Ord a, Serialize a) => Arbitrary (Inode a) where
 instance Arbitrary Cont where
   arbitrary = do
     BDGeom _ blkSz <- arbitrary
-    addrCnt        <- computeNumAddrs blkSz minContBlocks
-                        =<< minimalContSize (undefined :: UTCTime)
+    addrCnt        <- computeNumAddrs blkSz minContBlocks =<< minimalContSize 
     numBlocks      <- fromIntegral `fmap` choose (0, addrCnt)
     Cont
-      <$> CR `fmap` arbitrary                        -- inocAddress
-      <*> CR `fmap` arbitrary                        -- inocContinuation
-      <*> return (fromIntegral numBlocks)            -- inocBlockCount
-      <*> replicateM numBlocks arbitrary             -- inocBlocks
+      <$> CR `fmap` arbitrary                        -- address
+      <*> CR `fmap` arbitrary                        -- continuation
+      <*> return (fromIntegral numBlocks)            -- blockCount
+      <*> replicateM numBlocks arbitrary             -- blockAddrs
       -- Transient:
-      <*> return addrCnt                             -- inocNumAddrs
+      <*> return addrCnt                             -- numAddrs
 
 -- Generate an arbitrary directory entry
 instance Arbitrary DirectoryEntry where

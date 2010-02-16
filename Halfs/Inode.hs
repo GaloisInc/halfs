@@ -12,7 +12,6 @@ module Halfs.Inode
   , readStream
   , writeStream
   -- * for testing
-  , BlockCarrier(bcRep)
   , Cont(..)
   , ContRef(..)
   , bsDrop
@@ -20,15 +19,13 @@ module Halfs.Inode
   , computeNumAddrs
   , computeNumInodeAddrsM
   , computeNumContAddrsM
-  , decodeBC
   , decodeCont
   , decodeInode
-  , inodeBC
-  , contBC
   , minimalContSize
   , minimalInodeSize
   , minInodeBlocks
   , minContBlocks
+  , nilContRef
   , safeToInt
   , truncSentinel
   )
@@ -55,7 +52,7 @@ import Halfs.Utils
 
 import System.Device.BlockDevice
 
--- import Debug.Trace
+import Debug.Trace
 
 --import System.IO.Unsafe
 dbug :: String -> a -> a
@@ -106,21 +103,23 @@ truncSentinel = 0xBA
 padSentinel :: Word8
 padSentinel = 0xAD
 
--- | The size of the padding region at the end of BlockCarriers
-bcPadSize :: Int
-bcPadSize = 7
+-- | The size of the padding region at the end of Conts, if any
+cPadSize :: Int
+cPadSize = 8
 
--- | The structure of an Inode. Pretty standard, except that we use the
--- continuation field to allow multiple runs of block addresses within the
--- file. We serialize Nothing as nilInodeRef, an invalid continuation.
+-- | The structure of an Inode. Pretty standard, except that we use the Cont
+-- structure (embedded in the inode) to hold block references and use its
+-- continuation field to allow multiple runs of block addresses.
 --
 -- We semi-arbitrarily state that an Inode must be capable of maintaining a
--- minimum of 50 block addresses, which gives us a minimum inode size of 512
--- bytes (in the IO monad variant, which uses the our Serialize instance for the
--- UTCTime when writing the createTime and modifyTime fields).
---
+-- minimum of 43 block addresses in its embedded Cont while the Cont must be
+-- capable of maintaining 56 block addresses.  These values together give us a
+-- minimum inode AND cont size of 512 bytes (in the IO monad variant, which uses
+-- the our Serialize instance for the UTCTime when writing the createTime and
+-- modifyTime fields).
+
 minInodeBlocks :: Word64
-minInodeBlocks = 48
+minInodeBlocks = 43
 
 minContBlocks :: Word64
 minContBlocks = 56
@@ -131,27 +130,30 @@ data (Eq t, Ord t, Serialize t) => Inode t = Inode
                                         --   This is nilInodeRef for the root
                                         --   directory inode and for inodes in the
                                         --   continuation chain of other inodes.
-  , inoContinuation  :: ContRef
   , inoFileSize      :: Word64
   , inoCreateTime    :: t
   , inoModifyTime    :: t
   , inoUser          :: UserID
   , inoGroup         :: GroupID
-  , inoBlockCount    :: Word64       -- ^ current number of active blocks (equal
-                                     -- to the number of (sequential) inode
-                                     -- references held in the blocks list)
-
-  , inoBlocks        :: [Word64]
-
-  -- Fields below here are not persisted, and are populated via decodeInode
-
-  , inoNumAddrs      :: Word64       -- ^ Maximum number of blocks addressable
-                                     -- by this inode.  NB: Does not include any
-                                     -- continuations, and is only used for
-                                     -- convenience.
+  , inoCont          :: Cont  
   }
   deriving (Show, Eq)
 
+data Cont = Cont
+  { address      :: ContRef  -- ^ Address of this cont (nilContRef for an inode's
+                             -- embedded Cont)
+  , continuation :: ContRef  -- ^ Next Cont in the chain; nilContRef terminates
+  , blockCount   :: Word64   
+  , blockAddrs   :: [Word64] -- ^ references to blocks "owned" by this Cont
+
+  -- Fields below here are not persisted, and are populated via decodeCont  
+
+  , numAddrs     :: Word64   -- ^ Maximum number of blocks addressable by this
+                             -- Cont.  NB: Does not include any continuations
+  }
+  deriving (Show, Eq)
+               
+{-
 data Cont = Cont
   { inocAddress      :: ContRef
   , inocContinuation :: ContRef
@@ -172,7 +174,8 @@ data (Eq t, Ord t, Serialize t) => BlockCarrier t = BC
   , setBlockAddrs   :: [Word64] -> BlockCarrier t
   , numAddrs        :: Word64
   }
-
+-}
+{-
 inodeBC :: (Eq t, Ord t, Serialize t) => Inode t -> BlockCarrier t
 inodeBC = newBC . Left
 
@@ -217,89 +220,33 @@ instance (Eq t, Ord t, Serialize t) => Serialize (BlockCarrier t) where
     padding <- replicateM bcPadSize $ getWord8
     assert (all (== padSentinel) padding) $ return ()
     return bc
-
-instance Serialize Cont where
-  put c = do
-    unless (numBlocks <= numAddrs') $
-      fail $ "Corrupted Cont structure put: too many blocks"
-    putByteString $ cmagic1
-    put           $ inocAddress c
-    put           $ inocContinuation c 
-    putByteString $ cmagic2
-    putWord64be   $ inocBlockCount c
-    putByteString $ cmagic3
-    forM_ blocks' put
-    replicateM_ fillBlocks $ put nilInodeRef
-    putByteString cmagic4
-    where
-      blocks'    = inocBlocks c
-      numAddrs'  = safeToInt $ inocNumAddrs c
-      numBlocks  = length blocks'
-      fillBlocks = numAddrs' - numBlocks
-
-  get = do
-    checkMagic cmagic1
-    addr <- get
-    cont <- get
-    checkMagic cmagic2 
-    blkCnt <- getWord64be
-    checkMagic cmagic3 
-    remb <- fromIntegral `fmap` remaining
-    let numBlockBytes      = remb - 8 -- account for trailing cmagic4
-        (numBlocks, check) = numBlockBytes `divMod` refSize
-    unless (check == 0 || check == fromIntegral bcPadSize) $
-      -- Only trailing bytes for BlockCarrier padding (if any) should remain in
-      -- the input stream
-      fail "Cont: Incorrect number of bytes left for block list."
-    unless (numBlocks >= minContBlocks) $
-      fail "Cont: Not enough space left for minimum number of blocks."
-    blks <- filter (/= 0) `fmap` replicateM (safeToInt numBlocks) get
-    checkMagic cmagic4 
-    let na = error $ "numAddrs has not been populated via Data.Serialize.get "
-                  ++ "for Cont; did you forget to use the " 
-                  ++ "Inode.decodeCont wrapper?"
-    return Cont
-           { inocAddress      = addr
-           , inocContinuation = cont
-           , inocBlockCount   = blkCnt
-           , inocBlocks       = blks
-           , inocNumAddrs     = na
-           }
-   where
-    checkMagic x = do
-      magic <- getBytes 8
-      unless (magic == x) $ fail "Invalid Cont: magic number mismatch"
+-}
 
 instance (Eq t, Ord t, Serialize t) => Serialize (Inode t) where
   put n = do
-    unless (numBlocks <= numAddrs') $
-      fail $ "Corrupted Inode structure put: too many blocks"
     putByteString magic1
     put $ inoAddress n
     put $ inoParent n
-    put $ inoContinuation n
     putWord64be $ inoFileSize n
     put $ inoCreateTime n
     put $ inoModifyTime n
     putByteString magic2
     put $ inoUser n
     put $ inoGroup n
-    putWord64be $ inoBlockCount n
     putByteString magic3
-    forM_ blocks' put
-    replicateM_ fillBlocks $ put nilInodeRef
+    put $ inoCont n
+
+    -- NB: For Conts that are inside inodes, the Serialize instance for Cont
+    -- relies on only 8 bytes beyond this point (the inode magic number).  If
+    -- you change this, you'll need to update the related calcuations in
+    -- Serialize Cont's get function.
+
     putByteString magic4
-    where
-      blocks'    = inoBlocks n
-      numAddrs'  = safeToInt $ inoNumAddrs n
-      numBlocks  = length blocks'
-      fillBlocks = numAddrs' - numBlocks
 
   get = do
     checkMagic magic1
     addr <- get
     par  <- get
-    cont <- get
     fsz  <- getWord64be
     ctm  <- get
     mtm  <- get
@@ -308,39 +255,96 @@ instance (Eq t, Ord t, Serialize t) => Serialize (Inode t) where
     checkMagic magic2
     usr  <- get
     grp  <- get
-    blkCnt <- getWord64be
     checkMagic magic3
-    remb <- fromIntegral `fmap` remaining
-    let numBlockBytes      = remb - 8 -- account for trailing magic4
-        (numBlocks, check) = numBlockBytes `divMod` refSize
-    unless (check == 0 || check == fromIntegral bcPadSize) $
-      -- Only trailing bytes for BlockCarrier padding (if any) should remain in
-      -- the input stream
-      fail "Inode: Incorrect number of bytes left for block list."
-    unless (numBlocks >= minInodeBlocks) $
-      fail "Inode: Not enough space left for minimum number of blocks."
-    blks <- filter (/= 0) `fmap` replicateM (safeToInt numBlocks) get
-    checkMagic magic4
-    let na = error $ "numAddrs has not been populated via Data.Serialize.get "
-                  ++ "for Inode; did you forget to use the " 
-                  ++ "Inode.decodeInode wrapper?"
+    c    <- get
+    checkMagic magic4    
+
     return Inode
            { inoAddress      = addr
            , inoParent       = par
-           , inoContinuation = cont
            , inoFileSize     = fsz
            , inoCreateTime   = ctm
            , inoModifyTime   = mtm
            , inoUser         = usr
            , inoGroup        = grp
-           , inoBlockCount   = blkCnt
-           , inoBlocks       = blks
-           , inoNumAddrs     = na
+           , inoCont         = c
            }
    where
     checkMagic x = do
       magic <- getBytes 8
       unless (magic == x) $ fail "Invalid Inode: magic number mismatch"
+
+instance Serialize Cont where
+  put c = do
+    unless (numBlocks <= numAddrs') $
+      fail $ "Corrupted Cont structure put: too many blocks"
+    putByteString $ cmagic1
+    put           $ address c
+    put           $ continuation c 
+    putByteString $ cmagic2
+    putWord64be   $ blockCount c
+    putByteString $ cmagic3
+    forM_ blocks put
+    replicateM_ fillBlocks $ put nilInodeRef
+
+    putByteString cmagic4
+    replicateM_ cPadSize $ putWord8 padSentinel
+    where
+      blocks     = blockAddrs c
+      numBlocks  = length blocks
+      numAddrs'  = safeToInt $ numAddrs c
+      fillBlocks = numAddrs' - numBlocks
+
+  get = do
+    checkMagic cmagic1
+    addr <- get
+    cont <- get
+    checkMagic cmagic2
+    blkCnt <- getWord64be
+    checkMagic cmagic3
+
+    -- Some calculations differ slightly based on whether or not this Cont is
+    -- embedded in an inode; in particular, the Inode writes a terminating magic
+    -- number after the end of the serialized Cont, so we must account for that
+    -- when calculating the number of blocks to read below.
+           
+    let isEmbedded = addr == nilContRef
+    numBlockBytes <- do remb <- fmap fromIntegral remaining
+                        let numTrailingBytes =
+                              if isEmbedded
+                              then 8 + fromIntegral cPadSize + 8
+                                   -- cmagic4, padding, inode's magic4, <EOS>
+                              else 8 + fromIntegral cPadSize
+                                   -- cmagic4, padding, <EOS>
+                        return (remb - numTrailingBytes)
+    let (numBlocks, check) = numBlockBytes `divMod` refSize
+    unless (check == 0) $ fail "Cont: Bad remaining byte count for block list."
+
+    unless (not isEmbedded && numBlocks >= minContBlocks ||
+            isEmbedded     && numBlocks >= minInodeBlocks) $ 
+      fail "Cont: Not enough space left for minimum number of blocks."
+
+    blks <- filter (/= 0) `fmap` replicateM (safeToInt numBlocks) get
+
+    checkMagic cmagic4
+    padding <- replicateM cPadSize $ getWord8
+    assert (all (== padSentinel) padding) $ return ()
+
+    let na = error $ "numAddrs has not been populated via Data.Serialize.get "
+                  ++ "for Cont; did you forget to use the " 
+                  ++ "Inode.decodeCont wrapper?"
+
+    return Cont
+           { address      = addr
+           , continuation = cont
+           , blockCount   = blkCnt
+           , blockAddrs   = blks
+           , numAddrs     = na
+           }
+   where
+    checkMagic x = do
+      magic <- getBytes 8
+      unless (magic == x) $ fail "Invalid Cont: magic number mismatch"
 
 -- | Size of a minimal inode structure when serialized, in bytes.  This will
 -- vary based on the space required for type t when serialized.  Note that
@@ -352,22 +356,18 @@ instance (Eq t, Ord t, Serialize t) => Serialize (Inode t) where
 minimalInodeSize :: (Monad m, Ord t, Serialize t) => t -> m Word64
 minimalInodeSize t = do
   return $ fromIntegral $ BS.length $ encode $
-    emptyInode minInodeBlocks t t nilInodeRef nilInodeRef rootUser rootGroup
-    `setBlockAddrs`
-    replicate (safeToInt minInodeBlocks) 0
+    let e = emptyInode minInodeBlocks t t nilInodeRef nilInodeRef rootUser rootGroup
+        c = inoCont e
+    in e{ inoCont = c{ blockAddrs = replicate (safeToInt minInodeBlocks) 0 } }
 
 -- | The parameter to this function is not used except for type
 -- unification with BlockCarrier t; it's safe to invoke this function
 -- like (e.g.) minimalContSize (undefined :: UTCTime)
-minimalContSize :: (Monad m, Ord t, Serialize t) => t -> m (Word64)
-minimalContSize t = aux t >>= return . fst
-  where
-    aux :: (Serialize t, Ord t, Monad m) => t -> m (Word64, BlockCarrier t)
-    aux _t = do
-      let e = emptyCont minContBlocks nilContRef
-              `setBlockAddrs`
-              replicate (safeToInt minContBlocks) 0
-      return (fromIntegral $ BS.length $ encode $ e,  e)
+minimalContSize :: Monad m => m (Word64)
+minimalContSize = return $ fromIntegral $ BS.length $ encode $
+  (emptyCont minContBlocks nilContRef) {
+    blockAddrs = replicate (safeToInt minContBlocks) 0
+  }
 
 -- | Computes the number of block addresses storable by an inode/cont
 computeNumAddrs :: Monad m => 
@@ -397,7 +397,7 @@ computeNumInodeAddrsM blkSz =
 computeNumContAddrsM :: (Serialize t, Timed t m) =>
                         Word64 -> m Word64
 computeNumContAddrsM blkSz = do
-  minSize <- minimalContSize =<< getTime
+  minSize <- minimalContSize
   computeNumAddrs blkSz minContBlocks minSize
 
 getSizes :: (Serialize t, Timed t m) =>
@@ -429,7 +429,7 @@ buildEmptyInode :: (Serialize t, Timed t m) =>
                 -> InodeRef         -- ^ Parent block's address
                 -> UserID
                 -> GroupID
-                -> m (BlockCarrier t)
+                -> m (Inode t)
 buildEmptyInode bd me mommy usr grp = do 
   now     <- getTime
   minSize <- minimalInodeSize =<< return now
@@ -444,42 +444,42 @@ emptyInode :: (Ord t, Serialize t) =>
            -> InodeRef -- ^ parent block address
            -> UserID  
            -> GroupID
-           -> BlockCarrier t
+           -> Inode t
 emptyInode nAddrs createTm modTm me mommy usr grp =
-  inodeBC Inode
+  Inode
   { inoAddress      = me
   , inoParent       = mommy
-  , inoContinuation = nilContRef
+--  , inoContinuation = nilContRef
   , inoFileSize     = 0
   , inoCreateTime   = createTm
   , inoModifyTime   = modTm
   , inoUser         = usr
   , inoGroup        = grp
-  , inoNumAddrs     = nAddrs
-  , inoBlockCount   = 0
-  , inoBlocks       = []
+  , inoCont         = emptyCont nAddrs nilContRef 
+--  , inoNumAddrs     = nAddrs
+--  , inoBlockCount   = 0
+--  , inoBlocks       = []
   }
 
 buildEmptyCont :: (Serialize t, Timed t m) =>
                   BlockDevice m -- ^ The block device
                -> ContRef       -- ^ This cont's block address
-               -> m (BlockCarrier t)
+               -> m Cont
 buildEmptyCont bd me = do
-  minSize <- minimalContSize =<< getTime
+  minSize <- minimalContSize
   nAddrs  <- computeNumAddrs (bdBlockSize bd) minContBlocks minSize
   return $ emptyCont nAddrs me
 
-emptyCont :: (Ord t, Serialize t) =>
-             Word64  -- ^ number of block addresses
+emptyCont :: Word64  -- ^ number of block addresses
           -> ContRef -- ^ block addr for this cont
-          -> BlockCarrier t
+          -> Cont
 emptyCont nAddrs me =
-  contBC Cont
-  { inocAddress      = me
-  , inocContinuation = nilContRef
-  , inocBlockCount   = 0
-  , inocBlocks       = []
-  , inocNumAddrs     = nAddrs
+  Cont
+  { address      = me
+  , continuation = nilContRef
+  , blockCount   = 0
+  , blockAddrs   = []
+  , numAddrs     = nAddrs
   }
 
 
@@ -504,7 +504,7 @@ readStream :: HalfsCapable b t r l m =>
                                               --   including entire last block)
            -> HalfsM m ByteString             -- ^ Stream contents
 readStream dev startIR start mlen = do
-  startCont <- drefInode dev startIR
+  startCont <- inoCont `fmap` drefInode dev startIR
   if 0 == blockCount startCont
    then return BS.empty
    else do 
@@ -586,7 +586,8 @@ writeStream dev bm startIR start trunc bytes       = do
   -- as needed to reduce the number of unallocation actions required, but we'll
   -- leave this as a TODO for now.
 
-  startCont <- drefInode dev startIR
+  startInode <- drefInode dev startIR
+  startCont  <- return (inoCont startInode)
 
   -- The start cont is extracted from the start inode, so it's by definition no
   -- larger (and smaller if there's any metadata) than subsequent conts.
@@ -625,8 +626,8 @@ writeStream dev bm startIR start trunc bytes       = do
       bytesToAlloc  = if alreadyAllocd > len then 0 else len - alreadyAllocd
       blksToAlloc   = bytesToAlloc `divCeil` bs
       contsToAlloc  = (blksToAlloc - availBlks (last conts)) `divCeil` apc
-      availBlks :: forall t. (Ord t, Serialize t) => BlockCarrier t -> Word64
-      availBlks n   = numAddrs n - blockCount n
+      availBlks :: Cont -> Word64
+      availBlks c   = numAddrs c - blockCount c
 
   dbug ("alreadyAllocd = " ++ show alreadyAllocd)          $ do
   dbug ("bytesToAlloc  = " ++ show bytesToAlloc)           $ do
@@ -670,22 +671,37 @@ writeStream dev bm startIR start trunc bytes       = do
   conts'' <- if trunc
               then truncUnalloc dev bm start len conts'
               else return conts'
+  assert (length conts'' > 0) $ return ()
 
   let inodesUpdated = 1 {- start cont -} + ((len - bpsc) `divCeil` bpc)
   dbug ("inodesUpdated = " ++ show inodesUpdated) $ return ()
 
-  -- Update persisted inodes from the start inode to end of write region
-  mapM_ (lift . writeBC dev) $
-    genericTake inodesUpdated $ genericDrop sContIdx conts''
+  -- Persist all updated conts from the starting Cont to the end of write
+  -- region.  NB: When sContIdx == 0, it means we're updating the first cont in
+  -- the chain, which is always embedded in the starting inode, so we
+  -- special-case that here and write the entire inode.
+       
+  -- TODO: We'll need to update inode's metadata here (E.g., new size,
+  -- timestamps, etc), Also consider locked access to the inode.  This'll mean
+  -- tweaking the code below slightly since the inode will -always- be written
+  -- in addition to the cont region.
 
-  -- TODO: Update metadata here? E.g., size, timestamps, etc?  Or should this
-  -- happen up a level?  Also consider locked access at the 'header' inode.
+  if (sContIdx == 0)
+   then do
+     case conts'' of
+       (fstCont:rest) -> do
+         lift $ writeInode dev $ startInode{ inoCont = fstCont }
+         mapM_ (lift . writeCont dev) $ genericTake (inodesUpdated - 1) rest
+       _ -> error "The impossible happened (conts list had length 0)"
+   else do
+     mapM_ (lift . writeCont dev) $
+       genericTake inodesUpdated $ genericDrop sContIdx conts''
 
   dbug ("==== writeStream end ===") $ do
   return ()
   where
-    bs           = bdBlockSize dev
-    len          = fromIntegral $ BS.length bytes
+    bs  = bdBlockSize dev
+    len = fromIntegral $ BS.length bytes
 
 
 --------------------------------------------------------------------------------
@@ -693,27 +709,27 @@ writeStream dev bm startIR start trunc bytes       = do
 
 -- | Allocate the given number of inodes and blocks, and fill blocks into the
 -- given inode chain's block lists.  Newly allocated new inodes go at the end of
--- the given inode chain, and the result is the final inode chain to write data
+-- the given inode chain, and the result is the final cont chain to write data
 -- into.
 allocFill :: HalfsCapable b t r l m => 
              BlockDevice m              -- ^ The block device
           -> BlockMap b r l             -- ^ The block map to use for allocation
-          -> (BlockCarrier t -> Word64) -- ^ Available blocks function
+          -> (Cont -> Word64)           -- ^ Available blocks function
           -> Word64                     -- ^ Number of blocks to allocate
           -> Word64                     -- ^ Number of conts to allocate
-          -> [BlockCarrier t]           -- ^ Chain to extend and fill
-          -> HalfsM m [BlockCarrier t]
+          -> [Cont]                     -- ^ Chain to extend and fill
+          -> HalfsM m [Cont]
 allocFill _   _  _     0           _            existing = return existing
 allocFill dev bm avail blksToAlloc contsToAlloc existing = do
   newConts <- allocConts 
   blks     <- allocBlocks
   return []
-  -- Fixup continuation fields and form the region that we'll fill with
-  -- the newly allocated blocks (i.e., starting at the last inode but
-  -- including the newly allocated inodes as well).
-  let (_, region) = foldr (\bc (contAddr, acc) ->
-                             ( CR $ address bc
-                             , setContinuation bc contAddr : acc
+  -- Fixup continuation fields and form the region that we'll fill with the
+  -- newly allocated blocks (i.e., starting at the last cont but including the
+  -- newly allocated inodes as well).
+  let (_, region) = foldr (\c (contAddr, acc) ->
+                             ( address c
+                             , c{ continuation = contAddr } : acc
                              )
                           )
                           (nilContRef, [])
@@ -721,18 +737,21 @@ allocFill dev bm avail blksToAlloc contsToAlloc existing = do
   -- "Spill" the allocated blocks into the empty region
   let (blks', k)                   = foldl fillBlks (blks, id) region
       newChain                     = init existing ++ k []
-      fillBlks (remBlks, k') bc =
-        let cnt    = min (safeToInt $ avail bc) (length remBlks)
-            bc'    = bc `setBlockCount`
-                       (blockCount bc + fromIntegral cnt)
-                       `setBlockAddrs`
-                       (blockAddrs bc ++ take cnt remBlks)
+      fillBlks (remBlks, k') c =
+        let cnt    = min (safeToInt $ avail c) (length remBlks)
+            c'     = c { blockCount = blockCount c + fromIntegral cnt
+                       , blockAddrs = blockAddrs c ++ take cnt remBlks
+                       }
+--                      c `setBlockCount`
+--                        (blockCount c + fromIntegral cnt)
+--                        `setBlockAddrs`
+--                        (blockAddrs c ++ take cnt remBlks)
 --             inode' =
 --               bc { inoBlockCount = inoBlockCount bc + fromIntegral cnt
 --                  , inoBlocks     = inoBlocks bc ++ take cnt remBlks
 --                  }
         in
-          (drop cnt remBlks, k' . (bc':))
+          (drop cnt remBlks, k' . (c':))
   
   assert (null blks') $ return ()
   assert (length newChain >= length existing) $ return ()
@@ -767,8 +786,8 @@ truncUnalloc :: HalfsCapable b t r l m =>
              -> Word64                    -- ^ starting stream byte index
              -> Word64                    -- ^ length from start at which to
                                           -- truncate
-             -> [BlockCarrier t]          -- ^ current chain
-             -> HalfsM m [BlockCarrier t] -- ^ truncated chain
+             -> [Cont]                    -- ^ current chain
+             -> HalfsM m [Cont]           -- ^ truncated chain
 truncUnalloc dev bm start len conts = do
   eIdx@(eContIdx, eBlkOff, _) <- decompStreamOffset (bdBlockSize dev) (start + len - 1)
   let 
@@ -780,18 +799,22 @@ truncUnalloc dev bm start len conts = do
                   -- ^ The remaining blocks in the terminator
                   ++ concatMap blockAddrs toFree
                   -- ^ The remaining blocks in rest of chain
-                  ++ map address toFree
+                  ++ map (unCR . address) toFree
                   -- ^ Block addrs for the cont blocks themselves
 
     -- trm' is the new terminator cont, adjusted to discard the newly freed
     -- blocks and clear the continuation link
-    trm' = trm
-           `setBlockAddrs`
-           (genericTake (eBlkOff + 1) (blockAddrs trm))
-           `setBlockCount`
-           (eBlkOff +1)
-           `setContinuation`
-           nilContRef
+    trm' = trm { blockCount   = eBlkOff + 1
+               , blockAddrs   = genericTake (eBlkOff + 1) (blockAddrs trm)
+               , continuation = nilContRef
+               }
+--     trm' = trm
+--            `setBlockAddrs`
+--            (genericTake (eBlkOff + 1) (blockAddrs trm))
+--            `setBlockCount`
+--            (eBlkOff +1)
+--            `setContinuation`
+--            nilContRef
   
   dbug ("eIdx        = " ++ show eIdx)        $ return ()
   dbug ("retain'     = " ++ show retain')     $ return ()
@@ -850,23 +873,22 @@ getBlockContents dev trunc (s, blkAddr:blkAddrs) = do
      return $ Just (newBlkData, (remBytes, blkAddrs))
 
 -- | Reads the contents of the given conts's ith block
-readBlock :: (Ord t, Serialize t, Monad m) =>
-                  BlockDevice m -> BlockCarrier t -> Word64 -> m ByteString
-readBlock dev n i = do 
-  assert (i < blockCount n) $ return ()
-  bdReadBlock dev (blockAddrs n !! safeToInt i)
+readBlock :: (Monad m) =>
+             BlockDevice m
+          -> Cont
+          -> Word64
+          -> m ByteString
+readBlock dev c i = do 
+  assert (i < blockCount c) $ return ()
+  bdReadBlock dev (blockAddrs c !! safeToInt i)
 
--- | Writes to the given inode's ith block
-_writeInodeBlock :: (Ord t, Serialize t, Monad m) =>
-                    BlockDevice m -> Inode t -> Word64 -> ByteString -> m ()
-_writeInodeBlock dev n i bytes = do 
-  assert (BS.length bytes == safeToInt (bdBlockSize dev)) $ return ()
-  bdWriteBlock dev (inoBlocks n !! safeToInt i) bytes
+-- Writes the given cont to its block address
+writeCont :: Monad m => BlockDevice m -> Cont -> m ()
+writeCont dev c = bdWriteBlock dev (unCR $ address c) (encode c)
 
--- Writes the given bc to its block address
-writeBC :: (Ord t, Serialize t, Monad m, Show t) =>
-              BlockDevice m -> BlockCarrier t -> m ()
-writeBC dev bc = bdWriteBlock dev (address bc) (encode bc) 
+writeInode :: (Monad m, Ord t, Serialize t) =>
+              BlockDevice m -> Inode t -> m ()
+writeInode dev n = bdWriteBlock dev (unIR $ inoAddress n) (encode n)
 
 -- | Expands the given inode into an inode list containing itself followed by
 -- all of its continuation inodes
@@ -877,10 +899,10 @@ writeBC dev bc = bdWriteBlock dev (address bc) (encode bc)
 -- stream from the start to end offsets would be sufficient.
 
 expandConts :: HalfsCapable b t r l m =>
-               BlockDevice m -> BlockCarrier t -> HalfsM m [BlockCarrier t]
-expandConts dev bc@BC{ continuation = cr }
-  | cr == nilContRef = return [bc]
-  | otherwise        = (bc:) `fmap` (drefCont dev cr >>= expandConts dev)
+               BlockDevice m -> Cont -> HalfsM m [Cont]
+expandConts dev start@Cont{ continuation = cr }
+  | cr == nilContRef = return [start]
+  | otherwise        = (start:) `fmap` (drefCont dev cr >>= expandConts dev)
 
 -- expandConts :: HalfsCapable b t r l m =>
 --                BlockDevice m -> Inode t -> HalfsM m [Inode t]
@@ -889,16 +911,14 @@ expandConts dev bc@BC{ continuation = cr }
 --   (inode:) `fmap` (drefInode dev nextRef >>= expandConts dev)
 
 drefCont :: HalfsCapable b t r l m =>
-        BlockDevice m -> ContRef -> HalfsM m (BlockCarrier t)
+            BlockDevice m -> ContRef -> HalfsM m Cont
 drefCont dev (CR addr) =
-  lift (bdReadBlock dev addr) >>= decodeBC (bdBlockSize dev)
---    >>= decodeCont (bdBlockSize dev) >>= return . contBC
+  lift (bdReadBlock dev addr) >>= decodeCont (bdBlockSize dev)
 
 drefInode :: HalfsCapable b t r l m => 
-             BlockDevice m -> InodeRef -> HalfsM m (BlockCarrier t)
+             BlockDevice m -> InodeRef -> HalfsM m (Inode t)
 drefInode dev (IR addr) = do 
-  lift (bdReadBlock dev addr) >>= decodeBC (bdBlockSize dev) 
---    >>= decodeInode (bdBlockSize dev) >>= return . inodeBC
+  lift (bdReadBlock dev addr) >>= decodeInode (bdBlockSize dev) 
 
 {-
 testDecomp :: (Serialize t, Timed t m, Monad m) =>
@@ -930,7 +950,7 @@ decompStreamOffset blkSz streamOff = do
 getStreamIdx :: HalfsCapable b t r l m =>
                 Word64 -- block size in bytse
              -> Word64 -- start byte index
-             -> [BlockCarrier t]
+             -> [Cont] -- data stream
              -> HalfsM m StreamIdx
 getStreamIdx blkSz start conts  = do
   sIdx <- decompStreamOffset blkSz start
@@ -974,7 +994,7 @@ decodeInode blkSz bs = do
   numAddrs' <- computeNumInodeAddrsM blkSz
   case decode bs of
     Left s  -> throwError $ HalfsDecodeFail_Inode s
-    Right n -> return n{ inoNumAddrs = numAddrs' }
+    Right n -> return n{ inoCont = (inoCont n){ numAddrs = numAddrs' } }
 
 decodeCont :: HalfsCapable b t r l m =>
               Word64
@@ -984,20 +1004,7 @@ decodeCont blkSz bs = do
   numAddrs' <- computeNumContAddrsM blkSz
   case decode bs of
     Left s  -> throwError $ HalfsDecodeFail_Cont s
-    Right c -> return c{ inocNumAddrs = numAddrs' }
-
-decodeBC :: HalfsCapable b t r l m =>
-            Word64
-         -> ByteString
-         -> HalfsM m (BlockCarrier t)
-decodeBC blkSz bs = do
-  case decode bs of
-    Left    s -> throwError $ HalfsDecodeFail_BlockCarrier s
-    Right eic -> case eic of
-      Left n  -> do numAddrs' <- computeNumInodeAddrsM blkSz
-                    return $ inodeBC $ n{ inoNumAddrs = numAddrs' }
-      Right c -> do numAddrs' <- computeNumContAddrsM  blkSz
-                    return $ contBC $ c{ inocNumAddrs = numAddrs' }
+    Right c -> return c{ numAddrs = numAddrs' }
 
 -- "Safe" (i.e., emits runtime assertions on overflow) versions of
 -- BS.{take,drop,replicate}.  We want the efficiency of these functions without
@@ -1051,7 +1058,7 @@ magicContStr = "!!erutcurts tnoC sflah a si sihT"
 
 magicContBytes :: [Word8]
 magicContBytes = assert (length magicContStr == 32) $
-                 map (fromIntegral . ord) magicStr
+                 map (fromIntegral . ord) magicContStr
 
 cmagic1, cmagic2, cmagic3, cmagic4 :: ByteString
 cmagic1 = BS.pack $ take 8 $ drop  0 magicContBytes
