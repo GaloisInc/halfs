@@ -26,22 +26,29 @@ instance Serialize (Ref a) where
   put (Ref x) = putWord64be x
   get         = Ref `fmap` getWord64be
 
--- We store Inode reference as simple Word64, newtype'd in case we either decide
--- to do something more fancy or just to make the types a bit more clear.
+-- We store Inode/Cont references as simple Word64s, newtype'd in case
+-- we either decide to do something more fancy or just to make the types
+-- a bit more clear.
 --
--- At this point, we assume an Inode reference is equal to its block address,
--- and we fix Inode references as Word64s. Note that if you change the
--- underlying field size of an InodeRef, you *really* (!)  need to change
--- 'inodeRefSize', below.
+-- At this point, we assume a reference is equal to its block address,
+-- and we fix references as Word64s. Note that if you change the
+-- underlying field size of an InodeRef/ContRef, you *really* (!)  need
+-- to change 'refSize', below.
 --
--- TODO: update above comments to describe Cont
 
 newtype InodeRef = IR { unIR :: Word64 }
   deriving (Eq, Ord, Num, Show, Integral, Enum, Real)
 
+newtype ContRef = CR { unCR :: Word64 }
+  deriving (Eq, Show)
+
 instance Serialize InodeRef where
   put (IR x) = putWord64be x
   get        = IR `fmap` getWord64be
+
+instance Serialize ContRef where
+  put (CR x) = putWord64be x
+  get        = CR `fmap` getWord64be
 
 -- | The size of an Inode/Cont reference in bytes
 refSize :: Word64

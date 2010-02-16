@@ -19,10 +19,11 @@ import Test.QuickCheck
 import Test.QuickCheck.Monadic hiding (assert)
 
 import Halfs.BlockMap            (Extent(..))
-import Halfs.Inode               ( Inode(..)
-                                 , InodeRef(..)
-                                 , Cont(..)
+
+import Halfs.Inode               ( Cont(..)
                                  , ContRef(..)
+                                 , Inode(..)
+                                 , InodeRef(..)
                                  , computeNumAddrs
                                  , minimalContSize
                                  , minimalInodeSize
