@@ -161,10 +161,8 @@ propM_lengthWR _g dev = do
       forAllM (arbitrary :: Gen Bool) $ \b -> do
       blksPerCarrier <- run $
         if b then computeNumInodeAddrsM blkSz else computeNumContAddrsM  blkSz
---      trace ("blksPerCarrier = " ++ show blksPerCarrier) $ do
       let minReadLen = min dataSz (fromIntegral $ blksPerCarrier * blkSz + 1)
 
---      trace ("minReadLen = " ++ show minReadLen) $ do
       forAllM (choose (minReadLen, dataSz))  $ \readLen  -> do
       forAllM (choose (0, dataSz - 1))       $ \startIdx -> do
 
@@ -185,7 +183,6 @@ withFSData dev f = do
   fs <- runH (newfs dev) >> mountOK dev
   let bm = hsBlockMap fs 
   rdirIR <- rootDir `fmap` sreadRef (hsSuperBlock fs)
---  trace ("withFSData: rdirIR = " ++ show rdirIR) $ do
   withData dev $ f bm rdirIR 
 
 newtype FillBlocks a = FillBlocks a deriving Show

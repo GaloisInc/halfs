@@ -153,75 +153,6 @@ data Cont = Cont
   }
   deriving (Show, Eq)
                
-{-
-data Cont = Cont
-  { inocAddress      :: ContRef
-  , inocContinuation :: ContRef
-  , inocBlockCount   :: Word64
-  , inocBlocks       :: [Word64]
-  , inocNumAddrs     :: Word64 -- transient
-  }
-  deriving (Show, Eq)
-
-data (Eq t, Ord t, Serialize t) => BlockCarrier t = BC
-  { bcRep           :: Either (Inode t) (Cont)
-  , address         :: Word64
-  , continuation    :: ContRef
-  , setContinuation :: ContRef -> BlockCarrier t
-  , blockCount      :: Word64
-  , setBlockCount   :: Word64 -> BlockCarrier t
-  , blockAddrs      :: [Word64]
-  , setBlockAddrs   :: [Word64] -> BlockCarrier t
-  , numAddrs        :: Word64
-  }
--}
-{-
-inodeBC :: (Eq t, Ord t, Serialize t) => Inode t -> BlockCarrier t
-inodeBC = newBC . Left
-
-contBC :: (Eq t, Ord t, Serialize t) => Cont -> BlockCarrier t
-contBC = newBC . Right
-
-newBC :: (Eq t, Ord t, Serialize t) => Either (Inode t) (Cont) -> BlockCarrier t
-newBC x@(Left ino) =
-  BC
-  { bcRep           = x
-  , address         = inodeRefToBlockAddr $ inoAddress ino
-  , continuation    = inoContinuation ino
-  , setContinuation = \mc -> inodeBC $ ino{inoContinuation = mc}
-  , blockCount      = inoBlockCount ino
-  , setBlockCount   = \bc -> inodeBC $ ino{inoBlockCount = bc}
-  , blockAddrs      = inoBlocks ino
-  , setBlockAddrs   = \xs -> inodeBC $ ino{inoBlocks = xs}
-  , numAddrs        = inoNumAddrs ino
-  }
-newBC x@(Right inoc) =
-  BC
-  { bcRep           = x
-  , address         = unCR $ inocAddress inoc
-  , continuation    = inocContinuation inoc
-  , setContinuation = \mc -> contBC $ inoc{inocContinuation = mc}
-  , blockCount      = inocBlockCount inoc
-  , setBlockCount   = \bc -> contBC $ inoc{inocBlockCount = bc}
-  , blockAddrs      = inocBlocks inoc
-  , setBlockAddrs   = \xs -> contBC $ inoc{inocBlocks = xs}
-  , numAddrs        = inocNumAddrs inoc
-  }
-
-instance (Ord t, Serialize t, Show t) => Show (BlockCarrier t) where
-  show = show . bcRep
-
-instance (Eq t, Ord t, Serialize t) => Serialize (BlockCarrier t) where
-  put bc = do
-    put (bcRep bc)
-    replicateM_ bcPadSize $ putWord8 padSentinel
-  get = do
-    bc      <- newBC `fmap` get
-    padding <- replicateM bcPadSize $ getWord8
-    assert (all (== padSentinel) padding) $ return ()
-    return bc
--}
-
 instance (Eq t, Ord t, Serialize t) => Serialize (Inode t) where
   put n = do
     putByteString magic1
@@ -360,9 +291,7 @@ minimalInodeSize t = do
         c = inoCont e
     in e{ inoCont = c{ blockAddrs = replicate (safeToInt minInodeBlocks) 0 } }
 
--- | The parameter to this function is not used except for type
--- unification with BlockCarrier t; it's safe to invoke this function
--- like (e.g.) minimalContSize (undefined :: UTCTime)
+-- | The size of a minimal Cont structure when serialized, in bytes.
 minimalContSize :: Monad m => m (Word64)
 minimalContSize = return $ fromIntegral $ BS.length $ encode $
   (emptyCont minContBlocks nilContRef) {
@@ -449,16 +378,12 @@ emptyInode nAddrs createTm modTm me mommy usr grp =
   Inode
   { inoAddress      = me
   , inoParent       = mommy
---  , inoContinuation = nilContRef
   , inoFileSize     = 0
   , inoCreateTime   = createTm
   , inoModifyTime   = modTm
   , inoUser         = usr
   , inoGroup        = grp
   , inoCont         = emptyCont nAddrs nilContRef 
---  , inoNumAddrs     = nAddrs
---  , inoBlockCount   = 0
---  , inoBlocks       = []
   }
 
 buildEmptyCont :: (Serialize t, Timed t m) =>
@@ -592,27 +517,14 @@ writeStream dev bm startIR start trunc bytes       = do
   -- The start cont is extracted from the start inode, so it's by definition no
   -- larger (and smaller if there's any metadata) than subsequent conts.
   (bpsc, bpc, _, apc) <- getSizes bs
---   apsc <- computeNumInodeAddrsM bs  -- (block) addrs in start cont (inode)
---   bpsc <- return $ bs * apsc        -- bytes storable in start cont (inode)
---   apc  <- computeNumContAddrsM bs   -- (block) addrs per next conts
---   bpc  <- return $ bs * apc         -- bytes per next conts
---   assert (apsc <= apc && apsc == numAddrs startCont) $ return ()
---  api        <- computeNumInodeAddrsM bs -- (block) addrs per inode
---  bpi        <- return $ bs * api        -- bytes per inode
-
---  trace ("apsc = " ++ show apsc ++ ", bpsc = " ++ show bpsc ++ ", apc = " ++ show apc ++ ", bpc = " ++ show bpc) $ do
 
   -- NB: expandConts is probably not viable once cont chains get large, but the
   -- continuation scheme in general may not be viable.  Revisit after stuff is
   -- working.
   conts                         <- expandConts dev startCont
   (sContIdx, sBlkOff, sByteOff) <- getStreamIdx bs start conts
-  --sIdx@(sContIdx, sBlkOff, sByteOff) <- decompStreamOffset bs start 
---  checkStreamBounds sIdx start conts
 
   dbug ("==== writeStream begin ===") $ do
---  dbug ("addrs per start cont      = " ++ show apsc)                           $ do
---  dbug ("addrs per cont            = " ++ show apc)                            $ do
   dbug ("inodeIdx, blkIdx, byteIdx = " ++ show (sContIdx, sBlkOff, sByteOff)) $ do
   dbug ("conts                     = " ++ show conts)                          $ do
 
@@ -742,14 +654,6 @@ allocFill dev bm avail blksToAlloc contsToAlloc existing = do
             c'     = c { blockCount = blockCount c + fromIntegral cnt
                        , blockAddrs = blockAddrs c ++ take cnt remBlks
                        }
---                      c `setBlockCount`
---                        (blockCount c + fromIntegral cnt)
---                        `setBlockAddrs`
---                        (blockAddrs c ++ take cnt remBlks)
---             inode' =
---               bc { inoBlockCount = inoBlockCount bc + fromIntegral cnt
---                  , inoBlocks     = inoBlocks bc ++ take cnt remBlks
---                  }
         in
           (drop cnt remBlks, k' . (c':))
   
@@ -808,13 +712,6 @@ truncUnalloc dev bm start len conts = do
                , blockAddrs   = genericTake (eBlkOff + 1) (blockAddrs trm)
                , continuation = nilContRef
                }
---     trm' = trm
---            `setBlockAddrs`
---            (genericTake (eBlkOff + 1) (blockAddrs trm))
---            `setBlockCount`
---            (eBlkOff +1)
---            `setContinuation`
---            nilContRef
   
   dbug ("eIdx        = " ++ show eIdx)        $ return ()
   dbug ("retain'     = " ++ show retain')     $ return ()
@@ -828,18 +725,9 @@ truncUnalloc dev bm start len conts = do
     
   lift $ BM.unallocBlocks bm $ BM.Discontig $ map (`BM.Extent` 1) allFreeBlks
     
-  -- We do not do any writes to any of the conts that were detached from the
+  -- NB: We do not do any writes to any of the conts that were detached from the
   -- chain & freed; this may have implications for fsck!
   return retain'
---       term { continuation = Nothing
---            , blockCount   = eBlkOff + 1
---            , blockAddrs   = genericTake (eBlkOff + 1) (blockAddrs term)
---            }
---       term { inoContinuation = Nothing
---            , inoBlockCount   = eBlkOff + 1
---            , inoBlocks       = genericTake (eBlkOff + 1) $ inoBlocks term
---            }
-    
 
 -- | Splits the input bytestring into block-sized chunks; may read from the
 -- block device in order to preserve contents of blocks if needed.
@@ -883,7 +771,8 @@ readBlock dev c i = do
   bdReadBlock dev (blockAddrs c !! safeToInt i)
 
 -- Writes the given cont to its block address
-writeCont :: Monad m => BlockDevice m -> Cont -> m ()
+writeCont :: Monad m =>
+             BlockDevice m -> Cont -> m ()
 writeCont dev c = bdWriteBlock dev (unCR $ address c) (encode c)
 
 writeInode :: (Monad m, Ord t, Serialize t) =>
@@ -904,12 +793,6 @@ expandConts dev start@Cont{ continuation = cr }
   | cr == nilContRef = return [start]
   | otherwise        = (start:) `fmap` (drefCont dev cr >>= expandConts dev)
 
--- expandConts :: HalfsCapable b t r l m =>
---                BlockDevice m -> Inode t -> HalfsM m [Inode t]
--- expandConts _   inode@Inode{ inoContinuation = Nothing      } = return [inode]
--- expandConts dev inode@Inode{ inoContinuation = Just nextRef } = 
---   (inode:) `fmap` (drefInode dev nextRef >>= expandConts dev)
-
 drefCont :: HalfsCapable b t r l m =>
             BlockDevice m -> ContRef -> HalfsM m Cont
 drefCont dev (CR addr) =
@@ -919,14 +802,6 @@ drefInode :: HalfsCapable b t r l m =>
              BlockDevice m -> InodeRef -> HalfsM m (Inode t)
 drefInode dev (IR addr) = do 
   lift (bdReadBlock dev addr) >>= decodeInode (bdBlockSize dev) 
-
-{-
-testDecomp :: (Serialize t, Timed t m, Monad m) =>
-              Word64 -> HalfsT m StreamIdx
-testDecomp start = do
-  conts <- (:[]) `fmap` buildEmptyInode BlockDevice{ bdBlockSize = 512 } nilInodeRef nilInodeRef rootUser rootGroup
-  decompStreamOffset 512 start 
--}
 
 -- | Decompose the given absolute byte offset into an inode's data stream into
 -- BlockCarrier index (i.e., 0-based index inot the carrier chain), block offset
@@ -965,24 +840,6 @@ getStreamIdx blkSz start conts  = do
       in
         sBlkOff >= blkCnt && not (sBlkOff == 0 && blkCnt == 0)
 
-{-
--- | Adds a byte offset to a (cont index, block index, byte index) triple
-addOffset :: (Monad m, Timed t m, Serialize t) =>
-             Word64                     -- block size in bytes
-          -> Word64                     -- byte offset
-          -> (Word64, Word64, Word64)   -- start index
-          -> m (Word64, Word64, Word64) -- offset index
-addOffset blkSz offset (contIdx, blkIdx, byteIdx) =
-  getSizes blkSz >>= return . calc
-  where
-    calc (stContBytes, contBytes) =
-      (contIdx + contOff + inds, blks', b)
-    (contOff, contByteOff) = offset `divMod` (blksPerInode * blkSz)
-    (blkOff, byteOff)        = contByteOff `divMod` blkSz
-    (blks, b)                = (byteIdx + byteOff) `divMod` blkSz
-    (inds, blks')            = (blkIdx + blkOff + blks) `divMod` blksPerInode
--}
-    
 -- | A wrapper around Data.Serialize.decode that populates transient fields.  We
 -- do this to avoid occupying valuable on-disk inode space where possible.  Bare
 -- applications of 'decode' should not occur when deserializing inodes.
