@@ -34,15 +34,22 @@ createFile :: HalfsCapable b t r l m =>
            -> GroupID
            -> FileMode
            -> HalfsM m InodeRef
-createFile fs parentDH fname u g mode = do
+createFile fs parentDH fname usr grp mode = do
   mfileIR <- (fmap . fmap) blockAddrToInodeRef $ lift $ alloc1 (hsBlockMap fs)
   case mfileIR of
     Nothing      -> throwError HalfsAllocFailed
     Just fileIR -> do
       let dev = hsBlockDev fs
-      n <- lift $ buildEmptyInodeEnc dev fileIR (dhInode parentDH) u g
+      n <- lift $ buildEmptyInodeEnc
+                    dev
+                    RegularFile
+                    mode
+                    fileIR
+                    (dhInode parentDH)
+                    usr
+                    grp
       lift $ bdWriteBlock dev (inodeRefToBlockAddr fileIR) n 
-      addDirEnt parentDH fname fileIR u g mode RegularFile
+      addDirEnt parentDH fname fileIR usr grp mode RegularFile
       return $ fileIR
 
 openFilePrim :: Monad m => InodeRef -> HalfsM m FileHandle

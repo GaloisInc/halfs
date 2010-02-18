@@ -167,15 +167,15 @@ permute xs = do
 instance Arbitrary UnallocDecision where
   arbitrary = UnallocDecision `fmap` arbitrary
 
-instance Arbitrary BDGeom where
-  arbitrary = 
-    BDGeom
-    <$> powTwo 10 13   -- 1024..8192 sectors
-    <*> powTwo  9 12   -- 512b..4K sector size
-                       -- => 512K .. 32M filesystem siz
-
 -- instance Arbitrary BDGeom where
---   arbitrary = return $ BDGeom 512 512
+--   arbitrary = 
+--     BDGeom
+--     <$> powTwo 10 13   -- 1024..8192 sectors
+--     <*> powTwo  9 12   -- 512b..4K sector size
+--                        -- => 512K .. 32M filesystem siz
+
+instance Arbitrary BDGeom where
+  arbitrary = return $ BDGeom 512 512
 
 -- Generate an arbitrary version 1 superblock with coherent free and
 -- used block counts.  Block size and count are constrained by the
@@ -195,8 +195,9 @@ instance Arbitrary SuperBlock where
       <*> IR `fmap` arbitrary  -- rootDir                     
       <*> IR `fmap` return 1   -- blockMapStart
 
--- Generate an arbitrary inode with coherent fields based on the minimal inode
--- size computation for an arbitrary device geometry
+-- Generate an arbitrary inode with mostly coherent fields (filesize/allocated
+-- block relationships are not cogent, however) based on the minimal inode size
+-- computation for an arbitrary device geometry.
 instance (Arbitrary a, Ord a, Serialize a) => Arbitrary (Inode a) where
   arbitrary = do
     BDGeom _ blkSz <- arbitrary
@@ -204,14 +205,19 @@ instance (Arbitrary a, Ord a, Serialize a) => Arbitrary (Inode a) where
     addrCnt        <- computeNumAddrs blkSz minInodeBlocks
                         =<< minimalInodeSize createTm
     Inode
-      <$> IR `fmap` arbitrary                        -- inoAddress
-      <*> IR `fmap` arbitrary                        -- inoParent
-      <*> arbitrary                                  -- inoFileSize
-      <*> return createTm                            -- inoCreateTime
-      <*> arbitrary `suchThat` (>= createTm)         -- inoModifyTime
-      <*> UID `fmap` arbitrary                       -- inoUser
-      <*> GID `fmap` arbitrary                       -- inoGroup
-      <*> (arbitrary >>= \cont -> do
+      <$> IR `fmap` arbitrary                -- inoParent
+      <*> IR `fmap` arbitrary                -- inoAddress
+      <*> arbitrary                          -- inoFileSize
+      <*> arbitrary                          -- inoAllocBlocks
+      <*> arbitrary                          -- inoFileType
+      <*> arbitrary                          -- inoMode
+      <*> arbitrary                          -- inoNumLinks
+      <*> return createTm                    -- inoCreateTime
+      <*> arbitrary `suchThat` (>= createTm) -- inoModifyTime
+      <*> arbitrary `suchThat` (>= createTm) -- inoAccessTime
+      <*> UID `fmap` arbitrary               -- inoUser
+      <*> GID `fmap` arbitrary               -- inoGroup
+      <*> (arbitrary >>= \cont -> do         -- inoCont
              let blockCount' = min (blockCount cont) addrCnt
              return
                cont{ address    = nilContRef
@@ -225,7 +231,6 @@ instance (Arbitrary a, Ord a, Serialize a) => Arbitrary (Inode a) where
 -- Generate an arbitrary inode 'continuation' (a Cont) with coherent
 -- fields based on the minimal cont size computaton for an arbitrary
 -- device geometry
-
 instance Arbitrary Cont where
   arbitrary = do
     BDGeom _ blkSz <- arbitrary
@@ -264,6 +269,9 @@ instance Arbitrary FileMode where
                              , [Write,Execute]
                              , [Read,Write,Execute]
                              ]
+
+instance Arbitrary FileType where
+  arbitrary = elements [ RegularFile, Directory, Symlink ]
 
 instance Arbitrary UTCTime where
   arbitrary = UTCTime <$> arbitrary <*> arbitrary

@@ -26,7 +26,7 @@ import Tests.Instances           (printableBytes)
 import Tests.Types
 import Tests.Utils
 
--- import Debug.Trace
+import Debug.Trace
 
 
 --------------------------------------------------------------------------------
@@ -34,14 +34,17 @@ import Tests.Utils
 
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
-  [ -- Inode stream write/read/(over)write/read property
-    exec 10 "Simple WRWR" propM_basicWRWR
-  ,
-    -- Inode stream write/read/(truncating)write/read property
-    exec 10 "Truncating WRWR" propM_truncWRWR
-  ,
-    -- Inode length-specific stream write/read
-    exec 10 "Length-specific WR" propM_lengthWR
+  [ -- Inode module invariants
+--     exec 10 "Inode module invariants" propM_inodeModuleInvs
+--   ,
+    -- Inode stream write/read/(over)write/read property
+    exec 10 "Basic WRWR" propM_basicWRWR
+--   ,
+--     -- Inode stream write/read/(truncating)write/read property
+--     exec 10 "Truncating WRWR" propM_truncWRWR
+--   ,
+--     -- Inode length-specific stream write/read
+--     exec 10 "Length-specific WR" propM_lengthWR
   ]
   where
     exec = mkMemDevExec quick "Inode"
@@ -50,13 +53,25 @@ qcProps quick =
 --------------------------------------------------------------------------------
 -- Property Implementations
 
+-- | Tests Inode module invariants
+propM_inodeModuleInvs :: HalfsCapable b t r l m =>
+                         BDGeom
+                      -> BlockDevice m
+                      -> PropertyM m ()
+propM_inodeModuleInvs _g _dev = do
+  -- Check geometry and padding invariants
+  minInodeSz <- runH $ minimalInodeSize =<< getTime
+  minContSz  <- runH $ minimalContSize
+  assert (minInodeSz == minContSz)
+
 -- | Tests basic write/reads & overwrites
 propM_basicWRWR :: HalfsCapable b t r l m =>
                    BDGeom
                 -> BlockDevice m
                 -> PropertyM m ()
 propM_basicWRWR _g dev = do
-  withFSData dev $ \bm rdirIR dataSz testData -> do 
+  withFSData dev $ \fs rdirIR dataSz testData -> do
+  let bm = hsBlockMap fs                         
 
   -- Expected error: attempted write past end of (empty) stream
   e0 <- runH $ writeStream dev bm rdirIR (bdBlockSize dev) False testData
@@ -78,6 +93,8 @@ propM_basicWRWR _g dev = do
   case e1 of
     Left  e -> fail $ "writeStream failure in propM_basicWRWR: " ++ show e
     Right _ -> do
+--      checkInodeMetadata fs rdirIR dataSz
+      -- Check readback
       ebs <- runH $ readStream dev rdirIR 0 Nothing
       case ebs of
         Left e -> fail $ "readStream failure in propM_basicWRWR: " ++ show e
@@ -95,6 +112,14 @@ propM_basicWRWR _g dev = do
   case e2 of
     Left  e -> fail $ "writeStream failure in propM_basicWRWR: " ++ show e
     Right _ -> do
+      -- Check inode metadata
+
+      -- HERE: File size reporting doesn't seem to be working properly
+      --       for overwrites (nothing allocated, nothing truncated ->
+      --       filesize should probably be propagated).
+
+      checkInodeMetadata fs rdirIR dataSz
+      -- Check readback      
       ebs <- runH $ readStream dev rdirIR 0 Nothing
       case ebs of
         Left e   -> fail $ "readStream failure in propM_basicWRWR: " ++ show e
@@ -107,13 +132,28 @@ propM_basicWRWR _g dev = do
                          bsDrop (startByte + overwriteSz) testData
           assert (readBack == expected)
 
+checkInodeMetadata :: (HalfsCapable b t r l m, Integral a) =>
+                      HalfsState b r l m
+                   -> InodeRef
+                   -> a -- expected filesize
+                   -> PropertyM m ()
+checkInodeMetadata fs inr expFileSz = do
+  est <- runH $ fileStat fs inr
+  case est of
+    Left e   -> fail $ "Failed to obtain primitive fileStat data: " ++ show e
+    Right st -> do
+      -- HERE2
+      trace ("fsSize st = " ++ show (fsSize st) ++ ", expFileSz = " ++ show expFileSz) $ do
+      assert $ fsSize st == fromIntegral expFileSz
+
 -- | Tests truncate writes and read-backs of random size
 propM_truncWRWR :: HalfsCapable b t r l m =>
                    BDGeom
                 -> BlockDevice m
                 -> PropertyM m ()
 propM_truncWRWR _g dev = do
-  withFSData dev $ \bm rdirIR dataSz testData -> do 
+  withFSData dev $ \fs rdirIR dataSz testData -> do
+  let bm = hsBlockMap fs                         
   -- Non-truncating write
   e1 <- runH $ writeStream dev bm rdirIR 0 False testData
   case e1 of
@@ -149,8 +189,9 @@ propM_lengthWR :: HalfsCapable b t r l m =>
                -> BlockDevice m
                -> PropertyM m ()
 propM_lengthWR _g dev = do
-  withFSData dev $ \bm rdirIR dataSz testData -> do 
-  let blkSz = bdBlockSize dev                        
+  withFSData dev $ \fs rdirIR dataSz testData -> do 
+  let blkSz = bdBlockSize dev
+      bm    = hsBlockMap fs
   e1 <- runH $ writeStream dev bm rdirIR 0 False testData
   case e1 of
     Left e  -> fail $ "writeStream failure in propM_lengthWR: " ++ show e
@@ -177,13 +218,12 @@ propM_lengthWR _g dev = do
 
 withFSData :: HalfsCapable b t r l m =>
               BlockDevice m
-           -> (BlockMap b r l -> InodeRef -> Int -> ByteString -> PropertyM m ())
+           -> (HalfsState b r l m -> InodeRef -> Int -> ByteString -> PropertyM m ())
            -> PropertyM m ()
 withFSData dev f = do
   fs <- runH (newfs dev) >> mountOK dev
-  let bm = hsBlockMap fs 
   rdirIR <- rootDir `fmap` sreadRef (hsSuperBlock fs)
-  withData dev $ f bm rdirIR 
+  withData dev $ f fs rdirIR 
 
 newtype FillBlocks a = FillBlocks a deriving Show
 newtype SpillCnt a   = SpillCnt a deriving Show

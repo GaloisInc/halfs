@@ -19,10 +19,10 @@ data HalfsError =
   | HalfsDecodeFail_BlockCarrier String
   | HalfsTestFailed String
   | HalfsInternalError String
-  deriving Show
+  deriving (Eq, Show)
 
 data RsnHalfsMountFail = 
     BadSuperBlock String
   | DirtyUnmount
-  deriving Show
+  deriving (Eq, Show)
            

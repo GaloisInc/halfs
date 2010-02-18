@@ -52,7 +52,7 @@ makeDirectory :: HalfsCapable b t r l m =>
               -> String             -- ^ directory name
               -> UserID             -- ^ user id for created directory
               -> GroupID            -- ^ group id for created directory
-              -> FileMode           -- ^ initial filemode
+              -> FileMode           -- ^ initial perms for new directory
               -> HalfsM m InodeRef  -- ^ on success, the inode ref to the
                                     --   created directory
 makeDirectory fs parentIR dname user group perms = 
@@ -68,7 +68,14 @@ makeDirectory fs parentIR dname user group perms =
        Nothing     -> throwError HalfsAllocFailed
        Just thisIR -> do
          -- Build the directory inode and persist it
-         bstr <- lift $ buildEmptyInodeEnc dev thisIR parentIR user group
+         bstr <- lift $ buildEmptyInodeEnc
+                          dev
+                          Directory
+                          perms
+                          thisIR
+                          parentIR
+                          user
+                          group
          assert (BS.length bstr == fromIntegral (bdBlockSize dev)) $ return ()
          lift $ bdWriteBlock dev (inodeRefToBlockAddr thisIR) bstr
        
@@ -144,7 +151,6 @@ closeDirectory fs dh = do
   
 -- | Add a directory entry for a file, directory, or symlink; expects
 -- that the item does not already exist in the directory.  Thread-safe.
-
 addDirEnt :: HalfsCapable b t r l m =>
            DirHandle r l
         -> String
@@ -232,6 +238,7 @@ withDirectory fs ir = hbracket (openDirectory fs ir)
                                (closeDirectory fs)
 
 isFileType :: DirectoryEntry -> FileType -> Bool
+isFileType _ AnyFileType              = True
 isFileType (DirEnt { deType = t }) ft = t == ft
 
 _showDH :: HalfsCapable b t r l m => DirHandle r l -> HalfsM m String

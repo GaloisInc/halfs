@@ -91,22 +91,22 @@ data FileMode = FileMode {
   }
   deriving (Show)
 
-data FileType = RegularFile | Directory | Symlink
+data FileType = RegularFile | Directory | Symlink | AnyFileType
   deriving (Show, Eq)
 
-data FileStat t = FileStat {
+data Show t => FileStat t = FileStat {
     fsInode      :: InodeRef
   , fsType       :: FileType
-  , fsMode       :: FileMode
-  , fsNumLinks   :: Word64
+  , fsMode       :: FileMode 
+  , fsNumLinks   :: Word64   -- ^ number of hardlinks to the file
   , fsUID        :: UserID
   , fsGID        :: GroupID
-  , fsSize       :: Word64
-  , fsNumBlocks  :: Word64
-  , fsAccessTime :: t -- Time of last access
-  , fsModTime    :: t -- Time of last data modification
-  , fsChangeTime :: t -- Time of last status change
-  }
+  , fsSize       :: Word64   -- ^ file size, in bytes
+  , fsNumBlocks  :: Word64   -- ^ Number of blocks allocated
+  , fsAccessTime :: t        -- ^ Time of last access
+  , fsModTime    :: t        -- ^ Time of last data modification
+--  , fsChangeTime :: t -- Time of last status change
+  } deriving Show
 
 
 --------------------------------------------------------------------------------
@@ -126,6 +126,7 @@ instance Serialize FileType where
   put RegularFile = putWord8 0x0
   put Directory   = putWord8 0x1
   put Symlink     = putWord8 0x2
+  put _           = fail "Invalid FileType during serialize"
   --
   get =
     getWord8 >>= \x -> case x of

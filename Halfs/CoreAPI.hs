@@ -68,7 +68,15 @@ newfs dev = do
 
   let rdirInode = blockAddrToInodeRef rdirAddr
   dirInode <- lift $
-              buildEmptyInodeEnc dev rdirInode nilInodeRef rootUser rootGroup
+    buildEmptyInodeEnc 
+      dev
+      Directory
+      (FileMode [Read,Write,Execute] [] [])
+      -- ^ TODO: Should we have the caller provide root dir perms?
+      rdirInode
+      nilInodeRef
+      rootUser
+      rootGroup
   assert (BS.length dirInode == fromIntegral (bdBlockSize dev)) $ do
   lift $ bdWriteBlock dev rdirAddr dirInode
 
@@ -341,7 +349,7 @@ readSymLink = undefined
 
 fstat :: (HalfsCapable b t r l m) =>
          HalfsState b r l m -> FilePath -> HalfsM m (FileStat t)
-fstat = undefined
+fstat fs fp = absPathIR fs fp AnyFileType >>= fileStat fs
 
 fsstat :: (HalfsCapable b t r l m) =>
           HalfsState b r l m -> HalfsM m FileSystemStats

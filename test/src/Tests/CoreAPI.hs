@@ -30,6 +30,8 @@ import Tests.Instances (printableBytes, filename)
 import Tests.Types
 import Tests.Utils
 
+import Debug.Trace
+
 
 --------------------------------------------------------------------------------
 -- CoreAPI properties
@@ -45,13 +47,14 @@ type HalfsProp =
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [
-     exec 10 "Init and mount"         propM_initAndMountOK
-   , exec 10 "Mount/unmount"          propM_mountUnmountOK
-   , exec 10 "Unmount mutex"          propM_unmountMutexOK
-   , exec 10 "Directory construction" propM_dirConstructionOK
-   , exec 10 "Simple file creation"   propM_fileCreationOK
-   , exec 10 "File WR"                propM_fileWR
-   , exec 50 "Directory mutex"        propM_dirMutexOK
+--      exec 10 "Init and mount"         propM_initAndMountOK
+--    , exec 10 "Mount/unmount"          propM_mountUnmountOK
+--    , exec 10 "Unmount mutex"          propM_unmountMutexOK
+--    , exec 10 "Directory construction" propM_dirConstructionOK
+--    , exec 10 "Simple file creation"   propM_fileCreationOK
+--    ,
+   exec 10 "File WR"                propM_fileWR
+--   , exec 50 "Directory mutex"        propM_dirMutexOK
   ]
   where
     exec = mkMemDevExec quick "CoreAPI"
@@ -202,7 +205,7 @@ propM_fileCreationOK _g dev = do
   where
     exec = execE "propM_fileCreationOK"
 
--- | Ensure that smile write/readback works for a new file in a new
+-- | Ensure that simple write/readback works for a new file in a new
 -- filesystem
 propM_fileWR :: HalfsProp
 propM_fileWR _g dev = do
@@ -214,6 +217,12 @@ propM_fileWR _g dev = do
   forAllM (printableBytes fileSz)              $ \fileData        -> do 
 
   exec "bytes -> /myfile" $ runHalfs $ write fs fh 0 fileData
+
+  -- Check that fstat reports what we expect
+  st <- exec "fstat /myfile" $ runHalfs $ fstat fs "/myfile"
+  assert $ fsSize st == fromIntegral fileSz
+
+  -- Readback and check
   fileData' <- exec "bytes <- /myfile" $ runHalfs $ read fs fh 0 (fromIntegral fileSz)
   assert $ fileData == fileData'
 

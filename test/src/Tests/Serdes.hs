@@ -35,7 +35,6 @@ qcProps quick =
   [ serdes prop_serdes 100 "SuperBlock"     (arbitrary :: Gen SuperBlock)
   , serdes prop_serdes 100 "UTCTime"        (arbitrary :: Gen UTCTime) 
   , serdes prop_serdes 100 "DirectoryEntry" (arbitrary :: Gen DirectoryEntry)
-  --
   , mkMemDevExec quick "Serdes" 100 "Cont"  propM_contSerdes
   , mkMemDevExec quick "Serdes" 100 "Inode" propM_inodeSerdes
   ]

@@ -4,6 +4,7 @@ module Halfs.Inode
     InodeRef(..)
   , blockAddrToInodeRef
   , buildEmptyInodeEnc
+  , fileStat
   , inodeKey
   , inodeRefToBlockAddr
   , nilInodeRef
@@ -44,6 +45,7 @@ import Halfs.BlockMap (BlockMap)
 import qualified Halfs.BlockMap as BM
 import Halfs.Classes
 import Halfs.Errors
+import Halfs.HalfsState
 import Halfs.Protection
 import Halfs.Monad
 import Halfs.Types
@@ -100,39 +102,57 @@ truncSentinel = 0xBA
 padSentinel :: Word8
 padSentinel = 0xAD
 
--- | The size of the padding region at the end of Conts, if any
+-- We semi-arbitrarily state that an Inode must be capable of maintaining a
+-- minimum of 39 block addresses in its embedded Cont while the Cont must be
+-- capable of maintaining 57 block addresses.  These values, together with
+-- specific padding values for inodes and conts (4 and 0, respectively), give us
+-- a minimum inode AND cont size of 512 bytes each (in the IO monad variant,
+-- which uses the our Serialize instance for the UTCTime when writing the time
+-- fields).
+--
+-- These can be adjusted as needed according to inode metadata sizes, but be
+-- sure to ensure that (minimalInodeSize =<< getTime) and minimalContSize yield
+-- the same value!
+
+-- | The size, in bytes, of the padding region at the end of Inodes
+iPadSize :: Int
+iPadSize = 4
+
+-- | The size, in bytes, of the padding region at the end of Conts
 cPadSize :: Int
-cPadSize = 8
+cPadSize = 0
+
+minInodeBlocks :: Word64
+minInodeBlocks = 39
+
+minContBlocks :: Word64
+minContBlocks = 57
 
 -- | The structure of an Inode. Pretty standard, except that we use the Cont
 -- structure (the first of which is embedded in the inode) to hold block
 -- references and use its continuation field to allow multiple runs of block
 -- addresses.
---
--- We semi-arbitrarily state that an Inode must be capable of maintaining a
--- minimum of 43 block addresses in its embedded Cont while the Cont must be
--- capable of maintaining 56 block addresses.  These values together give us a
--- minimum inode AND cont size of 512 bytes each (in the IO monad variant, which
--- uses the our Serialize instance for the UTCTime when writing the createTime
--- and modifyTime fields).
-
-minInodeBlocks :: Word64
-minInodeBlocks = 43
-
-minContBlocks :: Word64
-minContBlocks = 56
-
 data (Eq t, Ord t, Serialize t) => Inode t = Inode
-  { inoAddress       :: InodeRef -- ^ block addr of this inode
-  , inoParent        :: InodeRef -- ^ block addr of parent directory inode:
+  { inoParent        :: InodeRef -- ^ block addr of parent directory inode:
                                  --   This is nilInodeRef for the root
                                  --   directory inode and for inodes in the
-                                 --   continuation chain of other inodes.
+  -- begin fstat metadata
+  , inoAddress       :: InodeRef -- ^ block addr of this inode
   , inoFileSize      :: Word64
-  , inoCreateTime    :: t
-  , inoModifyTime    :: t
-  , inoUser          :: UserID
-  , inoGroup         :: GroupID
+  , inoAllocBlocks   :: Word64   -- ^ number of blocks allocated to this inode
+                                 --   (includes its own allocated block, blocks
+                                 --   allocated for Conts, and and all blocks in
+                                 --   the cont chain itself)
+  , inoFileType      :: FileType 
+  , inoMode          :: FileMode
+  , inoNumLinks      :: Word64   -- ^ number of hardlinks to this inode
+  , inoCreateTime    :: t        -- ^ time of creation
+  , inoModifyTime    :: t        -- ^ time of last data modification
+  , inoAccessTime    :: t        -- ^ time of last data access
+  , inoUser          :: UserID   -- ^ userid of inode's owner
+  , inoGroup         :: GroupID  -- ^ groupid of inode's owner
+  -- end fstat metadata
+
   , inoCont          :: Cont  
   }
   deriving (Show, Eq)
@@ -161,7 +181,17 @@ data Cont = Cont
 minimalInodeSize :: (Monad m, Ord t, Serialize t) => t -> m Word64
 minimalInodeSize t = do
   return $ fromIntegral $ BS.length $ encode $
-    let e = emptyInode minInodeBlocks t t nilInodeRef nilInodeRef rootUser rootGroup
+    let e = emptyInode
+              minInodeBlocks
+              t
+              t
+              t
+              RegularFile
+              (FileMode [] [] [])
+              nilInodeRef
+              nilInodeRef
+              rootUser
+              rootGroup
         c = inoCont e
     in e{ inoCont = c{ blockAddrs = replicate (safeToInt minInodeBlocks) 0 } }
 
@@ -218,43 +248,65 @@ getSizes blkSz = do
 -- Builds and encodes an empty inode
 buildEmptyInodeEnc :: (Serialize t, Timed t m) =>
                       BlockDevice m -- ^ The block device
+                   -> FileType      -- ^ This inode's filetype
+                   -> FileMode      -- ^ This inode's access mode
                    -> InodeRef      -- ^ This inode's block address
                    -> InodeRef      -- ^ Parent's block address
                    -> UserID
                    -> GroupID
                    -> m ByteString
-buildEmptyInodeEnc bd me mommy usr grp =
-  liftM encode $ buildEmptyInode bd me mommy usr grp
+buildEmptyInodeEnc bd ftype fmode me mommy usr grp =
+  liftM encode $ buildEmptyInode bd ftype fmode me mommy usr grp
 
 buildEmptyInode :: (Serialize t, Timed t m) =>
-                   BlockDevice m    -- ^ The block device
-                -> InodeRef         -- ^ This inode's block address
-                -> InodeRef         -- ^ Parent block's address
-                -> UserID
-                -> GroupID
+                   BlockDevice m
+                -> FileType      -- ^ This inode's filetype
+                -> FileMode      -- ^ This inode's access mode
+                -> InodeRef      -- ^ This inode's block address
+                -> InodeRef      -- ^ Parent block's address
+                -> UserID        -- ^ This inode's owner's userid
+                -> GroupID       -- ^ This inode's owner's groupid
                 -> m (Inode t)
-buildEmptyInode bd me mommy usr grp = do 
+buildEmptyInode bd ftype fmode me mommy usr grp = do 
   now     <- getTime
   minSize <- minimalInodeSize =<< return now
   nAddrs  <- computeNumAddrs (bdBlockSize bd) minInodeBlocks minSize
-  return $ emptyInode nAddrs now now me mommy usr grp
+  return $ emptyInode
+             nAddrs
+             now
+             now
+             now
+             ftype
+             fmode
+             me
+             mommy
+             usr
+             grp
 
 emptyInode :: (Ord t, Serialize t) => 
               Word64   -- ^ number of block addresses
            -> t        -- ^ creation time
            -> t        -- ^ last modify time
+           -> t        -- ^ last access time
+           -> FileType -- ^ inode's filetype
+           -> FileMode -- ^ inode's access mode
            -> InodeRef -- ^ block addr for this inode
            -> InodeRef -- ^ parent block address
            -> UserID  
            -> GroupID
            -> Inode t
-emptyInode nAddrs createTm modTm me mommy usr grp =
+emptyInode nAddrs createTm modTm axsTm ftype fmode me mommy usr grp =
   Inode
-  { inoAddress      = me
-  , inoParent       = mommy
+  { inoParent       = mommy
+  , inoAddress      = me
   , inoFileSize     = 0
+  , inoAllocBlocks  = 1
+  , inoFileType     = ftype
+  , inoMode         = fmode
+  , inoNumLinks     = 0
   , inoCreateTime   = createTm
   , inoModifyTime   = modTm
+  , inoAccessTime   = axsTm
   , inoUser         = usr
   , inoGroup        = grp
   , inoCont         = emptyCont nAddrs nilContRef 
@@ -393,34 +445,35 @@ writeStream dev bm startIR start trunc bytes       = do
   -- NB: expandConts is probably not viable once cont chains get large, but the
   -- continuation scheme in general may not be viable.  Revisit after stuff is
   -- working.
-  conts                         <- expandConts dev startCont
-  (sContIdx, sBlkOff, sByteOff) <- getStreamIdx bs start conts
+  conts0                        <- expandConts dev startCont
+  (sContIdx, sBlkOff, sByteOff) <- getStreamIdx bs start conts0
 
   dbug ("==== writeStream begin ===") $ do
   dbug ("sContIdx, blkIdx, byteIdx = " ++ show (sContIdx, sBlkOff, sByteOff)) $ do
-  dbug ("conts                     = " ++ show conts)                          $ do
+  dbug ("conts0                     = " ++ show conts0)                          $ do
 
   -- Determine how much space we need to allocate for the data, if any
   let allocdInBlk   = if sBlkOff < blockCount startCont then bs else 0
       allocdInStart = if sBlkOff + 1 < blockCount startCont
                       then bs * (blockCount startCont - sBlkOff - 1) else 0
       allocdInConts = sum $ map ((*bs) . blockCount) $
-                      genericDrop (sContIdx + 1) conts
+                      genericDrop (sContIdx + 1) conts0
       alreadyAllocd = allocdInBlk + allocdInStart + allocdInConts
       bytesToAlloc  = if alreadyAllocd > len then 0 else len - alreadyAllocd
       blksToAlloc   = bytesToAlloc `divCeil` bs
-      contsToAlloc  = (blksToAlloc - availBlks (last conts)) `divCeil` apc
-      availBlks :: Cont -> Word64
+      contsToAlloc  = (blksToAlloc - availBlks (last conts0)) `divCeil` apc
       availBlks c   = numAddrs c - blockCount c
+      newFileSz     = if trunc then len else alreadyAllocd + bytesToAlloc
 
   dbug ("alreadyAllocd = " ++ show alreadyAllocd) $ do
   dbug ("bytesToAlloc  = " ++ show bytesToAlloc)  $ do
   dbug ("blksToAlloc   = " ++ show blksToAlloc)   $ do
   dbug ("contsToAlloc  = " ++ show contsToAlloc)  $ do
+--  trace (">>> newFileSz = " ++ show newFileSz) $ do
 
-  conts' <- allocFill dev bm availBlks blksToAlloc contsToAlloc conts
+  conts1 <- allocFill dev bm availBlks blksToAlloc contsToAlloc conts0
 
-  let stCont = conts' !! safeToInt sContIdx
+  let stCont = conts1 !! safeToInt sContIdx
   sBlk <- lift $ readBlock dev stCont sBlkOff
 
   let (sData, bytes') = bsSplitAt (bs - sByteOff) bytes
@@ -439,7 +492,7 @@ writeStream dev bm startIR start trunc bytes       = do
 
       -- Destination block addresses starting at the the start block
       blkAddrs = genericDrop sBlkOff (blockAddrs stCont)
-                 ++ concatMap blockAddrs (genericDrop (sContIdx + 1) conts')
+                 ++ concatMap blockAddrs (genericDrop (sContIdx + 1) conts1)
 
   chunks <- (firstChunk:) `fmap`
             unfoldrM (lift . getBlockContents dev trunc)
@@ -452,34 +505,37 @@ writeStream dev bm startIR start trunc bytes       = do
 
   -- If this is a truncating write, fix up the chain terminator & free all
   -- blocks & conts in the free region.
-  conts'' <- if trunc
-              then truncUnalloc dev bm start len conts'
-              else return conts'
-  assert (length conts'' > 0) $ return ()
+  conts2 <- if trunc
+            then truncUnalloc dev bm start len conts1
+            else return conts1
+  assert (length conts2 > 0) $ return ()
 
   let updated = 1 + ((len - bpsc) `divCeil` bpc)
   dbug ("conts updated = " ++ show updated) $ return ()
 
-  -- Persist all updated conts from the starting Cont to the end of write
-  -- region.  NB: When sContIdx == 0, it means we're updating the first cont in
-  -- the chain, which is always embedded in the starting inode, so we
-  -- special-case that here and write the entire inode.
-       
-  -- TODO: We'll need to update inode's metadata here (E.g., new size,
-  -- timestamps, etc), Also consider locked access to the inode.  This'll mean
-  -- tweaking the code below slightly since the inode will -always- be written
-  -- in addition to the cont region.
+  -- NB: When sContIdx == 0, we've updated the first cont in the chain,
+  -- which is always goes into the inode structure.
+  let (contsToWrite, startInode') =
+        case conts2 of
+          (fstCont:rest) ->
+            if (sContIdx == 0)
+            then ( genericTake (updated - 1) rest
+                 , startInode{ inoCont = fstCont }
+                 )
+            else ( genericTake updated (genericDrop sContIdx conts2)
+                 , startInode
+                 )
+          _ -> error "The impossible happened (|conts| = 0)"
 
-  if (sContIdx == 0)
-   then do
-     case conts'' of
-       (fstCont:rest) -> do
-         lift $ writeInode dev $ startInode{ inoCont = fstCont }
-         mapM_ (lift . writeCont dev) $ genericTake (updated - 1) rest
-       _ -> error "The impossible happened (conts list had length 0)"
-   else do
-     mapM_ (lift . writeCont dev) $
-       genericTake updated $ genericDrop sContIdx conts''
+  -- Persist all the Conts from the start of the write region (excluding
+  -- the inode) to the end of the write region
+  mapM_ (lift . writeCont dev) contsToWrite
+
+  -- Finally, write the inode w/ all metadata updated
+  lift $ writeInode dev $
+    startInode' {
+      inoFileSize = newFileSz
+    }
 
   dbug ("==== writeStream end ===") $ do
   return ()
@@ -737,6 +793,28 @@ getStreamIdx blkSz start conts  = do
       in
         sBlkOff >= blkCnt && not (sBlkOff == 0 && blkCnt == 0)
 
+fileStat :: HalfsCapable b t r l m =>
+            HalfsState b r l m
+         -> InodeRef
+         -> HalfsM m (FileStat t)
+fileStat fs inr = do
+  inode <- drefInode (hsBlockDev fs) inr
+--  trace ("fileStat: Here's the dereferenced inode: " ++ show inode) $ do
+--  t <- getTime
+  return $ FileStat {
+      fsInode      = inr
+    , fsType       = error "fileStat NYI"
+    , fsMode       = error "fileStat NYI"
+    , fsNumLinks   = error "fileStat NYI"
+    , fsUID        = error "fileStat NYI"
+    , fsGID        = error "fileStat NYI"
+    , fsSize       = inoFileSize inode
+    , fsNumBlocks  = error "fileStat NYI"
+    , fsAccessTime = error "fileStat NYI"
+    , fsModTime    = error "fileStat NYI"
+--    , fsChangeTime = t
+    }
+    
 -- "Safe" (i.e., emits runtime assertions on overflow) versions of
 -- BS.{take,drop,replicate}.  We want the efficiency of these functions without
 -- the danger of an unguarded fromIntegral on the Word64 types we use throughout
@@ -802,51 +880,79 @@ cmagic4 = BS.pack $ take 8 $ drop 24 magicContBytes
 
 instance (Eq t, Ord t, Serialize t) => Serialize (Inode t) where
   put n = do
-    putByteString magic1
-    put $ inoAddress n
-    put $ inoParent n
-    putWord64be $ inoFileSize n
-    put $ inoCreateTime n
-    put $ inoModifyTime n
-    putByteString magic2
-    put $ inoUser n
-    put $ inoGroup n
-    putByteString magic3
-    put $ inoCont n
+    putByteString $ magic1
+
+    put           $ inoParent n           
+    put           $ inoAddress n          
+    putWord64be   $ inoFileSize n
+    putWord64be   $ inoAllocBlocks n 
+    put           $ inoFileType n
+    put           $ inoMode n
+    
+    putByteString $ magic2        
+
+    putWord64be   $ inoNumLinks n
+    put           $ inoCreateTime n       
+    put           $ inoModifyTime n       
+    put           $ inoAccessTime n       
+    put           $ inoUser n             
+    put           $ inoGroup n            
+
+    putByteString $ magic3        
+
+    put           $ inoCont n             
 
     -- NB: For Conts that are inside inodes, the Serialize instance for Cont
-    -- relies on only 8 bytes beyond this point (the inode magic number).  If
-    -- you change this, you'll need to update the related calcuations in
-    -- Serialize Cont's get function.
-
+    -- relies on only 8 + iPadSize bytes beyond this point (the inode magic
+    -- number and some padding).  If you change this, you'll need to update the
+    -- related calculations in Serialize Cont's get function!
     putByteString magic4
+    replicateM_ iPadSize $ putWord8 padSentinel
 
   get = do
     checkMagic magic1
-    addr <- get
-    par  <- get
-    fsz  <- getWord64be
-    ctm  <- get
-    mtm  <- get
-    unless (mtm >= ctm) $
-      fail "Inode: Incoherent modified / creation times."
+
+    par   <- get
+    addr  <- get
+    fsz   <- getWord64be
+    blks  <- getWord64be
+    ftype <- get
+    fmode <- get
+
     checkMagic magic2
+
+    nlnks <- getWord64be
+    ctm   <- get
+    mtm   <- get
+    atm   <- get
+    unless (ctm <= mtm && ctm <= atm) $
+      fail "Inode: Incoherent modified / creation / access times."
     usr  <- get
     grp  <- get
+
     checkMagic magic3
-    c    <- get
+
+    c <- get
+    
     checkMagic magic4    
+    padding <- replicateM iPadSize $ getWord8
+    assert (all (== padSentinel) padding) $ return ()
 
     return Inode
-           { inoAddress      = addr
-           , inoParent       = par
-           , inoFileSize     = fsz
-           , inoCreateTime   = ctm
-           , inoModifyTime   = mtm
-           , inoUser         = usr
-           , inoGroup        = grp
-           , inoCont         = c
-           }
+      { inoParent       = par
+      , inoAddress      = addr
+      , inoFileSize     = fsz
+      , inoAllocBlocks  = blks
+      , inoFileType     = ftype
+      , inoMode         = fmode
+      , inoNumLinks     = nlnks
+      , inoCreateTime   = ctm
+      , inoModifyTime   = mtm
+      , inoAccessTime   = atm
+      , inoUser         = usr
+      , inoGroup        = grp
+      , inoCont         = c
+      }
    where
     checkMagic x = do
       magic <- getBytes 8
@@ -887,14 +993,16 @@ instance Serialize Cont where
     -- when calculating the number of blocks to read below.
            
     let isEmbedded = addr == nilContRef
-    numBlockBytes <- do remb <- fmap fromIntegral remaining
-                        let numTrailingBytes =
-                              if isEmbedded
-                              then 8 + fromIntegral cPadSize + 8
-                                   -- cmagic4, padding, inode's magic4, <EOS>
-                              else 8 + fromIntegral cPadSize
-                                   -- cmagic4, padding, <EOS>
-                        return (remb - numTrailingBytes)
+    numBlockBytes <- do
+      remb <- fmap fromIntegral remaining
+      let numTrailingBytes =
+            if isEmbedded
+            then 8 + fromIntegral cPadSize + 8 + fromIntegral iPadSize
+                 -- cmagic4, padding, inode's magic4, inode's padding<EOS>
+            else 8 + fromIntegral cPadSize
+                 -- cmagic4, padding, <EOS>
+      return (remb - numTrailingBytes)
+
     let (numBlocks, check) = numBlockBytes `divMod` refSize
     unless (check == 0) $ fail "Cont: Bad remaining byte count for block list."
 

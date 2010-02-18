@@ -146,5 +146,6 @@ dumpfs fs = do
                           RegularFile -> " (file)\n"
                           Directory   -> " (directory)\n" ++ sub
                           Symlink     -> " (symlink)\n"
+                          _           -> error "unknown file type"
             )
             ipfx (M.toList contents)
