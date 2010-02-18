@@ -35,7 +35,7 @@ import Control.Exception
 import Data.ByteString(ByteString)
 import qualified Data.ByteString as BS
 import Data.Char
-import Data.List (genericDrop, genericTake, genericSplitAt)
+import Data.List (find, genericDrop, genericTake, genericSplitAt)
 import Data.Serialize 
 import Data.Serialize.Get
 import Data.Serialize.Put
@@ -382,7 +382,7 @@ readStream dev startIR start mlen = do
                              [ sBlkOff .. min lastIdx (sBlkOff + remBlks - 1) ]
                (blk:blks) <- mapM (readB cont) range
                return $ bsDrop sByteOff blk `BS.append` BS.concat blks
-
+                       
              -- 'fullBlocks' is the remaining content from all remaining
              -- conts, accounting for the possible upper bound on the length
              -- of the data returned.
@@ -436,7 +436,6 @@ writeStream dev bm startIR start trunc bytes       = do
   -- leave this as a TODO for now.
 
   startInode <- drefInode dev startIR
-  startCont  <- return (inoCont startInode)
 
   -- The start Cont is extracted from the start inode, so will never be larger
   -- than subsequent conts.
@@ -445,17 +444,18 @@ writeStream dev bm startIR start trunc bytes       = do
   -- NB: expandConts is probably not viable once cont chains get large, but the
   -- continuation scheme in general may not be viable.  Revisit after stuff is
   -- working.
-  conts0                        <- expandConts dev startCont
+  conts0                        <- expandConts dev (inoCont startInode)
   (sContIdx, sBlkOff, sByteOff) <- getStreamIdx bs start conts0
+  let stCont0 = conts0 !! safeToInt sContIdx
 
   dbug ("==== writeStream begin ===") $ do
   dbug ("sContIdx, blkIdx, byteIdx = " ++ show (sContIdx, sBlkOff, sByteOff)) $ do
-  dbug ("conts0                     = " ++ show conts0)                          $ do
+  dbug ("conts0                    = " ++ show conts0)                          $ do
 
   -- Determine how much space we need to allocate for the data, if any
-  let allocdInBlk   = if sBlkOff < blockCount startCont then bs else 0
-      allocdInStart = if sBlkOff + 1 < blockCount startCont
-                      then bs * (blockCount startCont - sBlkOff - 1) else 0
+  let allocdInBlk   = if sBlkOff < blockCount stCont0 then bs else 0
+      allocdInStart = if sBlkOff + 1 < blockCount stCont0
+                      then bs * (blockCount stCont0 - sBlkOff - 1) else 0
       allocdInConts = sum $ map ((*bs) . blockCount) $
                       genericDrop (sContIdx + 1) conts0
       alreadyAllocd = allocdInBlk + allocdInStart + allocdInConts
@@ -463,18 +463,33 @@ writeStream dev bm startIR start trunc bytes       = do
       blksToAlloc   = bytesToAlloc `divCeil` bs
       contsToAlloc  = (blksToAlloc - availBlks (last conts0)) `divCeil` apc
       availBlks c   = numAddrs c - blockCount c
-      newFileSz     = if trunc then len else alreadyAllocd + bytesToAlloc
+      newFileSz     =
+        dbug ("=========================================") $ 
+        dbug ("inoFileSize startInode = " ++ show (inoFileSize startInode)) $
+        dbug ("blockCount startInode = " ++ show (blockCount $ inoCont startInode)) $
+        dbug ("start = " ++ show (start)) $
+        dbug ("len = " ++ show (len)) $
+        dbug ("bytesToAlloc = " ++ show (bytesToAlloc)) $
+        dbug ("=========================================")  $
+        if trunc then start + len else inoFileSize startInode + bytesToAlloc
 
+  dbug ("allocdInBlk   = " ++ show allocdInBlk)   $ do
+  dbug ("allocdInStart = " ++ show allocdInStart) $ do
+  dbug ("allocdInConts = " ++ show allocdInConts) $ do
   dbug ("alreadyAllocd = " ++ show alreadyAllocd) $ do
   dbug ("bytesToAlloc  = " ++ show bytesToAlloc)  $ do
   dbug ("blksToAlloc   = " ++ show blksToAlloc)   $ do
   dbug ("contsToAlloc  = " ++ show contsToAlloc)  $ do
---  trace (">>> newFileSz = " ++ show newFileSz) $ do
+  dbug ("trunc         = " ++ show trunc)         $ do
+  dbug ("newFileSz     = " ++ show newFileSz)     $ do
 
-  conts1 <- allocFill dev bm availBlks blksToAlloc contsToAlloc conts0
+  (conts1, allocDirtyConts) <-
+    allocFill dev bm availBlks blksToAlloc contsToAlloc conts0
 
-  let stCont = conts1 !! safeToInt sContIdx
-  sBlk <- lift $ readBlock dev stCont sBlkOff
+  dbug ("allocDirtyConts = " ++ show allocDirtyConts) $ return ()
+
+  let stCont1 = conts1 !! safeToInt sContIdx
+  sBlk <- lift $ readBlock dev stCont1 sBlkOff
 
   let (sData, bytes') = bsSplitAt (bs - sByteOff) bytes
       -- The first block-sized chunk to write is the region in the start block
@@ -491,7 +506,7 @@ writeStream dev bm startIR start trunc bytes       = do
         in assert (fromIntegral (BS.length r) == bs) r
 
       -- Destination block addresses starting at the the start block
-      blkAddrs = genericDrop sBlkOff (blockAddrs stCont)
+      blkAddrs = genericDrop sBlkOff (blockAddrs stCont1)
                  ++ concatMap blockAddrs (genericDrop (sContIdx + 1) conts1)
 
   chunks <- (firstChunk:) `fmap`
@@ -505,13 +520,30 @@ writeStream dev bm startIR start trunc bytes       = do
 
   -- If this is a truncating write, fix up the chain terminator & free all
   -- blocks & conts in the free region.
-  conts2 <- if trunc
-            then truncUnalloc dev bm start len conts1
-            else return conts1
+  (conts2, unallocDirtyConts) <-
+    if trunc
+    then truncUnalloc dev bm start len conts1
+    else return (conts1, [])
   assert (length conts2 > 0) $ return ()
 
-  let updated = 1 + ((len - bpsc) `divCeil` bpc)
-  dbug ("conts updated = " ++ show updated) $ return ()
+  dbug ("unallocDirtyConts = " ++ show unallocDirtyConts) $ return ()
+
+{-
+--  let updated = 1 + ((len - bpsc) `divCeil` bpc)
+  let updated = if start >= bpsc
+                then
+                  trace ("updated: start after first cont") $
+                  len `divCeil` bpc
+                else
+                  trace ("updated: start in first cont") $
+                  1 + if start + len >= bpsc then 
+
+--((len - bpsc) `divCeil` bpc)
+--                  assert (len >= bpsc) $
+--                    1 + 
+
+  dbug ("len = " ++ show len ++ ", bpsc = " ++ show bpsc ++ ", bpc = " ++ show bpc) $ do
+  dbug ("conts updated = " ++ show updated ++ ", sContIdx = " ++ show sContIdx) $ return ()
 
   -- NB: When sContIdx == 0, we've updated the first cont in the chain,
   -- which is always goes into the inode structure.
@@ -527,21 +559,33 @@ writeStream dev bm startIR start trunc bytes       = do
                  )
           _ -> error "The impossible happened (|conts| = 0)"
 
-  -- Persist all the Conts from the start of the write region (excluding
-  -- the inode) to the end of the write region
-  mapM_ (lift . writeCont dev) contsToWrite
+  trace ("contsToWrite = " ++ show contsToWrite) $ do
+-}
+
+  assert (null allocDirtyConts || null unallocDirtyConts) $ return ()
+  let dirtyConts  = allocDirtyConts ++ unallocDirtyConts
+      dirtyInode  = case find isEmbedded dirtyConts of
+                      Nothing -> startInode
+                      Just c  -> startInode { inoCont = c }
+
+  forM_ dirtyConts $ \c ->
+    when (not $ isEmbedded c) $ lift $ writeCont dev c
+    -- ^ Skip the inode's embedded Cont if we encounter it
+
+--  mapM_ (lift . writeCont dev) contsToWrite
 
   -- Finally, write the inode w/ all metadata updated
   lift $ writeInode dev $
-    startInode' {
-      inoFileSize = newFileSz
+    dirtyInode {
+      inoFileSize = dbug ("UPDATING filesize: old = " ++ show (inoFileSize dirtyInode) ++ ", new = " ++ show newFileSz) newFileSz
     }
 
   dbug ("==== writeStream end ===") $ do
   return ()
   where
-    bs  = bdBlockSize dev
-    len = fromIntegral $ BS.length bytes
+    isEmbedded = (==) nilContRef . address
+    bs         = bdBlockSize dev
+    len        = fromIntegral $ BS.length bytes
 
 
 --------------------------------------------------------------------------------
@@ -584,8 +628,9 @@ allocFill :: HalfsCapable b t r l m =>
           -> Word64                     -- ^ Number of blocks to allocate
           -> Word64                     -- ^ Number of conts to allocate
           -> [Cont]                     -- ^ Chain to extend and fill
-          -> HalfsM m [Cont]
-allocFill _   _  _     0           _            existing = return existing
+          -> HalfsM m ([Cont], [Cont])  -- ^ Extended cont chain,
+                                        -- terminating subchain of dirty conts
+allocFill _   _  _     0           _            existing = return (existing, [])
 allocFill dev bm avail blksToAlloc contsToAlloc existing = do
   newConts <- allocConts 
   blks     <- allocBlocks
@@ -601,8 +646,9 @@ allocFill dev bm avail blksToAlloc contsToAlloc existing = do
                           (nilContRef, [])
                           (last existing : newConts)
   -- "Spill" the allocated blocks into the empty region
-  let (blks', k)                   = foldl fillBlks (blks, id) region
-      newChain                     = init existing ++ k []
+  let (blks', k)               = foldl fillBlks (blks, id) region
+      dirtyConts               = k []
+      newChain                 = init existing ++ dirtyConts
       fillBlks (remBlks, k') c =
         let cnt    = min (safeToInt $ avail c) (length remBlks)
             c'     = c { blockCount = blockCount c + fromIntegral cnt
@@ -613,7 +659,7 @@ allocFill dev bm avail blksToAlloc contsToAlloc existing = do
   
   assert (null blks') $ return ()
   assert (length newChain >= length existing) $ return ()
-  return newChain
+  return (newChain, dirtyConts)
   where
     allocBlocks = do
       let n = blksToAlloc
@@ -645,14 +691,14 @@ truncUnalloc :: HalfsCapable b t r l m =>
              -> Word64                    -- ^ length from start at which to
                                           -- truncate
              -> [Cont]                    -- ^ current chain
-             -> HalfsM m [Cont]           -- ^ truncated chain
+             -> HalfsM m ([Cont], [Cont]) -- ^ truncated chain, dirty conts
 truncUnalloc dev bm start len conts = do
   eIdx@(eContIdx, eBlkOff, _) <- decompStreamOffset (bdBlockSize dev) (start + len - 1)
   let 
     (retain, toFree) = genericSplitAt (eContIdx + 1) conts
     -- 
     trm         = last retain 
-    retain'     = init retain ++ [trm']
+    retain'     = init retain ++ dirtyConts
     allFreeBlks = genericDrop (eBlkOff + 1) (blockAddrs trm)
                   -- ^ The remaining blocks in the terminator
                   ++ concatMap blockAddrs toFree
@@ -660,17 +706,23 @@ truncUnalloc dev bm start len conts = do
                   ++ map (unCR . address) toFree
                   -- ^ Block addrs for the cont blocks themselves
 
-    -- trm' is the new terminator cont, adjusted to discard the newly freed
-    -- blocks and clear the continuation link
-    trm' = trm { blockCount   = eBlkOff + 1
-               , blockAddrs   = genericTake (eBlkOff + 1) (blockAddrs trm)
-               , continuation = nilContRef
-               }
-  
-  dbug ("eIdx        = " ++ show eIdx)        $ return ()
-  dbug ("retain'     = " ++ show retain')     $ return ()
-  dbug ("freeNodes   = " ++ show toFree)      $ return ()
-  dbug ("allFreeBlks = " ++ show allFreeBlks) $ return ()
+    -- Currently, only the last Cont in the chain is dirty; we do not do
+    -- any writes to any of the Conts that are detached from the chain &
+    -- freed; this may have implications for fsck!
+    dirtyConts =
+      [
+        -- The new terminator Cont, adjusted to discard the freed blocks
+        -- and clear the continuation field
+        trm { blockCount   = eBlkOff + 1
+            , blockAddrs   = genericTake (eBlkOff + 1) (blockAddrs trm)
+            , continuation = nilContRef
+            }
+      ]
+
+  dbug ("truncUnalloc: eIdx        = " ++ show eIdx)        $ return ()
+  dbug ("truncUnalloc: retain'     = " ++ show retain')     $ return ()
+  dbug ("truncUnalloc: freeNodes   = " ++ show toFree)      $ return ()
+  dbug ("truncUnalloc: allFreeBlks = " ++ show allFreeBlks) $ return ()
 
   -- Freeing all of the blocks this way (as unit extents) is ugly and
   -- inefficient, but we need to be tracking BlockGroups (or reconstitute them
@@ -679,9 +731,7 @@ truncUnalloc dev bm start len conts = do
     
   lift $ BM.unallocBlocks bm $ BM.Discontig $ map (`BM.Extent` 1) allFreeBlks
     
-  -- NB: We do not do any writes to any of the conts that were detached from the
-  -- chain & freed; this may have implications for fsck!
-  return retain'
+  return (retain', dirtyConts)
 
 -- | Splits the input bytestring into block-sized chunks; may read from the
 -- block device in order to preserve contents of blocks if needed.
@@ -726,11 +776,15 @@ readBlock dev c i = do
 
 writeCont :: Monad m =>
              BlockDevice m -> Cont -> m ()
-writeCont dev c = bdWriteBlock dev (unCR $ address c) (encode c)
+writeCont dev c =
+  dbug ("writeCont writing: " ++ show c) $  
+  bdWriteBlock dev (unCR $ address c) (encode c)
 
-writeInode :: (Monad m, Ord t, Serialize t) =>
+writeInode :: (Monad m, Ord t, Serialize t, Show t) =>
               BlockDevice m -> Inode t -> m ()
-writeInode dev n = bdWriteBlock dev (unIR $ inoAddress n) (encode n)
+writeInode dev n =
+  dbug ("writeInode writing: " ++ show n) $ 
+  bdWriteBlock dev (unIR $ inoAddress n) (encode n)
 
 -- | Expands the given Cont into a Cont list containing itself followed by all
 -- of its continuation inodes
@@ -799,7 +853,7 @@ fileStat :: HalfsCapable b t r l m =>
          -> HalfsM m (FileStat t)
 fileStat fs inr = do
   inode <- drefInode (hsBlockDev fs) inr
---  trace ("fileStat: Here's the dereferenced inode: " ++ show inode) $ do
+--  dbug ("fileStat: Here's the dereferenced inode: " ++ show inode) $ do
 --  t <- getTime
   return $ FileStat {
       fsInode      = inr
@@ -998,7 +1052,7 @@ instance Serialize Cont where
       let numTrailingBytes =
             if isEmbedded
             then 8 + fromIntegral cPadSize + 8 + fromIntegral iPadSize
-                 -- cmagic4, padding, inode's magic4, inode's padding<EOS>
+                 -- cmagic4, padding, inode's magic4, inode's padding <EOS>
             else 8 + fromIntegral cPadSize
                  -- cmagic4, padding, <EOS>
       return (remb - numTrailingBytes)
@@ -1031,3 +1085,4 @@ instance Serialize Cont where
     checkMagic x = do
       magic <- getBytes 8
       unless (magic == x) $ fail "Invalid Cont: magic number mismatch"
+
