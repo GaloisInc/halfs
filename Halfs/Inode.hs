@@ -439,7 +439,7 @@ writeStream dev bm startIR start trunc bytes       = do
 
   -- The start Cont is extracted from the start inode, so will never be larger
   -- than subsequent conts.
-  (bpsc, bpc, _, apc) <- getSizes bs
+  (_, _, _, apc) <- getSizes bs
 
   -- NB: expandConts is probably not viable once cont chains get large, but the
   -- continuation scheme in general may not be viable.  Revisit after stuff is
@@ -463,15 +463,9 @@ writeStream dev bm startIR start trunc bytes       = do
       blksToAlloc   = bytesToAlloc `divCeil` bs
       contsToAlloc  = (blksToAlloc - availBlks (last conts0)) `divCeil` apc
       availBlks c   = numAddrs c - blockCount c
-      newFileSz     =
-        dbug ("=========================================") $ 
-        dbug ("inoFileSize startInode = " ++ show (inoFileSize startInode)) $
-        dbug ("blockCount startInode = " ++ show (blockCount $ inoCont startInode)) $
-        dbug ("start = " ++ show (start)) $
-        dbug ("len = " ++ show (len)) $
-        dbug ("bytesToAlloc = " ++ show (bytesToAlloc)) $
-        dbug ("=========================================")  $
-        if trunc then start + len else inoFileSize startInode + bytesToAlloc
+      newFileSz     = if trunc
+                      then start + len
+                      else inoFileSize startInode + bytesToAlloc
 
   dbug ("allocdInBlk   = " ++ show allocdInBlk)   $ do
   dbug ("allocdInStart = " ++ show allocdInStart) $ do
