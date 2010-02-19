@@ -53,11 +53,8 @@ import Halfs.Utils
 
 import System.Device.BlockDevice
 
-import Debug.Trace
-
---import System.IO.Unsafe
+-- import Debug.Trace
 dbug :: String -> a -> a
---dbug   = seq . unsafePerformIO . putStrLn
 dbug _ = id
 --dbug = trace
 
@@ -372,8 +369,8 @@ readStream dev startIR start mlen = do
            [] -> fail "Inode.readStream INTERNAL: invalid start cont index"
            (cont:rest) -> do
              -- 'header' is just the partial first block and all remaining
-             -- blocks in the first Cont, accounting for the possible upper
-             -- bound on the length of the data returned.
+             -- blocks in the first Cont, accounting for the (Maybe) maximum
+             -- length requested.
              assert (maybe True (> 0) mlen) $ return ()
              header <- do
                let remBlks = calcRemBlks cont (+ sByteOff)
@@ -383,9 +380,8 @@ readStream dev startIR start mlen = do
                (blk:blks) <- mapM (readB cont) range
                return $ bsDrop sByteOff blk `BS.append` BS.concat blks
                        
-             -- 'fullBlocks' is the remaining content from all remaining
-             -- conts, accounting for the possible upper bound on the length
-             -- of the data returned.
+             -- 'fullBlocks' is the remaining content from all remaining conts,
+             -- accounting for (Maybe) maximum length requested
              (fullBlocks, _readCnt) <- 
                foldM
                  (\(acc, bytesSoFar) cont' -> do
@@ -415,7 +411,8 @@ readStream dev startIR start mlen = do
 -- | Writes to the inode stream at the given starting inode and starting byte
 -- offset, overwriting data and allocating new space on disk as needed.  If the
 -- write is a truncating write, all resources after the end of the written data
--- are freed.
+-- are freed.  Whenever the data to be written exceeds the the end of the
+-- stream, the trunc flag is ignored.
 writeStream :: HalfsCapable b t r l m =>
                BlockDevice m   -- ^ The block device
             -> BlockMap b r l  -- ^ The block map
@@ -435,10 +432,7 @@ writeStream dev bm startIR start trunc bytes       = do
   -- as needed to reduce the number of unallocation actions required, but we'll
   -- leave this as a TODO for now.
 
-  startInode <- drefInode dev startIR
-
-  -- The start Cont is extracted from the start inode, so will never be larger
-  -- than subsequent conts.
+  startInode     <- drefInode dev startIR
   (_, _, _, apc) <- getSizes bs
 
   -- NB: expandConts is probably not viable once cont chains get large, but the
@@ -446,14 +440,14 @@ writeStream dev bm startIR start trunc bytes       = do
   -- working.
   conts0                        <- expandConts dev (inoCont startInode)
   (sContIdx, sBlkOff, sByteOff) <- getStreamIdx bs start conts0
-  let stCont0 = conts0 !! safeToInt sContIdx
 
   dbug ("==== writeStream begin ===") $ do
   dbug ("sContIdx, blkIdx, byteIdx = " ++ show (sContIdx, sBlkOff, sByteOff)) $ do
   dbug ("conts0                    = " ++ show conts0)                          $ do
 
   -- Determine how much space we need to allocate for the data, if any
-  let allocdInBlk   = if sBlkOff < blockCount stCont0 then bs else 0
+  let stCont0       = conts0 !! safeToInt sContIdx
+      allocdInBlk   = if sBlkOff < blockCount stCont0 then bs else 0
       allocdInStart = if sBlkOff + 1 < blockCount stCont0
                       then bs * (blockCount stCont0 - sBlkOff - 1) else 0
       allocdInConts = sum $ map ((*bs) . blockCount) $
@@ -467,20 +461,14 @@ writeStream dev bm startIR start trunc bytes       = do
                       then start + len
                       else inoFileSize startInode + bytesToAlloc
 
-  dbug ("allocdInBlk   = " ++ show allocdInBlk)   $ do
-  dbug ("allocdInStart = " ++ show allocdInStart) $ do
-  dbug ("allocdInConts = " ++ show allocdInConts) $ do
   dbug ("alreadyAllocd = " ++ show alreadyAllocd) $ do
   dbug ("bytesToAlloc  = " ++ show bytesToAlloc)  $ do
   dbug ("blksToAlloc   = " ++ show blksToAlloc)   $ do
   dbug ("contsToAlloc  = " ++ show contsToAlloc)  $ do
-  dbug ("trunc         = " ++ show trunc)         $ do
   dbug ("newFileSz     = " ++ show newFileSz)     $ do
 
   (conts1, allocDirtyConts) <-
     allocFill dev bm availBlks blksToAlloc contsToAlloc conts0
-
-  dbug ("allocDirtyConts = " ++ show allocDirtyConts) $ return ()
 
   let stCont1 = conts1 !! safeToInt sContIdx
   sBlk <- lift $ readBlock dev stCont1 sBlkOff
@@ -512,67 +500,28 @@ writeStream dev bm startIR start trunc bytes       = do
   -- Write the data into the appopriate blocks
   mapM_ (\(a,d) -> lift $ bdWriteBlock dev a d) (blkAddrs `zip` chunks)
 
-  -- If this is a truncating write, fix up the chain terminator & free all
-  -- blocks & conts in the free region.
+  -- If this is a truncating write where we're not growing the region, free all
+  -- blocks/Conts beyond in the leftover region endpoint and fix up the chain
+  -- terminator.
   (conts2, unallocDirtyConts) <-
-    if trunc
+    if trunc && bytesToAlloc == 0
     then truncUnalloc dev bm start len conts1
     else return (conts1, [])
-  assert (length conts2 > 0) $ return ()
-
-  dbug ("unallocDirtyConts = " ++ show unallocDirtyConts) $ return ()
-
-{-
---  let updated = 1 + ((len - bpsc) `divCeil` bpc)
-  let updated = if start >= bpsc
-                then
-                  trace ("updated: start after first cont") $
-                  len `divCeil` bpc
-                else
-                  trace ("updated: start in first cont") $
-                  1 + if start + len >= bpsc then 
-
---((len - bpsc) `divCeil` bpc)
---                  assert (len >= bpsc) $
---                    1 + 
-
-  dbug ("len = " ++ show len ++ ", bpsc = " ++ show bpsc ++ ", bpc = " ++ show bpc) $ do
-  dbug ("conts updated = " ++ show updated ++ ", sContIdx = " ++ show sContIdx) $ return ()
-
-  -- NB: When sContIdx == 0, we've updated the first cont in the chain,
-  -- which is always goes into the inode structure.
-  let (contsToWrite, startInode') =
-        case conts2 of
-          (fstCont:rest) ->
-            if (sContIdx == 0)
-            then ( genericTake (updated - 1) rest
-                 , startInode{ inoCont = fstCont }
-                 )
-            else ( genericTake updated (genericDrop sContIdx conts2)
-                 , startInode
-                 )
-          _ -> error "The impossible happened (|conts| = 0)"
-
-  trace ("contsToWrite = " ++ show contsToWrite) $ do
--}
+  assert (length conts2 > 0 && length conts2 <= length conts1) $ return ()
 
   assert (null allocDirtyConts || null unallocDirtyConts) $ return ()
-  let dirtyConts  = allocDirtyConts ++ unallocDirtyConts
-      dirtyInode  = case find isEmbedded dirtyConts of
-                      Nothing -> startInode
-                      Just c  -> startInode { inoCont = c }
+  let dirtyConts = allocDirtyConts ++ unallocDirtyConts
+      dirtyInode = case find isEmbedded dirtyConts of
+                     Nothing -> startInode
+                     Just c  -> startInode{ inoCont = c }
 
-  forM_ dirtyConts $ \c ->
-    when (not $ isEmbedded c) $ lift $ writeCont dev c
-    -- ^ Skip the inode's embedded Cont if we encounter it
-
---  mapM_ (lift . writeCont dev) contsToWrite
+  -- Persist all non-embedded, dirty conts
+  dbug ("dirtyConts = " ++ show dirtyConts) $ return ()
+  forM_ dirtyConts $ \c -> when (not $ isEmbedded c) $ lift $ writeCont dev c
 
   -- Finally, write the inode w/ all metadata updated
   lift $ writeInode dev $
-    dirtyInode {
-      inoFileSize = dbug ("UPDATING filesize: old = " ++ show (inoFileSize dirtyInode) ++ ", new = " ++ show newFileSz) newFileSz
-    }
+    dirtyInode { inoFileSize = newFileSz}
 
   dbug ("==== writeStream end ===") $ do
   return ()
@@ -770,15 +719,11 @@ readBlock dev c i = do
 
 writeCont :: Monad m =>
              BlockDevice m -> Cont -> m ()
-writeCont dev c =
-  dbug ("writeCont writing: " ++ show c) $  
-  bdWriteBlock dev (unCR $ address c) (encode c)
+writeCont dev c = bdWriteBlock dev (unCR $ address c) (encode c)
 
 writeInode :: (Monad m, Ord t, Serialize t, Show t) =>
               BlockDevice m -> Inode t -> m ()
-writeInode dev n =
-  dbug ("writeInode writing: " ++ show n) $ 
-  bdWriteBlock dev (unIR $ inoAddress n) (encode n)
+writeInode dev n = bdWriteBlock dev (unIR $ inoAddress n) (encode n)
 
 -- | Expands the given Cont into a Cont list containing itself followed by all
 -- of its continuation inodes
@@ -847,8 +792,6 @@ fileStat :: HalfsCapable b t r l m =>
          -> HalfsM m (FileStat t)
 fileStat fs inr = do
   inode <- drefInode (hsBlockDev fs) inr
---  dbug ("fileStat: Here's the dereferenced inode: " ++ show inode) $ do
---  t <- getTime
   return $ FileStat {
       fsInode      = inr
     , fsType       = error "fileStat NYI"

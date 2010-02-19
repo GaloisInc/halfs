@@ -25,7 +25,7 @@ import Tests.Instances ()
 import Tests.Types
 import Tests.Utils
 
-import Debug.Trace
+-- import Debug.Trace
 
 --------------------------------------------------------------------------------
 -- BlockDevice properties
@@ -58,11 +58,9 @@ propM_inodeSerdes _g dev =
   nAddrs <- computeNumAddrs (bdBlockSize dev) minInodeBlocks
               =<< minimalInodeSize (inoCreateTime inode)
   runH (decodeInode (bdBlockSize dev) (encode inode))
-    >>= assert . either (const False)
-                        (== inode{ inoCont =
-                                     (inoCont inode){ numAddrs = nAddrs }
-                                 }
-                        )
+    >>= assert . either (const False) (eq inode nAddrs)
+  where
+    eq inode na = (==) inode{ inoCont = (inoCont inode){ numAddrs = na } }
 
 propM_contSerdes :: HalfsCapable b UTCTime r l m =>
                      BDGeom
@@ -75,4 +73,4 @@ propM_contSerdes _g dev =
   -- arbitrary.
   nAddrs <- computeNumAddrs (bdBlockSize dev) minContBlocks =<< minimalContSize
   runH (decodeCont (bdBlockSize dev) (encode cont))
-    >>= assert . either (const False) (== cont { numAddrs = nAddrs })
+    >>= assert . either (const False) (== cont{ numAddrs = nAddrs })

@@ -26,7 +26,7 @@ import Tests.Instances           (printableBytes)
 import Tests.Types
 import Tests.Utils
 
-import Debug.Trace
+-- import Debug.Trace
 
 
 --------------------------------------------------------------------------------
@@ -70,7 +70,6 @@ propM_basicWRWR :: HalfsCapable b t r l m =>
                 -> BlockDevice m
                 -> PropertyM m ()
 propM_basicWRWR _g dev = do
---  trace ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>" $ do
   withFSData dev $ \fs rdirIR dataSz testData -> do
   let bm = hsBlockMap fs                         
 
@@ -108,11 +107,7 @@ propM_basicWRWR _g dev = do
   -- Non-truncating overwrite & read-back
   forAllM (choose (1, dataSz `div` 2))     $ \overwriteSz -> do 
   forAllM (choose (0, dataSz `div` 2 - 1)) $ \startByte   -> do
---   let overwriteSz = 22601
---       startByte   = 22398
   forAllM (printableBytes overwriteSz)     $ \newData     -> do
---  trace ("overwriteSz = " ++ show overwriteSz) $ do
---  trace ("startByte = " ++ show startByte) $ do
 
   e2 <- runH $ writeStream dev bm rdirIR (fromIntegral startByte) False newData
   case e2 of
@@ -132,8 +127,6 @@ propM_basicWRWR _g dev = do
                          newData
                          `BS.append`
                          bsDrop (startByte + overwriteSz) testData
---          trace ("length readBack == " ++ show (BS.length readBack) ++ ", length expected = " ++ show (BS.length expected)) $ do
---          trace ("readBack == expected: " ++ show (readBack == expected)) $ do
           assert (readBack == expected)
 
 -- | Tests truncate writes and read-backs of random size
@@ -142,7 +135,6 @@ propM_truncWRWR :: HalfsCapable b t r l m =>
                 -> BlockDevice m
                 -> PropertyM m ()
 propM_truncWRWR _g dev = do
-  trace (">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>") $ do
   withFSData dev $ \fs rdirIR dataSz testData -> do
   let bm = hsBlockMap fs                         
   -- Non-truncating write
@@ -157,10 +149,7 @@ propM_truncWRWR _g dev = do
       freeBlks <- sreadRef (bmNumFree bm) -- Free blks before truncate
 
       forAllM (choose (1, dataSz - dataSz' - 1)) $ \truncIdx -> do
-      trace ("dataSz = " ++ show dataSz) $ do                     
-      trace ("dataSz' = " ++ show dataSz') $ do                     
 --      let truncIdx = 18211
-      trace ("truncIdx = " ++ show truncIdx) $ do
 
       -- Truncating write
       e2 <- runH $ writeStream dev bm rdirIR (fromIntegral truncIdx) True testData'
@@ -173,22 +162,8 @@ propM_truncWRWR _g dev = do
           case ebs of
             Left e   -> fail $ "readStream failure in propM_truncWRWR: " ++ show e
             Right bs -> do
-              trace ("before prelim assert") $ do
               assert (BS.length bs >= BS.length testData')
-
-              trace ("length bs = " ++ show (BS.length bs)) $ do
-              trace ("length (bsTake dataSz' bs) = "
-                     ++ show (BS.length $ bsTake dataSz' bs)) $ do       
-              trace ("length testData' = " ++ show (BS.length testData')) $ do       
-
-              trace ("before primary assert") $ do
-
               assert (bsTake dataSz' bs == testData')
-
-              trace ("before penultimate assert") $ do
-
-              trace ("remaining #bytes = " ++ show (BS.length $ bsDrop dataSz' bs)) $ do
-
               assert (all (== truncSentinel) $ BS.unpack $ bsDrop dataSz' bs)
 
               -- Sanity check the BlockMap' free count
@@ -197,10 +172,8 @@ propM_truncWRWR _g dev = do
                                     -- this is just a lower bound
                     (dataSz - (dataSz' + truncIdx)) `div`
                       (fromIntegral $ bdBlockSize dev)
-              trace ("before last assert") $ do
               assert (minExpectedFree <= fromIntegral (freeBlks' - freeBlks))
 
-                 
 -- | Tests bounded reads of random offset and length
 propM_lengthWR :: HalfsCapable b t r l m =>
                   BDGeom
@@ -276,8 +249,6 @@ checkInodeMetadata fs inr expFileSz = do
   est <- runH $ fileStat fs inr
   case est of
     Left e   -> fail $ "Failed to obtain primitive fileStat data: " ++ show e
-    Right st -> do
-      trace ("fsSize st = " ++ show (fsSize st) ++ ", expFileSz = " ++ show expFileSz) $ do
-      assert $ fsSize st == fromIntegral expFileSz
-      trace ("checkInodeMetadata PASSED") $ return ()
+    Right st -> assert $ fsSize st == fromIntegral expFileSz
+                
 
