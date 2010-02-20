@@ -98,10 +98,10 @@ data Show t => FileStat t = FileStat {
     fsInode      :: InodeRef
   , fsType       :: FileType
   , fsMode       :: FileMode 
-  , fsNumLinks   :: Word64   -- ^ number of hardlinks to the file
+  , fsNumLinks   :: Word64   -- ^ Number of hardlinks to the file
   , fsUID        :: UserID
   , fsGID        :: GroupID
-  , fsSize       :: Word64   -- ^ file size, in bytes
+  , fsSize       :: Word64   -- ^ File size, in bytes
   , fsNumBlocks  :: Word64   -- ^ Number of blocks allocated
   , fsAccessTime :: t        -- ^ Time of last access
   , fsModTime    :: t        -- ^ Time of last data modification

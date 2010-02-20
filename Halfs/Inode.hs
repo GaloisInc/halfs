@@ -178,24 +178,15 @@ data Cont = Cont
 minimalInodeSize :: (Monad m, Ord t, Serialize t) => t -> m Word64
 minimalInodeSize t = do
   return $ fromIntegral $ BS.length $ encode $
-    let e = emptyInode
-              minInodeBlocks
-              t
-              t
-              t
-              RegularFile
-              (FileMode [] [] [])
-              nilInodeRef
-              nilInodeRef
-              rootUser
-              rootGroup
+    let e = emptyInode minInodeBlocks t t t RegularFile (FileMode [] [] [])
+                       nilInodeRef nilInodeRef rootUser rootGroup
         c = inoCont e
     in e{ inoCont = c{ blockAddrs = replicate (safeToInt minInodeBlocks) 0 } }
 
 -- | The size of a minimal Cont structure when serialized, in bytes.
 minimalContSize :: Monad m => m (Word64)
 minimalContSize = return $ fromIntegral $ BS.length $ encode $
-  (emptyCont minContBlocks nilContRef) {
+  (emptyCont minContBlocks nilContRef){
     blockAddrs = replicate (safeToInt minContBlocks) 0
   }
 
@@ -268,17 +259,7 @@ buildEmptyInode bd ftype fmode me mommy usr grp = do
   now     <- getTime
   minSize <- minimalInodeSize =<< return now
   nAddrs  <- computeNumAddrs (bdBlockSize bd) minInodeBlocks minSize
-  return $ emptyInode
-             nAddrs
-             now
-             now
-             now
-             ftype
-             fmode
-             me
-             mommy
-             usr
-             grp
+  return $ emptyInode nAddrs now now now ftype fmode me mommy usr grp
 
 emptyInode :: (Ord t, Serialize t) => 
               Word64   -- ^ number of block addresses
@@ -335,7 +316,8 @@ emptyCont nAddrs me =
 -- Inode stream functions
 
 -- | Provides a stream over the bytes governed by a given Inode and its
--- continuations.
+-- continuations.  This function does perform a write to update the inode
+-- metadta (e.g., for access time).
 -- 
 -- NB: This is a pretty primitive way to go about this, but it's probably
 -- worthwhile to get something working before revisiting it.  In particular, if
@@ -352,17 +334,17 @@ readStream :: HalfsCapable b t r l m =>
                                               --   including entire last block)
            -> HalfsM m ByteString             -- ^ Stream contents
 readStream dev startIR start mlen = do
-  startCont <- inoCont `fmap` drefInode dev startIR
-  if 0 == blockCount startCont
+  startInode <- drefInode dev startIR
+  if 0 == blockCount (inoCont startInode)
    then return BS.empty
    else do 
      dbug ("==== readStream begin ===") $ do
-     conts                         <- expandConts dev startCont
+     conts                         <- expandConts dev (inoCont startInode)
      (sContIdx, sBlkOff, sByteOff) <- getStreamIdx bs start conts
      dbug ("start = " ++ show start) $ do
      dbug ("(sContIdx, sBlkOff, sByteOff) = " ++ show (sContIdx, sBlkOff, sByteOff)) $ do
 
-     case mlen of
+     rslt <- case mlen of
        Just len | len == 0 -> return BS.empty
        _                   -> do
          case genericDrop sContIdx conts of
@@ -397,6 +379,10 @@ readStream dev startIR start mlen = do
              dbug ("==== readStream end ===") $ return ()
              return $ 
                (maybe id bsTake mlen) $ header `BS.append` fullBlocks
+     
+     now <- getTime
+     lift $ writeInode dev $ startInode { inoAccessTime = now }
+     return rslt                                         
   where
     bs        = bdBlockSize dev
     readB n b = lift $ readBlock dev n b
@@ -519,12 +505,14 @@ writeStream dev bm startIR start trunc bytes       = do
   dbug ("dirtyConts = " ++ show dirtyConts) $ return ()
   forM_ dirtyConts $ \c -> when (not $ isEmbedded c) $ lift $ writeCont dev c
 
-  -- Finally, write the inode w/ all metadata updated
+  -- Finally, update inode metadata and persist it
+  now <- getTime 
   lift $ writeInode dev $
-    dirtyInode { inoFileSize = newFileSz}
-
-  dbug ("==== writeStream end ===") $ do
-  return ()
+    dirtyInode { inoFileSize   = newFileSz
+               , inoAccessTime = now
+               , inoModifyTime = now
+               }
+  dbug ("==== writeStream end ===") $ return ()
   where
     isEmbedded = (==) nilContRef . address
     bs         = bdBlockSize dev
@@ -792,18 +780,17 @@ fileStat :: HalfsCapable b t r l m =>
          -> HalfsM m (FileStat t)
 fileStat fs inr = do
   inode <- drefInode (hsBlockDev fs) inr
-  return $ FileStat {
-      fsInode      = inr
-    , fsType       = error "fileStat NYI"
-    , fsMode       = error "fileStat NYI"
-    , fsNumLinks   = error "fileStat NYI"
-    , fsUID        = error "fileStat NYI"
-    , fsGID        = error "fileStat NYI"
-    , fsSize       = inoFileSize inode
+  return $ FileStat
+    { fsInode      = inr
+    , fsType       = inoFileType   inode
+    , fsMode       = inoMode       inode
+    , fsNumLinks   = error "fileStat: fsNumLinks NYI"
+    , fsUID        = inoUser       inode
+    , fsGID        = inoGroup      inode
+    , fsSize       = inoFileSize   inode
     , fsNumBlocks  = error "fileStat NYI"
-    , fsAccessTime = error "fileStat NYI"
-    , fsModTime    = error "fileStat NYI"
---    , fsChangeTime = t
+    , fsAccessTime = inoAccessTime inode
+    , fsModTime    = inoModifyTime inode
     }
     
 -- "Safe" (i.e., emits runtime assertions on overflow) versions of
@@ -1010,7 +997,6 @@ instance Serialize Cont where
     let na = error $ "numAddrs has not been populated via Data.Serialize.get "
                   ++ "for Cont; did you forget to use the " 
                   ++ "Inode.decodeCont wrapper?"
-
     return Cont
            { address      = addr
            , continuation = cont

@@ -71,7 +71,7 @@ newfs dev = do
     buildEmptyInodeEnc 
       dev
       Directory
-      (FileMode [Read,Write,Execute] [] [])
+      rootDirPerms
       -- ^ TODO: Should we have the caller provide root dir perms?
       rdirInode
       nilInodeRef
@@ -407,10 +407,15 @@ getUser = return rootUser
 getGroup :: Monad m => m GroupID
 getGroup = return rootGroup
 
--- TODO: Placeholder
+-- TODO: Placeholder, these need to come from the execution environment
+rootDirPerms :: FileMode
+rootDirPerms = FileMode [Read,Write,Execute] [] []
+
+-- TODO: Placeholder, these need to come from the execution environment
 defaultDirPerms :: FileMode
 defaultDirPerms = FileMode [Read,Write,Execute] [Read, Execute] [Read, Execute]
 
--- TODO: Placeholder
+-- TODO: Placeholder, these need to come from the execution environment
 defaultFilePerms :: FileMode
 defaultFilePerms = FileMode [Read,Write] [Read] [Read]
+

@@ -19,6 +19,7 @@ import Halfs.Directory
 import Halfs.Errors
 import Halfs.HalfsState
 import Halfs.Monad
+import Halfs.Protection
 import Halfs.SuperBlock
 import System.Device.BlockDevice
 import System.Device.File
@@ -27,6 +28,8 @@ import System.Device.ST
 
 import Tests.Instances
 import Tests.Types
+
+-- import Debug.Trace
 
 type DevCtor = BDGeom -> IO (Maybe (BlockDevice IO))
 
@@ -119,6 +122,46 @@ sreadRef = ($!) (run . readRef)
 runH :: HalfsCapable b t r l m =>
         HalfsM m a -> PropertyM m (Either HalfsError a)
 runH = run . runHalfs
+
+execE :: (Monad m ,Show a) =>
+         String -> String -> m (Either a b) -> PropertyM m b
+execE nm descrip act =
+  run act >>= \ea -> case ea of
+    Left e  ->
+      fail $ "Unexpected error in " ++ nm ++ " ("
+           ++ descrip ++ "): " ++ show e
+    Right x -> return x
+
+execH :: (Monad m) => String -> String -> HalfsT m b -> PropertyM m b
+execH nm descrip = execE nm descrip . runHalfs
+
+checkFileStat :: (HalfsCapable b t r l m, Integral a) =>
+                 (Bool -> PropertyM m ())
+              -> FileStat t 
+              -> a           -- expected filesize
+              -> FileType    -- expected filetype
+              -> FileMode    -- expected filemode
+              -> UserID      -- expected userid
+              -> GroupID     -- expected groupid
+              -> (t -> Bool) -- access time predicate
+              -> (t -> Bool) -- modification time predicate
+              -> PropertyM m ()
+checkFileStat assrt st expFileSz expFileTy expMode
+              expUsr expGrp accessp modifyp = do
+  mapM_ assrt
+    [ fsSize st == fromIntegral expFileSz
+    , fsType st == expFileTy
+    , fsMode st == expMode
+    , fsUID  st == expUsr
+    , fsGID  st == expGrp
+    , accessp (fsAccessTime st)
+    , modifyp (fsModTime st)
+    ]
+
+assertMsg :: Monad m => String -> String -> Bool -> PropertyM m ()
+assertMsg _ _ True       = return ()
+assertMsg ctx dtls False = do
+  fail $ "(" ++ ctx ++ ": " ++ dtls ++ ")"
 
 
 --------------------------------------------------------------------------------

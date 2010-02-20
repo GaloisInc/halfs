@@ -10,7 +10,7 @@ import Data.Serialize
 import Prelude hiding (read)
 import System.FilePath
 import Test.QuickCheck hiding (numTests)
-import Test.QuickCheck.Monadic
+import Test.QuickCheck.Monadic 
 import qualified Data.ByteString as BS
 import qualified Data.List as L
 import qualified Data.Map as M
@@ -152,7 +152,7 @@ propM_dirConstructionOK _g dev = do
   fs <- runH (newfs dev) >> mountOK dev
 
   -- Check that the root directory is present and empty
-  exec "openDir /" (runHalfs $ openDir fs rootPath) >>= \dh -> do
+  exec "openDir /" (openDir fs rootPath) >>= \dh -> do
     assert =<< (== Clean) `fmap` sreadRef (dhState dh)
     assert =<< M.null     `fmap` sreadRef (dhContents dh)
     
@@ -168,14 +168,14 @@ propM_dirConstructionOK _g dev = do
   quickRemountCheck fs
 
   where
-    test fs p      = do
-      exec ("mkdir " ++ p) (runHalfs $ mkdir fs perms p)
-      isEmpty fs =<< exec ("openDir " ++ p) (runHalfs $ openDir fs p)
+    test fs p = do
+      exec ("mkdir " ++ p) (mkdir fs perms p)
+      isEmpty fs =<< exec ("openDir " ++ p) (openDir fs p)
     -- 
-    isEmpty fs dh  = do
-      assert =<< null `fmap` exec ("readDir") (runHalfs $ readDir fs dh)
+    isEmpty fs dh = do
+      assert =<< null `fmap` exec ("readDir") (readDir fs dh)
     -- 
-    exec           = execE "propM_dirConstructionOK"
+    exec     = execH "propM_dirConstructionOK"
 
 -- | Ensure that a new filesystem populated with a handful of
 -- directories permits creation of a file.
@@ -186,11 +186,11 @@ propM_fileCreationOK _g dev = do
   let fooPath = rootPath </> "foo"
       fp      = fooPath </> "f1"
 
-  exec "mkdir /foo"            $ runHalfs $ mkdir fs perms fooPath
-  fh0 <- exec "create /foo/f1" $ runHalfs $ openFile fs fp True
-  exec "close /foo/f1 (1)"     $ runHalfs $ closeFile fs fh0
-  fh1 <- exec "reopen /foo/f1" $ runHalfs $ openFile fs fp False
-  exec "close /foo/f1 (2)"     $ runHalfs $ closeFile fs fh1
+  exec "mkdir /foo"            $ mkdir fs perms fooPath
+  fh0 <- exec "create /foo/f1" $ openFile fs fp True
+  exec "close /foo/f1 (1)"     $ closeFile fs fh0
+  fh1 <- exec "reopen /foo/f1" $ openFile fs fp False
+  exec "close /foo/f1 (2)"     $ closeFile fs fh1
 
   e <- runH $ openFile fs fp True
   case e of
@@ -201,32 +201,39 @@ propM_fileCreationOK _g dev = do
 
   quickRemountCheck fs
   where
-    exec = execE "propM_fileCreationOK"
+    exec = execH "propM_fileCreationOK"
 
 -- | Ensure that simple write/readback works for a new file in a new
 -- filesystem
 propM_fileWR :: HalfsProp
 propM_fileWR _g dev = do
   fs <- runH (newfs dev) >> mountOK dev
-  fh <- exec "create /myfile" $
-        runHalfs $ openFile fs (rootPath </> "myfile") True
+  fh <- exec "create /myfile" $ openFile fs (rootPath </> "myfile") True
 
   forAllM (FileWR `fmap` choose (1, maxBytes)) $ \(FileWR fileSz) -> do
   forAllM (printableBytes fileSz)              $ \fileData        -> do 
 
-  exec "bytes -> /myfile" $ runHalfs $ write fs fh 0 fileData
+  let checkFileStat' atp mtp = do
+        (usr, grp) <- (,) `fmap` getUser `ap` getGroup
+        st         <- exec "fstat /myfile" $ fstat fs "/myfile"
+        checkFileStat (assrt "FileStat OK") st fileSz RegularFile
+                      defaultFilePerms usr grp atp mtp
 
-  -- Check that fstat reports what we expect
-  st <- exec "fstat /myfile" $ runHalfs $ fstat fs "/myfile"
-  assert $ fsSize st == fromIntegral fileSz
+  t1 <- time
+  exec "bytes -> /myfile" $ write fs fh 0 fileData
+  checkFileStat' (t1 <) (t1 <)
 
   -- Readback and check
-  fileData' <- exec "bytes <- /myfile" $ runHalfs $ read fs fh 0 (fromIntegral fileSz)
-  assert $ fileData == fileData'
+  t2 <- time
+  fileData' <- exec "bytes <- /myfile" $ read fs fh 0 (fromIntegral fileSz)
+  checkFileStat' (t2 <) (< t2)
+  assrt "File readback OK" $ fileData == fileData'
 
   quickRemountCheck fs
   where
-    exec = execE "propM_fileWR"
+    time     = exec "obtain time" getTime
+    exec     = execH "propM_fileWR"
+    assrt    = assertMsg "propM_fileWR"
     maxBytes = fromIntegral $ bdBlockSize dev * bdNumBlocks dev `div` 8
 
 -- | Sanity check: multiple threads making many new directories
@@ -246,16 +253,18 @@ propM_dirMutexOK _g dev = do
   replicateM n (run $ readChan ch)
   -- ^ barrier
 
-  dh     <- exec "openDir /" $ runHalfs $ openDir fs "/"
-  dnames <- exec "readDir /" $ runHalfs $ map fst `fmap` readDir fs dh
+  dh     <- exec "openDir /" $ openDir fs "/"
+  dnames <- exec "readDir /" $ map fst `fmap` readDir fs dh
 
-  assert $ L.sort dnames == L.sort (concat nmss)
+  assertMsg "propM_dirMutexOK" "Directory contents are coherent" $
+    L.sort dnames == L.sort (concat nmss)
+
   quickRemountCheck fs 
   where
     maxDirs    = 50 -- } v
     maxLen     = 40 -- } arbitrary but fit into small devices
     maxThreads = 8
-    exec       = execE "propM_dirMutexOK"
+    exec       = execH "propM_dirMutexOK"
     ng f       = L.nub `fmap` resize maxDirs (listOf1 $ f maxLen)
     -- 
     genNm :: Int -> Gen [String]
@@ -264,7 +273,6 @@ propM_dirMutexOK _g dev = do
     threadTest fs ch nms _n = do
       runHalfs $ mapM_ (mkdir fs perms . (</>) rootPath) nms
       writeChan ch ()
-      
 
 
 --------------------------------------------------------------------------------
@@ -279,14 +287,6 @@ perms = FileMode [Read,Write,Execute] [Read,Execute] [Read,Execute]
 unexpectedErr :: (Monad m, Show a) => a -> PropertyM m ()
 unexpectedErr = fail . (++) "Expected failure, but not: " . show
 
-execE :: (Monad m, Show a) => String -> String -> m (Either a b) -> PropertyM m b
-execE nm descrip f =
-  run f >>= \ea -> case ea of
-    Left e  ->
-      fail $ "Unexpected error in " ++ nm ++ " ("
-           ++ descrip ++ "): " ++ show e
-    Right x -> return x
-
 rootPath :: FilePath
 rootPath = [pathSeparator]
 
@@ -297,11 +297,11 @@ quickRemountCheck :: HalfsCapable b t r l m =>
                      HalfsState b r l m
                   -> PropertyM m ()
 quickRemountCheck fs = do
-  dump0 <- exec "Get dump0" $ runHalfs (dumpfs fs)
+  dump0 <- exec "Get dump0" $ dumpfs fs
   unmountOK fs
   fs'   <- mountOK (hsBlockDev fs)
-  dump1 <- exec "Get dump1" $ runHalfs (dumpfs fs')
+  dump1 <- exec "Get dump1" $ dumpfs fs'
   assert (dump0 == dump1)
   unmountOK fs'
   where
-    exec = execE "quickRemountCheck"
+    exec = execH "quickRemountCheck"
