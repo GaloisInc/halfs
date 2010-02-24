@@ -38,6 +38,7 @@ import Halfs.Inode ( InodeRef(..)
                    )
 import Halfs.Protection
 import Halfs.Types
+import Halfs.Utils
 import System.Device.BlockDevice
 
 
@@ -119,7 +120,7 @@ openDirectory :: HalfsCapable b t r l m =>
               -> InodeRef
               -> HalfsM m (DirHandle r l)
 openDirectory fs inr = do
-  mdh <- withLockedRscRef (hsDHMap fs) (lkupINR . readRef)
+  mdh <- withLockedRscRef (hsDHMap fs) (lookupRM inr)
   case mdh of
     Just dh -> return dh
     Nothing -> do
@@ -135,20 +136,17 @@ openDirectory fs inr = do
               `fmap` newRef (M.fromList $ map deName dirEnts `zip` dirEnts)
               `ap`   newRef Clean
               `ap`   newLock
-      
-      withLockedRscRef (hsDHMap fs) $ \dhMapRef -> do
+      withLockedRscRef (hsDHMap fs) $ \ref -> do
         -- If there's now a DirHandle in the map for our inode ref, prefer it to
         -- the one we just created; this is to safely avoid race conditions
         -- without extending the critical section over this entire function,
         -- which performs a potentially expensive BlockDevice read.
-        mdh' <- lkupINR (readRef dhMapRef)
+        mdh' <- lookupRM inr ref
         case mdh' of
           Just dh' -> return dh'
           Nothing  -> do
-            modifyRef dhMapRef (M.insert inr dh)
+            modifyRef ref (M.insert inr dh)
             return dh
-  where
-    lkupINR = liftM (M.lookup inr)
 
 closeDirectory :: HalfsCapable b t r l m =>
                   HalfsState b r l m 
@@ -185,7 +183,7 @@ addDirEnt_lckd :: HalfsCapable b t r l m =>
 addDirEnt_lckd dh name ir u g mode ftype = do
   -- Precond: (dhLock dh) is currently held (can we assert this? TODO)
   -- begin sanity check
-  mfound <- liftM (M.lookup name) (readRef $ dhContents dh)
+  mfound <- lookupRM name (dhContents dh)
   maybe (return ()) (const $ throwError $ HalfsObjectExists name) mfound
   -- end sanity check
   modifyRef (dhContents dh) (M.insert name $ DirEnt name ir u g mode ftype)
@@ -220,7 +218,7 @@ findInDir' :: HalfsCapable b t r l m =>
            -> FileType
            -> HalfsM m (Maybe DirectoryEntry)
 findInDir' dh fname ftype = do
-  mde <- withLock (dhLock dh) $ liftM (M.lookup fname) (readRef $ dhContents dh)
+  mde <- withLock (dhLock dh) $ lookupRM fname (dhContents dh)
   case mde of
     Nothing -> return Nothing
     Just de -> return $ if de `isFileType` ftype then Just de else Nothing

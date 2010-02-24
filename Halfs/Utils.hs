@@ -1,5 +1,8 @@
 module Halfs.Utils where
 
+import qualified Data.Map as M
+
+import Halfs.Classes
 import Halfs.Monad
 
 fmapFst :: (a -> b) -> (a, c) -> (b, c)
@@ -14,3 +17,9 @@ unfoldrM f x = do
   case r of
     Nothing    -> return []
     Just (a,b) -> liftM (a:) $ unfoldrM f b
+
+lookupM :: (Ord k, Monad m) => k -> m (M.Map k v) -> m (Maybe v)
+lookupM = liftM . M.lookup
+
+lookupRM :: (Ord k, Reffable r m) => k -> r (M.Map k v) -> m (Maybe v)
+lookupRM k = lookupM k . readRef

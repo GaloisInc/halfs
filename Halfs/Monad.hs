@@ -110,6 +110,3 @@ withLockedRscRef :: HalfsCapable b t r l m =>
 withLockedRscRef lr f = withLock (lrLock lr) $ f (lrRsc lr)
 
 
-
-
-

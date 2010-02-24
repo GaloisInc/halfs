@@ -37,6 +37,7 @@ import Data.ByteString(ByteString)
 import qualified Data.ByteString as BS
 import Data.Char
 import Data.List (find, genericDrop, genericLength, genericTake, genericSplitAt)
+import qualified Data.Map as M
 import Data.Serialize 
 import Data.Serialize.Get
 import Data.Serialize.Put
@@ -317,15 +318,8 @@ emptyCont nAddrs me =
 -- Inode stream functions
 
 -- | Provides a stream over the bytes governed by a given Inode and its
--- continuations.  This function does perform a write to update the inode
--- metadta (e.g., for access time).
--- 
--- NB: This is a pretty primitive way to go about this, but it's probably
--- worthwhile to get something working before revisiting it.  In particular, if
--- this works well enough we might want to consider making this a little less
--- specific to the particulars of the way that the Inode tracks its block
--- addresses, counts, continuations, etc., and perhaps build enumerators for
--- inode/block/byte sequences over inodes.
+-- continuations.  This function performs a write to update inode metadata
+-- (e.g., access time).
 readStream :: HalfsCapable b t r l m => 
               HalfsState b r l m  -- ^ Filesystem state
            -> InodeRef            -- ^ Starting inode reference
@@ -334,7 +328,9 @@ readStream :: HalfsCapable b t r l m =>
                                   --   until end of stream, including
                                   --   entire last block)
            -> HalfsM m ByteString -- ^ Stream contents
-readStream fs startIR start mlen = do
+readStream fs startIR start mlen = 
+  withLockedInode fs startIR $ const $ do  
+  -- ====================== Begin inode critical section ======================
   startInode <- drefInode dev startIR
   if 0 == blockCount (inoCont startInode)
    then return BS.empty
@@ -384,6 +380,7 @@ readStream fs startIR start mlen = do
      now <- getTime
      lift $ writeInode dev $ startInode { inoAccessTime = now }
      return rslt                                         
+  -- ======================= End inode critical section =======================
   where
     bs        = bdBlockSize dev
     readB n b = lift $ readBlock dev n b
@@ -409,10 +406,11 @@ writeStream :: HalfsCapable b t r l m =>
             -> ByteString         -- ^ Data to write
             -> HalfsM m ()
 writeStream _ _ _ _ bytes | 0 == BS.length bytes = return ()
-writeStream fs startIR start trunc bytes         = do
-  -- TODO: locking
+writeStream fs startIR start trunc bytes         =
+  withLockedInode fs startIR $ const $ do     
+  -- ====================== Begin inode critical section ======================
 
-  -- NB: This implementation currently 'flattens' Contig/Discontig block groups
+  -- NB: The implementation currently 'flattens' Contig/Discontig block groups
   -- from the BlockMap allocator (see allocFill and truncUnalloc), which will
   -- force us to treat them as Discontig when we unallocate.  We may want to
   -- have the Conts hold onto these block groups directly and split/merge them
@@ -522,12 +520,13 @@ writeStream fs startIR start trunc bytes         = do
                , inoModifyTime  = now
                }
   dbug ("==== writeStream end ===") $ return ()
+  -- ======================= End inode critical section =======================
   where
-    dev        = hsBlockDev fs
-    bm         = hsBlockMap fs
-    isEmbedded = (==) nilContRef . address
-    bs         = bdBlockSize dev
-    len        = fromIntegral $ BS.length bytes
+    dev         = hsBlockDev fs
+    bm          = hsBlockMap fs
+    isEmbedded  = (==) nilContRef . address
+    bs          = bdBlockSize dev
+    len         = fromIntegral $ BS.length bytes
 
 
 --------------------------------------------------------------------------------
@@ -555,6 +554,37 @@ fileStat fs inr = do
 
 --------------------------------------------------------------------------------
 -- Inode/Cont stream helper & utility functions 
+
+withLockedInode :: HalfsCapable b t r l m =>
+                   HalfsState b r l m
+                -> InodeRef
+                -> (l -> HalfsM m a)
+                -> HalfsM m a
+withLockedInode fs inr =
+  -- Inode Locking: We currently use a single reader/writer lock tracked by the
+  -- InodeRef -> lock map in HalfsState.  The entries in this map are transient
+  -- and only intended to protect access to the stream on a per-call basis to
+  -- either readStream or writeStream (i.e., reads and writes are atomic).
+  hbracket
+    -- before critical section
+    (do inodeLock <-
+          withLockedRscRef (hsInodeLockMap fs) $ \ref -> do
+            mlock <- lookupRM inr ref
+            case mlock of
+              Just lk -> return lk
+              Nothing -> do
+                   lk <- newLock
+                   modifyRef ref (M.insert inr lk)
+                   return lk
+        lock inodeLock
+        return inodeLock
+    ) 
+    -- after critical section
+    (\inodeLock -> do      
+       -- Pull the transient inode lock out of the inode -> lock map
+       withLockedRscRef (hsInodeLockMap fs) (flip modifyRef $ M.delete inr)
+       release inodeLock
+    )
 
 -- | A wrapper around Data.Serialize.decode that populates transient fields.  We
 -- do this to avoid occupying valuable on-disk inode space where possible.  Bare
