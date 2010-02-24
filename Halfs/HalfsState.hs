@@ -10,7 +10,7 @@ module Halfs.HalfsState
 import Data.Map as M
 import Halfs.BlockMap            (BlockMap)
 import Halfs.SuperBlock          (SuperBlock) 
-import Halfs.Types               (InodeRef, DirHandle)
+import Halfs.Types               (DirHandle, InodeRef, LockedRscRef)
 import System.Device.BlockDevice (BlockDevice)
 
 data HalfsState b r l m = HalfsState {
@@ -18,10 +18,11 @@ data HalfsState b r l m = HalfsState {
   , hsBlockMap         :: BlockMap b r l
   , hsSuperBlock       :: r SuperBlock
   , hsLock             :: l
-  , hsDHMap            :: r (M.Map InodeRef (DirHandle r l))
+  , hsDHMap            :: LockedRscRef l r (M.Map InodeRef (DirHandle r l))
     -- ^ Tracks active directory handles; we probably want to add a
     -- (refcounting?) expiry mechanism so that the size of the map is
     -- bounded.  TODO.
-  , hsDHMapLock        :: l
-    -- ^ Mutex for the directory handle map                         
+  , hsInodeLockMap     :: LockedRscRef l r (M.Map InodeRef l)
+    -- ^ Tracks inode locks. For now, these are single reader/writer
+    -- locks.
   }

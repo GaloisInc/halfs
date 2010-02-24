@@ -74,15 +74,13 @@ propM_basicWRWR :: HalfsCapable b t r l m =>
 propM_basicWRWR _g dev = do
   withFSData dev $ \fs rdirIR dataSz testData -> do
   let dataSzI      = fromIntegral dataSz
-      doWrite      = writeStream dev (hsBlockMap fs) rdirIR
-      doRead       = readStream dev rdirIR
       checkWriteMD t = \sz eb -> chk sz eb (t <) (t <)
       checkReadMD  t = \sz eb -> chk sz eb (t <) (t >)
       chk          = checkInodeMetadata fs rdirIR Directory rootDirPerms
                                         rootUser rootGroup
 
   -- Expected error: attempted write past end of (empty) stream
-  e0 <- runH $ doWrite (bdBlockSize dev) False testData
+  e0 <- runH $ writeStream fs rdirIR (bdBlockSize dev) False testData
   case e0 of
     Left (HalfsInvalidStreamIndex idx) -> assert (idx == bdBlockSize dev)
     _                                  -> assert False
@@ -102,12 +100,12 @@ propM_basicWRWR _g dev = do
 
   -- Non-truncating write & read-back
   t1 <- time
-  exec "Non-truncating write" $ doWrite 0 False testData
+  exec "Non-truncating write" $ writeStream fs rdirIR 0 False testData
   checkWriteMD t1 dataSzI expBlks
 
   -- Check readback contents
   t2  <- time
-  bs1 <- exec "Readback 1" $ doRead 0 Nothing
+  bs1 <- exec "Readback 1" $ readStream fs rdirIR 0 Nothing
   checkReadMD t2 dataSz expBlks 
   assert (testData == bsTake dataSz bs1)
   -- ^ We leave off the trailing bytes of what we read, since reading until the
@@ -119,12 +117,13 @@ propM_basicWRWR _g dev = do
   forAllM (printableBytes overwriteSz)     $ \newData     -> do
 
   t3 <- time
-  exec "Non-trunc overwrite" $ doWrite (fromIntegral startByte) False newData
+  exec "Non-trunc overwrite" $
+    writeStream fs rdirIR (fromIntegral startByte) False newData
   checkWriteMD t3 dataSzI expBlks
 
   -- Check readback contents
   t4  <- time
-  bs2 <- exec "Readback 2" $ doRead 0 Nothing
+  bs2 <- exec "Readback 2" $ readStream fs rdirIR 0 Nothing
   checkReadMD t4 dataSz expBlks
   let readBack = bsTake dataSz bs2
       expected = bsTake startByte testData
@@ -145,8 +144,6 @@ propM_truncWRWR :: HalfsCapable b t r l m =>
 propM_truncWRWR _g dev = do
   withFSData dev $ \fs rdirIR dataSz testData -> do
   let numFree      = sreadRef $ bmNumFree $ hsBlockMap fs
-      doRead       = readStream dev rdirIR
-      doWrite      = writeStream dev (hsBlockMap fs) rdirIR
       checkWriteMD t = \sz eb -> chk sz eb (t <) (t <)
       checkReadMD  t = \sz eb -> chk sz eb (t <) (t >)
       chk          = checkInodeMetadata fs rdirIR Directory rootDirPerms
@@ -157,7 +154,7 @@ propM_truncWRWR _g dev = do
 
   -- Non-truncating write
   t1 <- time
-  exec "Non-truncating write" $ doWrite 0 False testData
+  exec "Non-truncating write" $ writeStream fs rdirIR 0 False testData
   checkWriteMD t1 dataSz (expBlks dataSz) 
 
   forAllM (choose (dataSz `div` 8, dataSz `div` 4)) $ \dataSz'   -> do
@@ -168,12 +165,13 @@ propM_truncWRWR _g dev = do
 
   -- Truncating write
   t2 <- time
-  exec "Truncating write" $ doWrite (fromIntegral truncIdx) True testData'
+  exec "Truncating write" $
+    writeStream fs rdirIR (fromIntegral truncIdx) True testData'
   checkWriteMD t2 dataSz'' (expBlks dataSz'')
 
   -- Read until the end of the stream and check truncation       
   t3 <- time
-  bs <- exec "Readback" $ doRead (fromIntegral truncIdx) Nothing
+  bs <- exec "Readback" $ readStream fs rdirIR (fromIntegral truncIdx) Nothing
   checkReadMD t3 dataSz'' (expBlks dataSz'')
   assert (BS.length bs >= BS.length testData')
   assert (bsTake dataSz' bs == testData')
@@ -207,7 +205,7 @@ propM_lengthWR _g dev = do
 
   -- Write random data to the stream
   t1 <- time
-  exec "Populate" $ writeStream dev (hsBlockMap fs) rdirIR 0 False testData
+  exec "Populate" $ writeStream fs rdirIR 0 False testData
   checkWriteMD t1 dataSz expBlks 
 
   -- If possible, read a minimum of one full inode + 1 byte worth of data
@@ -226,7 +224,7 @@ propM_lengthWR _g dev = do
 
   t2 <- time
   bs <- exec "Bounded readback" $
-          readStream dev rdirIR stIdxW64 (Just $ fromIntegral readLen')
+          readStream fs rdirIR stIdxW64 (Just $ fromIntegral readLen')
   assert (bs == bsTake readLen' (bsDrop startIdx testData))
   checkReadMD t2 dataSz expBlks 
   where

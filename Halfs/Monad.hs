@@ -6,8 +6,10 @@ module Halfs.Monad
   , HalfsM
   , HalfsT (runHalfs)
   , hbracket
+  , newLockedRscRef
   , withLock
   , withLockM
+  , withLockedRscRef
   )
   where
 
@@ -15,6 +17,7 @@ import Control.Monad.Error
 
 import Halfs.Classes
 import Halfs.Errors
+import Halfs.Types
 
 newtype HalfsT m a = HalfsT { runHalfs :: m (Either HalfsError a) }
 type HalfsM m a    = HalfsT m a
@@ -92,4 +95,21 @@ withLockM l act = do
   release l
   return res
          
-  
+--------------------------------------------------------------------------------
+-- Locked resource reference utility functions
+
+newLockedRscRef :: (Lockable l m, Functor m, Reffable r m) =>
+                   rsc
+                -> m (LockedRscRef l r rsc)
+newLockedRscRef initial = LockedRscRef `fmap` newLock `ap` newRef initial
+
+withLockedRscRef :: HalfsCapable b t r l m =>
+                    LockedRscRef l r rsc
+                 -> (r rsc -> HalfsM m rslt)
+                 -> HalfsM m rslt
+withLockedRscRef lr f = withLock (lrLock lr) $ f (lrRsc lr)
+
+
+
+
+

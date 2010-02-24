@@ -107,7 +107,7 @@ syncDirectory fs dh = do
       -- braindead, though.  Instead, we should do something like tracking the
       -- end of the stream and appending new contents there.
 
-      writeStream (hsBlockDev fs) (hsBlockMap fs) (dhInode dh) 0 True toWrite
+      writeStream fs (dhInode dh) 0 True toWrite
       modifyRef (dhState dh) dirStTransClean
   
     OnlyDeleted -> fail "syncDirectory for OnlyDeleted DirHandle state NYI"
@@ -118,28 +118,37 @@ openDirectory :: HalfsCapable b t r l m =>
                  HalfsState b r l m
               -> InodeRef
               -> HalfsM m (DirHandle r l)
-openDirectory fs inr = 
-  withLock (hsDHMapLock fs) $ do
-    -- Begin critical section over the DirHandle map (hsDHMapLock)
-    mdh <- liftM (M.lookup inr) (readRef $ hsDHMap fs)
-    case mdh of
-      Just dh -> return dh
-      Nothing  -> do
-        -- No DirHandle for this InodeRef, so pull in the directory info
-        -- from the dev and make one.
-        rawDirBytes <- readStream (hsBlockDev fs) inr 0 Nothing
-        dirEnts     <- if BS.null rawDirBytes
-                       then do return []
-                       else case decode rawDirBytes of 
-                         Left msg -> throwError $ HalfsDecodeFail_Directory msg
-                         Right x  -> return x
-        dh <- DirHandle inr
-                `fmap` newRef (M.fromList $ map deName dirEnts `zip` dirEnts)
-                `ap`   newRef Clean
-                `ap`   newLock
-        modifyRef (hsDHMap fs) (M.insert inr dh)
-        return dh
-    -- End critical section over the DirHandle map (hsDHMapLock)
+openDirectory fs inr = do
+  mdh <- withLockedRscRef (hsDHMap fs) (lkupINR . readRef)
+  case mdh of
+    Just dh -> return dh
+    Nothing -> do
+      -- No DirHandle for this InodeRef, so pull in the directory info
+      -- from the dev and make one.
+      rawDirBytes <- readStream fs inr 0 Nothing
+      dirEnts     <- if BS.null rawDirBytes
+                     then do return []
+                     else case decode rawDirBytes of 
+                       Left msg -> throwError $ HalfsDecodeFail_Directory msg
+                       Right x  -> return x
+      dh <- DirHandle inr
+              `fmap` newRef (M.fromList $ map deName dirEnts `zip` dirEnts)
+              `ap`   newRef Clean
+              `ap`   newLock
+      
+      withLockedRscRef (hsDHMap fs) $ \dhMapRef -> do
+        -- If there's now a DirHandle in the map for our inode ref, prefer it to
+        -- the one we just created; this is to safely avoid race conditions
+        -- without extending the critical section over this entire function,
+        -- which performs a potentially expensive BlockDevice read.
+        mdh' <- lkupINR (readRef dhMapRef)
+        case mdh' of
+          Just dh' -> return dh'
+          Nothing  -> do
+            modifyRef dhMapRef (M.insert inr dh)
+            return dh
+  where
+    lkupINR = liftM (M.lookup inr)
 
 closeDirectory :: HalfsCapable b t r l m =>
                   HalfsState b r l m 

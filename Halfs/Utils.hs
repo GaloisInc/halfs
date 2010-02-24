@@ -1,6 +1,6 @@
 module Halfs.Utils where
 
-import Control.Monad
+import Halfs.Monad
 
 fmapFst :: (a -> b) -> (a, c) -> (b, c)
 fmapFst f (x,y) = (f x, y)

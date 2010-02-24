@@ -327,14 +327,14 @@ emptyCont nAddrs me =
 -- addresses, counts, continuations, etc., and perhaps build enumerators for
 -- inode/block/byte sequences over inodes.
 readStream :: HalfsCapable b t r l m => 
-              BlockDevice m                   -- ^ Block device
-           -> InodeRef                        -- ^ Starting inode reference
-           -> Word64                          -- ^ Starting stream (byte) offset
-           -> Maybe Word64                    -- ^ Stream length (Nothing =>
-                                              --   until end of stream,
-                                              --   including entire last block)
-           -> HalfsM m ByteString             -- ^ Stream contents
-readStream dev startIR start mlen = do
+              HalfsState b r l m  -- ^ Filesystem state
+           -> InodeRef            -- ^ Starting inode reference
+           -> Word64              -- ^ Starting stream (byte) offset
+           -> Maybe Word64        -- ^ Stream length (Nothing => read
+                                  --   until end of stream, including
+                                  --   entire last block)
+           -> HalfsM m ByteString -- ^ Stream contents
+readStream fs startIR start mlen = do
   startInode <- drefInode dev startIR
   if 0 == blockCount (inoCont startInode)
    then return BS.empty
@@ -387,6 +387,7 @@ readStream dev startIR start mlen = do
   where
     bs        = bdBlockSize dev
     readB n b = lift $ readBlock dev n b
+    dev       = hsBlockDev fs
     -- 
     -- Calculate the remaining blocks (up to len, if applicable) to read from
     -- the given Cont.  f is just a length modifier.
@@ -401,15 +402,14 @@ readStream dev startIR start mlen = do
 -- are freed.  Whenever the data to be written exceeds the the end of the
 -- stream, the trunc flag is ignored.
 writeStream :: HalfsCapable b t r l m =>
-               BlockDevice m   -- ^ The block device
-            -> BlockMap b r l  -- ^ The block map
-            -> InodeRef        -- ^ Starting inode ref
-            -> Word64          -- ^ Starting stream (byte) offset
-            -> Bool            -- ^ Truncating write?
-            -> ByteString      -- ^ Data to write
+               HalfsState b r l m -- ^ The filesystem state
+            -> InodeRef           -- ^ Starting inode ref
+            -> Word64             -- ^ Starting stream (byte) offset
+            -> Bool               -- ^ Truncating write?
+            -> ByteString         -- ^ Data to write
             -> HalfsM m ()
-writeStream _ _ _ _ _ bytes | 0 == BS.length bytes = return ()
-writeStream dev bm startIR start trunc bytes       = do
+writeStream _ _ _ _ bytes | 0 == BS.length bytes = return ()
+writeStream fs startIR start trunc bytes         = do
   -- TODO: locking
 
   -- NB: This implementation currently 'flattens' Contig/Discontig block groups
@@ -523,9 +523,34 @@ writeStream dev bm startIR start trunc bytes       = do
                }
   dbug ("==== writeStream end ===") $ return ()
   where
+    dev        = hsBlockDev fs
+    bm         = hsBlockMap fs
     isEmbedded = (==) nilContRef . address
     bs         = bdBlockSize dev
     len        = fromIntegral $ BS.length bytes
+
+
+--------------------------------------------------------------------------------
+-- Inode operations
+
+fileStat :: HalfsCapable b t r l m =>
+            HalfsState b r l m
+         -> InodeRef
+         -> HalfsM m (FileStat t)
+fileStat fs inr = do
+  inode <- drefInode (hsBlockDev fs) inr
+  return $ FileStat
+    { fsInode      = inr
+    , fsType       = inoFileType    inode
+    , fsMode       = inoMode        inode
+    , fsNumLinks   = error "fileStat: fsNumLinks NYI"
+    , fsUID        = inoUser        inode
+    , fsGID        = inoGroup       inode
+    , fsSize       = inoFileSize    inode
+    , fsNumBlocks  = inoAllocBlocks inode
+    , fsAccessTime = inoAccessTime  inode
+    , fsModTime    = inoModifyTime  inode
+    }
 
 
 --------------------------------------------------------------------------------
@@ -785,25 +810,6 @@ getStreamIdx blkSz start conts  = do
       in
         sBlkOff >= blkCnt && not (sBlkOff == 0 && blkCnt == 0)
 
-fileStat :: HalfsCapable b t r l m =>
-            HalfsState b r l m
-         -> InodeRef
-         -> HalfsM m (FileStat t)
-fileStat fs inr = do
-  inode <- drefInode (hsBlockDev fs) inr
-  return $ FileStat
-    { fsInode      = inr
-    , fsType       = inoFileType    inode
-    , fsMode       = inoMode        inode
-    , fsNumLinks   = error "fileStat: fsNumLinks NYI"
-    , fsUID        = inoUser        inode
-    , fsGID        = inoGroup       inode
-    , fsSize       = inoFileSize    inode
-    , fsNumBlocks  = inoAllocBlocks inode
-    , fsAccessTime = inoAccessTime  inode
-    , fsModTime    = inoModifyTime  inode
-    }
-    
 -- "Safe" (i.e., emits runtime assertions on overflow) versions of
 -- BS.{take,drop,replicate}.  We want the efficiency of these functions without
 -- the danger of an unguarded fromIntegral on the Word64 types we use throughout

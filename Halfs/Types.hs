@@ -54,6 +54,12 @@ instance Serialize ContRef where
 refSize :: Word64
 refSize = 8
 
+-- | A simple locked resource reference
+data LockedRscRef l r rsc = LockedRscRef
+  { lrLock :: l
+  , lrRsc  :: r rsc
+  }
+
 --------------------------------------------------------------------------------
 -- Common Directory and File Types
 

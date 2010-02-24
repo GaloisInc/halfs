@@ -110,11 +110,11 @@ mount dev = do
        then do
          sb' <- lift $ writeSB dev sb{ unmountClean = False }
          HalfsState dev
-           `fmap` lift (readBlockMap dev)
-           `ap`   newRef sb'
-           `ap`   newLock
-           `ap`   newRef M.empty
-           `ap`   newLock 
+           `fmap` lift (readBlockMap dev) -- blockmap
+           `ap`   newRef sb'              -- superblock 
+           `ap`   newLock                 -- filesystem lock
+           `ap`   newLockedRscRef M.empty -- Locked map: InodeRef -> DirHandle
+           `ap`   newLockedRscRef M.empty -- Locked map: InodeRef -> l
        else throwError $ HalfsMountFailed DirtyUnmount
 
 -- | Unmounts the given filesystem.  After this operation completes, the
@@ -122,20 +122,20 @@ mount dev = do
 unmount :: (HalfsCapable b t r l m) =>
            HalfsState b r l m -> HalfsM m ()
 unmount fs@HalfsState{hsBlockDev = dev, hsSuperBlock = sbRef} = 
-  withLock (hsLock fs)      $ do 
-  withLock (hsDHMapLock fs) $ do   
+  withLock (hsLock fs)          $ do 
+  withLockedRscRef (hsDHMap fs) $ \dhMapRef -> do 
   -- ^ Grab everything; we do not want to permit other filesystem actions to
-  -- occur in other threads during or after teardown. Needs testing: TODO
+  -- occur in other threads during or after teardown. Needs testing. TODO
+
   sb <- readRef sbRef
   if (unmountClean sb)
    then throwError HalfsUnmountFailed
    else do
-
      -- TODO:
-     -- * Persist any dirty data structures (dirents, files w/ buffered IO, etc)
+     -- * Persist all dirty data structures (dirents, files w/ buffered IO, etc.)
 
-     -- Sync all directories; clean state is a no-op
-     mapM_ (syncDirectory fs) =<< M.elems `fmap` readRef (hsDHMap fs)
+     -- Sync all directories; clean directory state is a no-op
+     mapM_ (syncDirectory fs) =<< M.elems `fmap` readRef dhMapRef
 
      lift $ bdFlush dev
    
@@ -265,7 +265,7 @@ read :: (HalfsCapable b t r l m) =>
      -> HalfsM m ByteString -- ^ the data read
 read fs fh byteOff len = do
   -- TODO: check fh modes & perms (e.g., write only etc)
-  readStream (hsBlockDev fs) (fhInode fh) byteOff (Just len)
+  readStream fs (fhInode fh) byteOff (Just len)
 
 write :: (HalfsCapable b t r l m) =>
          HalfsState b r l m -- ^ the filesystem
@@ -275,7 +275,7 @@ write :: (HalfsCapable b t r l m) =>
       -> HalfsM m ()
 write fs fh byteOff bytes = 
   -- TODO: check fh modes & perms (e.g., read only, not owner, etc)
-  writeStream (hsBlockDev fs) (hsBlockMap fs) (fhInode fh) byteOff False bytes
+  writeStream fs (fhInode fh) byteOff False bytes
 
 flush :: (HalfsCapable b t r l m) =>
          HalfsState b r l m -> FileHandle -> HalfsM m ()
