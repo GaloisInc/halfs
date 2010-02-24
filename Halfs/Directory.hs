@@ -80,7 +80,7 @@ makeDirectory fs parentIR dname user group perms =
          lift $ bdWriteBlock dev (inodeRefToBlockAddr thisIR) bstr
        
          -- Add 'dname' to parent directory's contents
-         addDirEnt' pdh dname thisIR user group perms Directory
+         addDirEnt_lckd pdh dname thisIR user group perms Directory
          return thisIR
   -- End critical section over parent's DirHandle 
   where
@@ -152,33 +152,33 @@ closeDirectory fs dh = do
 -- | Add a directory entry for a file, directory, or symlink; expects
 -- that the item does not already exist in the directory.  Thread-safe.
 addDirEnt :: HalfsCapable b t r l m =>
-           DirHandle r l
-        -> String
-        -> InodeRef
-        -> UserID
-        -> GroupID
-        -> FileMode
-        -> FileType
-        -> HalfsM m ()
+             DirHandle r l
+          -> String
+          -> InodeRef
+          -> UserID
+          -> GroupID
+          -> FileMode
+          -> FileType
+          -> HalfsM m ()
 addDirEnt dh name ir u g mode ftype =
-  withLock (dhLock dh) $ addDirEnt' dh name ir u g mode ftype
+  withLock (dhLock dh) $ addDirEnt_lckd dh name ir u g mode ftype
   -- By default, always acquire the DirHandle lock!
 
-addDirEnt' :: HalfsCapable b t r l m =>
-              DirHandle r l
-           -> String
-           -> InodeRef
-           -> UserID
-           -> GroupID
-           -> FileMode
-           -> FileType
-           -> HalfsM m ()
-addDirEnt' dh name ir u g mode ftype = do
+addDirEnt_lckd :: HalfsCapable b t r l m =>
+                  DirHandle r l
+               -> String
+               -> InodeRef
+               -> UserID
+               -> GroupID
+               -> FileMode
+               -> FileType
+               -> HalfsM m ()
+addDirEnt_lckd dh name ir u g mode ftype = do
+  -- Precond: (dhLock dh) is currently held (can we assert this? TODO)
   -- begin sanity check
   mfound <- liftM (M.lookup name) (readRef $ dhContents dh)
   maybe (return ()) (const $ throwError $ HalfsObjectExists name) mfound
   -- end sanity check
-  -- TODO: Assert that the (dhLock dh) is currently held
   modifyRef (dhContents dh) (M.insert name $ DirEnt name ir u g mode ftype)
   modifyRef (dhState dh) dirStTransAdd
 

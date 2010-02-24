@@ -264,7 +264,7 @@ read :: (HalfsCapable b t r l m) =>
      -> Word64              -- ^ the number of bytes to read
      -> HalfsM m ByteString -- ^ the data read
 read fs fh byteOff len = do
-  -- TODO: check fh modes & perms (e.g., write only)
+  -- TODO: check fh modes & perms (e.g., write only etc)
   readStream (hsBlockDev fs) (fhInode fh) byteOff (Just len)
 
 write :: (HalfsCapable b t r l m) =>
@@ -276,7 +276,6 @@ write :: (HalfsCapable b t r l m) =>
 write fs fh byteOff bytes = 
   -- TODO: check fh modes & perms (e.g., read only, not owner, etc)
   writeStream (hsBlockDev fs) (hsBlockMap fs) (fhInode fh) byteOff False bytes
-  -- TODO: process errors from writeStream?
 
 flush :: (HalfsCapable b t r l m) =>
          HalfsState b r l m -> FileHandle -> HalfsM m ()

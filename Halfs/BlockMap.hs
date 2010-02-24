@@ -253,19 +253,18 @@ unallocBlocks :: (Monad m, Reffable r m, Bitmapped b m, Lockable l m) =>
                  BlockMap b r l -- ^ the block map
               -> BlockGroup
               -> m ()
-unallocBlocks = unallocBlocks' True
+unallocBlocks bm bg = withLockM (bmLock bm) $ unallocBlocks_lckd bm bg
 
-unallocBlocks' :: (Monad m, Reffable r m, Bitmapped b m, Lockable l m) =>
-                  Bool           -- ^ acquire the blockmap lock?
-               -> BlockMap b r l -- ^ the block map
-               -> BlockGroup
-               -> m ()
-unallocBlocks' acqBMLock bm (Discontig exts) = do
-  (if acqBMLock then withLockM (bmLock bm) else id) $ do
-  mapM_ (unallocBlocks' False bm . Contig) exts
-unallocBlocks' acqBMLock bm (Contig ext)     = do
-  (if acqBMLock then withLockM (bmLock bm) else id) $ do
-  avail    <- numFreeBlocks' False bm
+unallocBlocks_lckd :: (Monad m, Reffable r m, Bitmapped b m, Lockable l m) =>
+                      BlockMap b r l -- ^ the block map
+                   -> BlockGroup
+                   -> m ()
+unallocBlocks_lckd bm (Discontig exts) = do
+  -- Precond: (bmLock bm) is currently held (can we assert this? TODO)
+  mapM_ (unallocBlocks_lckd bm . Contig) exts
+unallocBlocks_lckd bm (Contig ext)     = do
+  -- Precond: (bmLock bm) is currently held (can we assert this? TODO)
+  avail    <- numFreeBlocks_lckd bm
   freeTree <- readRef $! bmFreeTree bm
   forM_ (blkRangeExt ext)  $ clearBit $ bmUsedMap bm
   writeRef (bmFreeTree bm) $ insert ext freeTree
@@ -275,15 +274,14 @@ unallocBlocks' acqBMLock bm (Contig ext)     = do
 numFreeBlocks :: (Monad m, Reffable r m, Bitmapped b m, Lockable l m) =>
                  BlockMap b r l
                -> m Word64
-numFreeBlocks = numFreeBlocks' True
+numFreeBlocks bm = withLockM (bmLock bm) $ numFreeBlocks_lckd bm
 
-numFreeBlocks' :: (Monad m, Reffable r m, Bitmapped b m, Lockable l m) =>
-                  Bool
-               -> BlockMap b r l
-               -> m Word64
-numFreeBlocks' acquireBMLock bm = 
-  (if acquireBMLock then withLockM (bmLock bm) else id) $ do
-    readRef $ bmNumFree bm
+numFreeBlocks_lckd :: (Monad m, Reffable r m, Bitmapped b m, Lockable l m) =>
+                      BlockMap b r l
+                   -> m Word64
+numFreeBlocks_lckd bm =
+  -- Precond: (bmLock bm) is currently held (can we assert this? TODO)  
+  readRef $ bmNumFree bm
 
 findSpace :: Word64 -> FreeTree -> (BlockGroup, FreeTree)
 findSpace goalSz freeTree =
