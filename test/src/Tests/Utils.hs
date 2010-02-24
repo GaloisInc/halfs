@@ -3,6 +3,7 @@
 module Tests.Utils
 where
 
+import Data.Word
 import Control.Monad.ST
 import System.Directory
 import System.IO
@@ -21,6 +22,7 @@ import Halfs.HalfsState
 import Halfs.Monad
 import Halfs.Protection
 import Halfs.SuperBlock
+import Halfs.Utils (divCeil)
 import System.Device.BlockDevice
 import System.Device.File
 import System.Device.Memory
@@ -28,8 +30,6 @@ import System.Device.ST
 
 import Tests.Instances
 import Tests.Types
-
--- import Debug.Trace
 
 type DevCtor = BDGeom -> IO (Maybe (BlockDevice IO))
 
@@ -136,24 +136,25 @@ execH :: (Monad m) => String -> String -> HalfsT m b -> PropertyM m b
 execH nm descrip = execE nm descrip . runHalfs
 
 checkFileStat :: (HalfsCapable b t r l m, Integral a) =>
-                 (Bool -> PropertyM m ())
-              -> FileStat t 
+                 FileStat t 
               -> a           -- expected filesize
               -> FileType    -- expected filetype
               -> FileMode    -- expected filemode
               -> UserID      -- expected userid
               -> GroupID     -- expected groupid
+              -> a           -- expected allocated block count 
               -> (t -> Bool) -- access time predicate
               -> (t -> Bool) -- modification time predicate
               -> PropertyM m ()
-checkFileStat assrt st expFileSz expFileTy expMode
-              expUsr expGrp accessp modifyp = do
-  mapM_ assrt
-    [ fsSize st == fromIntegral expFileSz
-    , fsType st == expFileTy
-    , fsMode st == expMode
-    , fsUID  st == expUsr
-    , fsGID  st == expGrp
+checkFileStat st expFileSz expFileTy expMode
+              expUsr expGrp expNumBlocks accessp modifyp = do
+  mapM_ assert
+    [ fsSize      st == fromIntegral expFileSz
+    , fsType      st == expFileTy
+    , fsMode      st == expMode
+    , fsUID       st == expUsr
+    , fsGID       st == expGrp
+    , fsNumBlocks st == fromIntegral expNumBlocks
     , accessp (fsAccessTime st)
     , modifyp (fsModTime st)
     ]
@@ -162,6 +163,28 @@ assertMsg :: Monad m => String -> String -> Bool -> PropertyM m ()
 assertMsg _ _ True       = return ()
 assertMsg ctx dtls False = do
   fail $ "(" ++ ctx ++ ": " ++ dtls ++ ")"
+
+-- Using the current allocation scheme and inode/cont distinction,
+-- determine how many blocks (of the given size, in bytes) are required
+-- to store the given data size, in bytes.
+calcExpBlockCount :: Integral a =>
+                     Word64 -- block size
+                  -> Word64 -- addresses (#blocks) per inode
+                  -> Word64 -- addresses (#blocks) per cont
+                  -> a      -- data size
+                  -> a      -- expected number of blocks
+calcExpBlockCount bs api apc dataSz = fromIntegral $ 
+  if dsz > bpi
+  then 1                           -- inode block 
+       + api                       -- number of blocks in full inode
+       + (dsz - bpi) `divCeil` bpc -- number of blocks required for conts
+       + (dsz - bpi) `divCeil` bs  -- number of blocks rquired for data
+  else 1                           -- inode block
+       + (dsz `divCeil` bs)        -- number of blocks required for data
+  where
+    dsz = fromIntegral dataSz
+    bpi = api * bs
+    bpc = apc * bs
 
 
 --------------------------------------------------------------------------------

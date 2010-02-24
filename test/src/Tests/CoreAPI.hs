@@ -20,7 +20,7 @@ import Halfs.Classes
 import Halfs.CoreAPI
 import Halfs.Errors
 import Halfs.HalfsState
-import Halfs.Inode
+import qualified Halfs.Inode as IN
 import Halfs.Monad
 import Halfs.SuperBlock
 import Halfs.Types
@@ -69,7 +69,7 @@ propM_initAndMountOK _g dev = do
     Right sb -> do 
       assert $ 1 == version sb
       assert $ unmountClean sb
-      assert $ nilInodeRef /= rootDir sb
+      assert $ IN.nilInodeRef /= rootDir sb
     
       -- Mount the filesystem & ensure integrity with newfs contents
       runH (mount dev) >>= \efs -> case efs of 
@@ -213,11 +213,14 @@ propM_fileWR _g dev = do
   forAllM (FileWR `fmap` choose (1, maxBytes)) $ \(FileWR fileSz) -> do
   forAllM (printableBytes fileSz)              $ \fileData        -> do 
 
+  (_, _, api, apc) <- exec "Obtaining sizes" $ IN.getSizes (bdBlockSize dev)
+  let expBlks = calcExpBlockCount (bdBlockSize dev) api apc fileSz
+
   let checkFileStat' atp mtp = do
         (usr, grp) <- (,) `fmap` getUser `ap` getGroup
         st         <- exec "fstat /myfile" $ fstat fs "/myfile"
-        checkFileStat (assrt "FileStat OK") st fileSz RegularFile
-                      defaultFilePerms usr grp atp mtp
+        checkFileStat st fileSz RegularFile defaultFilePerms
+                      usr grp expBlks atp mtp
 
   t1 <- time
   exec "bytes -> /myfile" $ write fs fh 0 fileData
@@ -226,7 +229,7 @@ propM_fileWR _g dev = do
   -- Readback and check
   t2 <- time
   fileData' <- exec "bytes <- /myfile" $ read fs fh 0 (fromIntegral fileSz)
-  checkFileStat' (t2 <) (< t2)
+  checkFileStat' (t2 <) (t2 >)
   assrt "File readback OK" $ fileData == fileData'
 
   quickRemountCheck fs

@@ -36,15 +36,12 @@ import Tests.Utils
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [ -- Inode module invariants
-    exec 10 "Inode module invariants" propM_inodeModuleInvs
-  ,
-    -- Inode stream write/read/(over)write/read property
+   exec 10 "Inode module invariants" propM_inodeModuleInvs
+  , -- Inode stream write/read/(over)write/read property
    exec 10 "Basic WRWR" propM_basicWRWR
-  ,
-    -- Inode stream write/read/(truncating)write/read property
+  , -- Inode stream write/read/(truncating)write/read property
     exec 10 "Truncating WRWR" propM_truncWRWR
-  , 
-    -- Inode length-specific stream write/read
+  , -- Inode length-specific stream write/read
     exec 10 "Length-specific WR" propM_lengthWR
   ]
   where
@@ -54,9 +51,9 @@ qcProps quick =
 --------------------------------------------------------------------------------
 -- Property Implementations
 
--- Note that in many of these properties we use compare timestamps using < and
--- >; these may need to be <= and >= if the underlying clock resolution is too
--- coarse.
+-- Note that in many of these properties we compare timestamps using <
+-- and >; these may need to be <= and >= if the underlying clock
+-- resolution is too coarse!
 
 -- | Tests Inode module invariants
 propM_inodeModuleInvs :: HalfsCapable b t r l m =>
@@ -76,11 +73,12 @@ propM_basicWRWR :: HalfsCapable b t r l m =>
                 -> PropertyM m ()
 propM_basicWRWR _g dev = do
   withFSData dev $ \fs rdirIR dataSz testData -> do
-  let doWrite      = writeStream dev (hsBlockMap fs) rdirIR
+  let dataSzI      = fromIntegral dataSz
+      doWrite      = writeStream dev (hsBlockMap fs) rdirIR
       doRead       = readStream dev rdirIR
-      checkWriteMD = mkCheckWriteMD chk
-      checkReadMD  = mkCheckReadMD chk
-      chk sz       = checkInodeMetadata fs rdirIR sz Directory rootDirPerms
+      checkWriteMD t = \sz eb -> chk sz eb (t <) (t <)
+      checkReadMD  t = \sz eb -> chk sz eb (t <) (t >)
+      chk          = checkInodeMetadata fs rdirIR Directory rootDirPerms
                                         rootUser rootGroup
 
   -- Expected error: attempted write past end of (empty) stream
@@ -99,18 +97,21 @@ propM_basicWRWR _g dev = do
    _                                   -> assert False
 -}
 
-   -- Non-truncating write & read-back
+  (_, _, api, apc) <- exec "Obtaining sizes" $ getSizes (bdBlockSize dev)
+  let expBlks = calcExpBlockCount (bdBlockSize dev) api apc dataSz
+
+  -- Non-truncating write & read-back
   t1 <- time
   exec "Non-truncating write" $ doWrite 0 False testData
-  checkWriteMD dataSz t1
+  checkWriteMD t1 dataSzI expBlks
 
   -- Check readback contents
   t2  <- time
   bs1 <- exec "Readback 1" $ doRead 0 Nothing
+  checkReadMD t2 dataSz expBlks 
   assert (testData == bsTake dataSz bs1)
   -- ^ We leave off the trailing bytes of what we read, since reading until the
   -- end of the stream will include contents of the whole last block
-  checkReadMD dataSz t2
 
   -- Non-truncating overwrite & read-back
   forAllM (choose (1, dataSz `div` 2))     $ \overwriteSz -> do 
@@ -119,11 +120,12 @@ propM_basicWRWR _g dev = do
 
   t3 <- time
   exec "Non-trunc overwrite" $ doWrite (fromIntegral startByte) False newData
-  checkWriteMD dataSz t3
+  checkWriteMD t3 dataSzI expBlks
 
   -- Check readback contents
   t4  <- time
   bs2 <- exec "Readback 2" $ doRead 0 Nothing
+  checkReadMD t4 dataSz expBlks
   let readBack = bsTake dataSz bs2
       expected = bsTake startByte testData
                  `BS.append`
@@ -131,7 +133,6 @@ propM_basicWRWR _g dev = do
                  `BS.append`
                  bsDrop (startByte + overwriteSz) testData
   assert (readBack == expected)
-  checkReadMD dataSz t4
   where
     time = exec "obtain time" getTime
     exec = execH "propM_basicWRWR"
@@ -143,44 +144,47 @@ propM_truncWRWR :: HalfsCapable b t r l m =>
                 -> PropertyM m ()
 propM_truncWRWR _g dev = do
   withFSData dev $ \fs rdirIR dataSz testData -> do
-  let bm           = hsBlockMap fs
+  let numFree      = sreadRef $ bmNumFree $ hsBlockMap fs
       doRead       = readStream dev rdirIR
       doWrite      = writeStream dev (hsBlockMap fs) rdirIR
-      checkWriteMD = mkCheckWriteMD chk
-      checkReadMD  = mkCheckReadMD chk
-      chk sz       = checkInodeMetadata fs rdirIR sz Directory rootDirPerms
+      checkWriteMD t = \sz eb -> chk sz eb (t <) (t <)
+      checkReadMD  t = \sz eb -> chk sz eb (t <) (t >)
+      chk          = checkInodeMetadata fs rdirIR Directory rootDirPerms
                                         rootUser rootGroup
+
+  (_, _, api, apc) <- exec "Obtaining sizes" $ getSizes (bdBlockSize dev)
+  let expBlks = calcExpBlockCount (bdBlockSize dev) api apc
+
   -- Non-truncating write
   t1 <- time
   exec "Non-truncating write" $ doWrite 0 False testData
-  checkWriteMD dataSz t1
+  checkWriteMD t1 dataSz (expBlks dataSz) 
 
   forAllM (choose (dataSz `div` 8, dataSz `div` 4)) $ \dataSz'   -> do
   forAllM (printableBytes dataSz')                  $ \testData' -> do 
   forAllM (choose (1, dataSz - dataSz' - 1))        $ \truncIdx  -> do
-
-  freeBlks <- sreadRef (bmNumFree bm) -- Free blks before truncate
+  let dataSz'' = dataSz' + truncIdx
+  freeBlks <- numFree -- Free blks before truncate
 
   -- Truncating write
   t2 <- time
   exec "Truncating write" $ doWrite (fromIntegral truncIdx) True testData'
-  checkWriteMD (dataSz' + truncIdx) t2
+  checkWriteMD t2 dataSz'' (expBlks dataSz'')
 
   -- Read until the end of the stream and check truncation       
   t3 <- time
   bs <- exec "Readback" $ doRead (fromIntegral truncIdx) Nothing
-  checkReadMD (dataSz' + truncIdx) t3
+  checkReadMD t3 dataSz'' (expBlks dataSz'')
   assert (BS.length bs >= BS.length testData')
   assert (bsTake dataSz' bs == testData')
   assert (all (== truncSentinel) $ BS.unpack $ bsDrop dataSz' bs)
 
-  -- Sanity check the BlockMap' free count
-  freeBlks' <- sreadRef (bmNumFree bm)
-  let minExpectedFree = -- may also have frees on Cont storage, so
-                        -- this is just a lower bound
-        (dataSz - (dataSz' + truncIdx)) `div`
-          (fromIntegral $ bdBlockSize dev)
-  assert (minExpectedFree <= fromIntegral (freeBlks' - freeBlks))
+  -- Sanity check the BlockMap's free count
+  freeBlks' <- numFree  -- Free blks after truncate
+  let minExpectedFree = -- May also have frees on Cont storage, so this
+                        -- is just a lower bound
+        (dataSz - dataSz'') `div` (fromIntegral $ bdBlockSize dev)
+  assert $ minExpectedFree <= fromIntegral (freeBlks' - freeBlks)
   where
     time = exec "obtain time" getTime
     exec = execH "propM_truncWRWR"
@@ -192,16 +196,19 @@ propM_lengthWR :: HalfsCapable b t r l m =>
                -> PropertyM m ()
 propM_lengthWR _g dev = do
   withFSData dev $ \fs rdirIR dataSz testData -> do 
-  let blkSz        = bdBlockSize dev
-      bm           = hsBlockMap fs
-      checkWriteMD = mkCheckWriteMD chk
-      checkReadMD  = mkCheckReadMD chk
-      chk sz       = checkInodeMetadata fs rdirIR sz Directory rootDirPerms
-                                        rootUser rootGroup
+  let blkSz          = bdBlockSize dev
+      checkWriteMD t = \sz eb -> chk sz eb (t <) (t <)
+      checkReadMD  t = \sz eb -> chk sz eb (t <) (t >)
+      chk            = checkInodeMetadata fs rdirIR Directory rootDirPerms
+                                          rootUser rootGroup 
+
+  (_, _, api, apc) <- exec "Obtaining sizes" $ getSizes (bdBlockSize dev)
+  let expBlks = calcExpBlockCount blkSz api apc dataSz
+
   -- Write random data to the stream
   t1 <- time
-  exec "Populate" $ writeStream dev bm rdirIR 0 False testData
-  checkWriteMD dataSz t1
+  exec "Populate" $ writeStream dev (hsBlockMap fs) rdirIR 0 False testData
+  checkWriteMD t1 dataSz expBlks 
 
   -- If possible, read a minimum of one full inode + 1 byte worth of data
   -- into the next inode to push on boundary conditions & spill arithmetic.
@@ -221,7 +228,7 @@ propM_lengthWR _g dev = do
   bs <- exec "Bounded readback" $
           readStream dev rdirIR stIdxW64 (Just $ fromIntegral readLen')
   assert (bs == bsTake readLen' (bsDrop startIdx testData))
-  checkReadMD dataSz t2
+  checkReadMD t2 dataSz expBlks 
   where
     time = exec "obtain time" getTime
     exec = execH "propM_lengthWR"
@@ -260,27 +267,17 @@ withData dev f = do
 checkInodeMetadata :: (HalfsCapable b t r l m, Integral a) =>
                       HalfsState b r l m
                    -> InodeRef
-                   -> a           -- expected filesize
                    -> FileType    -- expected filetype
                    -> FileMode    -- expected filemode
                    -> UserID      -- expected userid
                    -> GroupID     -- expected groupid
+                   -> a           -- expected filesize
+                   -> a           -- expected allocated block count 
                    -> (t -> Bool) -- access time predicate
                    -> (t -> Bool) -- modification time predicate
                    -> PropertyM m ()
-checkInodeMetadata fs inr expFileSz expFileTy
-                   expMode expUsr expGrp accessp modifyp = do
+checkInodeMetadata fs inr expFileTy expMode expUsr expGrp
+                   expFileSz expNumBlocks accessp modifyp = do
   st <- execH "checkInodeMetadata" "filestat" $ fileStat fs inr
-  checkFileStat assert st expFileSz expFileTy
-                expMode expUsr expGrp accessp modifyp
-
--- Note that we use compare timestamps using < and > below; these may need
--- to be <= and >= if the underlying clock resolution is too coarse.
-mkCheckWriteMD, mkCheckReadMD ::
-  Ord a =>
-     (t -> (a -> Bool) -> (a -> Bool) -> u)
-  -> (t -> a -> u)
-mkCheckWriteMD chk = \sz t -> chk sz (t <) (t <) -- access time and modificatin
-                                                 -- time both after given sample
-mkCheckReadMD  chk = \sz t -> chk sz (t <) (< t) -- access time later than sample
-                                                 -- modification time before sample
+  checkFileStat st expFileSz expFileTy expMode
+                expUsr expGrp expNumBlocks accessp modifyp

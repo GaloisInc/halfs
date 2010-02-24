@@ -21,6 +21,7 @@ module Halfs.Inode
   , computeNumContAddrsM
   , decodeCont
   , decodeInode
+  , getSizes
   , minimalContSize
   , minimalInodeSize
   , minInodeBlocks
@@ -35,7 +36,7 @@ import Control.Exception
 import Data.ByteString(ByteString)
 import qualified Data.ByteString as BS
 import Data.Char
-import Data.List (find, genericDrop, genericTake, genericSplitAt)
+import Data.List (find, genericDrop, genericLength, genericTake, genericSplitAt)
 import Data.Serialize 
 import Data.Serialize.Get
 import Data.Serialize.Put
@@ -53,7 +54,7 @@ import Halfs.Utils
 
 import System.Device.BlockDevice
 
--- import Debug.Trace
+--import Debug.Trace
 dbug :: String -> a -> a
 dbug _ = id
 --dbug = trace
@@ -439,6 +440,7 @@ writeStream dev bm startIR start trunc bytes       = do
       allocdInConts = sum $ map ((*bs) . blockCount) $
                       genericDrop (sContIdx + 1) conts0
       alreadyAllocd = allocdInBlk + allocdInStart + allocdInConts
+      -- ^ already allocated bytes _from the start offset_ to end of stream
       bytesToAlloc  = if alreadyAllocd > len then 0 else len - alreadyAllocd
       blksToAlloc   = bytesToAlloc `divCeil` bs
       contsToAlloc  = (blksToAlloc - availBlks (last conts0)) `divCeil` apc
@@ -447,6 +449,7 @@ writeStream dev bm startIR start trunc bytes       = do
                       then start + len
                       else inoFileSize startInode + bytesToAlloc
 
+  dbug ("trunc         = " ++ show trunc)         $ do
   dbug ("alreadyAllocd = " ++ show alreadyAllocd) $ do
   dbug ("bytesToAlloc  = " ++ show bytesToAlloc)  $ do
   dbug ("blksToAlloc   = " ++ show blksToAlloc)   $ do
@@ -489,10 +492,10 @@ writeStream dev bm startIR start trunc bytes       = do
   -- If this is a truncating write where we're not growing the region, free all
   -- blocks/Conts beyond in the leftover region endpoint and fix up the chain
   -- terminator.
-  (conts2, unallocDirtyConts) <-
+  (conts2, unallocDirtyConts, numBlksFreed) <-
     if trunc && bytesToAlloc == 0
     then truncUnalloc dev bm start len conts1
-    else return (conts1, [])
+    else return (conts1, [], 0)
   assert (length conts2 > 0 && length conts2 <= length conts1) $ return ()
 
   assert (null allocDirtyConts || null unallocDirtyConts) $ return ()
@@ -505,12 +508,18 @@ writeStream dev bm startIR start trunc bytes       = do
   dbug ("dirtyConts = " ++ show dirtyConts) $ return ()
   forM_ dirtyConts $ \c -> when (not $ isEmbedded c) $ lift $ writeCont dev c
 
+  -- Metadata stuff
+  assert (blksToAlloc + contsToAlloc == 0 || numBlksFreed == 0) $ return ()
+  let newBlockCount = inoAllocBlocks dirtyInode
+                      + blksToAlloc + contsToAlloc - numBlksFreed
+
   -- Finally, update inode metadata and persist it
   now <- getTime 
   lift $ writeInode dev $
-    dirtyInode { inoFileSize   = newFileSz
-               , inoAccessTime = now
-               , inoModifyTime = now
+    dirtyInode { inoFileSize    = newFileSz
+               , inoAllocBlocks = newBlockCount
+               , inoAccessTime  = now
+               , inoModifyTime  = now
                }
   dbug ("==== writeStream end ===") $ return ()
   where
@@ -552,15 +561,16 @@ decodeCont blkSz bs = do
 -- given inode chain's block lists.  Newly allocated new conts go at the end of
 -- the given cont chain, and the result is the final cont chain to write data
 -- into.
-allocFill :: HalfsCapable b t r l m => 
-             BlockDevice m              -- ^ The block device
-          -> BlockMap b r l             -- ^ The block map to use for allocation
-          -> (Cont -> Word64)           -- ^ Available blocks function
-          -> Word64                     -- ^ Number of blocks to allocate
-          -> Word64                     -- ^ Number of conts to allocate
-          -> [Cont]                     -- ^ Chain to extend and fill
-          -> HalfsM m ([Cont], [Cont])  -- ^ Extended cont chain,
-                                        -- terminating subchain of dirty conts
+allocFill ::
+  HalfsCapable b t r l m => 
+     BlockDevice m              -- ^ The block device
+  -> BlockMap b r l             -- ^ The block map to use for allocation
+  -> (Cont -> Word64)           -- ^ Available blocks function
+  -> Word64                     -- ^ Number of blocks to allocate
+  -> Word64                     -- ^ Number of conts to allocate
+  -> [Cont]                     -- ^ Chain to extend and fill
+  -> HalfsM m ([Cont], [Cont])  -- ^ Extended cont chain, terminating subchain
+                                -- of dirty conts, number of blocks allocated
 allocFill _   _  _     0           _            existing = return (existing, [])
 allocFill dev bm avail blksToAlloc contsToAlloc existing = do
   newConts <- allocConts 
@@ -593,20 +603,18 @@ allocFill dev bm avail blksToAlloc contsToAlloc existing = do
   return (newChain, dirtyConts)
   where
     allocBlocks = do
-      let n = blksToAlloc
       -- currently "flattens" BlockGroup; see comment in writeStream
-      mbg <- lift $ BM.allocBlocks bm n
+      mbg <- lift $ BM.allocBlocks bm blksToAlloc
       case mbg of
         Nothing -> throwError HalfsAllocFailed
         Just bg -> return $ BM.blkRangeBG bg
     -- 
     allocConts =
-      let n = contsToAlloc in
-      if 0 == n
+      if 0 == contsToAlloc
       then return []
       else do
         -- TODO: Catch allocation errors and unalloc partial allocs?
-        mconts <- fmap sequence $ replicateM (safeToInt n) $ do
+        mconts <- fmap sequence $ replicateM (safeToInt contsToAlloc) $ do
           mcr <- (fmap . fmap) CR (BM.alloc1 bm)
           case mcr of
             Nothing -> return Nothing
@@ -615,14 +623,16 @@ allocFill dev bm avail blksToAlloc contsToAlloc existing = do
 
 -- | Truncates the stream at the given a stream index and length offset, and
 -- unallocates all resources in the corresponding free region
-truncUnalloc :: HalfsCapable b t r l m =>
-                BlockDevice m             -- ^ the block device
-             -> BlockMap b r l            -- ^ the block map
-             -> Word64                    -- ^ starting stream byte index
-             -> Word64                    -- ^ length from start at which to
-                                          -- truncate
-             -> [Cont]                    -- ^ current chain
-             -> HalfsM m ([Cont], [Cont]) -- ^ truncated chain, dirty conts
+truncUnalloc ::
+  HalfsCapable b t r l m =>
+     BlockDevice m                     -- ^ the block device
+  -> BlockMap b r l                    -- ^ the block map
+  -> Word64                            -- ^ starting stream byte index
+  -> Word64                            -- ^ length from start at which to
+                                       -- truncate
+  -> [Cont]                            -- ^ current chain
+  -> HalfsM m ([Cont], [Cont], Word64) -- ^ truncated chain, dirty conts, number
+                                       -- of blocks freed
 truncUnalloc dev bm start len conts = do
   eIdx@(eContIdx, eBlkOff, _) <- decompStreamOffset (bdBlockSize dev) (start + len - 1)
   let 
@@ -636,6 +646,7 @@ truncUnalloc dev bm start len conts = do
                   -- ^ The remaining blocks in rest of chain
                   ++ map (unCR . address) toFree
                   -- ^ Block addrs for the cont blocks themselves
+    numFreed    = genericLength allFreeBlks
 
     -- Currently, only the last Cont in the chain is dirty; we do not do
     -- any writes to any of the Conts that are detached from the chain &
@@ -656,13 +667,13 @@ truncUnalloc dev bm start len conts = do
   dbug ("truncUnalloc: allFreeBlks = " ++ show allFreeBlks) $ return ()
 
   -- Freeing all of the blocks this way (as unit extents) is ugly and
-  -- inefficient, but we need to be tracking BlockGroups (or reconstitute them
-  -- here by looking for contiguous addresses in allFreeBlks) before we can do
-  -- better.
+  -- inefficient, but we need to be tracking BlockGroups (or
+  -- reconstitute them here by digging for contiguous address
+  -- subsequences in allFreeBlks) before we can do better.
     
   lift $ BM.unallocBlocks bm $ BM.Discontig $ map (`BM.Extent` 1) allFreeBlks
     
-  return (retain', dirtyConts)
+  return (retain', dirtyConts, numFreed)
 
 -- | Splits the input bytestring into block-sized chunks; may read from the
 -- block device in order to preserve contents of blocks if needed.
@@ -782,15 +793,15 @@ fileStat fs inr = do
   inode <- drefInode (hsBlockDev fs) inr
   return $ FileStat
     { fsInode      = inr
-    , fsType       = inoFileType   inode
-    , fsMode       = inoMode       inode
+    , fsType       = inoFileType    inode
+    , fsMode       = inoMode        inode
     , fsNumLinks   = error "fileStat: fsNumLinks NYI"
-    , fsUID        = inoUser       inode
-    , fsGID        = inoGroup      inode
-    , fsSize       = inoFileSize   inode
-    , fsNumBlocks  = error "fileStat NYI"
-    , fsAccessTime = inoAccessTime inode
-    , fsModTime    = inoModifyTime inode
+    , fsUID        = inoUser        inode
+    , fsGID        = inoGroup       inode
+    , fsSize       = inoFileSize    inode
+    , fsNumBlocks  = inoAllocBlocks inode
+    , fsAccessTime = inoAccessTime  inode
+    , fsModTime    = inoModifyTime  inode
     }
     
 -- "Safe" (i.e., emits runtime assertions on overflow) versions of
