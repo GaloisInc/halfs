@@ -5,8 +5,11 @@ module Tests.Inode
   )
 where
 
+import Control.Concurrent
+import qualified Control.Exception as CE
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
+import Data.List
 import Prelude hiding (read)
 import Test.QuickCheck hiding (numTests)
 import Test.QuickCheck.Monadic
@@ -21,13 +24,14 @@ import Halfs.Monad
 import Halfs.Protection
 import Halfs.SuperBlock
 import Halfs.Types
+import Halfs.Utils
 
 import System.Device.BlockDevice (BlockDevice(..))
 import Tests.Instances           (printableBytes)
 import Tests.Types
 import Tests.Utils
 
--- import Debug.Trace
+import Debug.Trace
 
 
 --------------------------------------------------------------------------------
@@ -36,13 +40,15 @@ import Tests.Utils
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [ -- Inode module invariants
-   exec 10 "Inode module invariants" propM_inodeModuleInvs
-  , -- Inode stream write/read/(over)write/read property
-   exec 10 "Basic WRWR" propM_basicWRWR
-  , -- Inode stream write/read/(truncating)write/read property
-    exec 10 "Truncating WRWR" propM_truncWRWR
-  , -- Inode length-specific stream write/read
-    exec 10 "Length-specific WR" propM_lengthWR
+--    exec 10 "Inode module invariants" propM_inodeModuleInvs
+--   , -- Inode stream write/read/(over)write/read property
+--    exec 10 "Basic WRWR" propM_basicWRWR
+--   , -- Inode stream write/read/(truncating)write/read property
+--     exec 10 "Truncating WRWR" propM_truncWRWR
+--   , -- Inode length-specific stream write/read
+--     exec 10 "Length-specific WR" propM_lengthWR
+  -- Inode single reader/writer lock testing
+  exec 100 "Inode single reader/write mutex" propM_inodeMutexOK
   ]
   where
     exec = mkMemDevExec quick "Inode"
@@ -230,6 +236,105 @@ propM_lengthWR _g dev = do
   where
     time = exec "obtain time" getTime
     exec = execH "propM_lengthWR"
+
+-- | Sanity check: reads/writes to inode streams are atomic
+propM_inodeMutexOK :: BDGeom
+                   -> BlockDevice IO
+                   -> PropertyM IO ()
+propM_inodeMutexOK _g dev = do
+  fs <- runH (newfs dev) >> mountOK dev
+  rdirIR <- rootDir `fmap` sreadRef (hsSuperBlock fs)
+
+  -- TODO: Update comments, as they're out of sync with the
+  -- implementation below
+
+  -- 25 Feb 2010: Currently seeing failure of the below for the small
+  -- BDGeom instance and 4+ threads, even with fixed small values for
+  -- dataSz (15000), but failure is intermittent.  Investigate; may have
+  -- to log lock acquisition/release sequences :(
+
+  -- 1) Choose a random number n s.t. 16 <= n <= 32
+  -- 
+  -- 2) For each n, create a unique bytestring that covers the entire
+  --    randomly-sized write region.  Call this set of bytestrings
+  --    'bstrings'.
+  --
+  -- 3) Spawn n test threads, a unique bytestring for each to write.
+  --    Each thread:
+  --      * Blindly writes its bytestring 'bs' to the stream
+  -- 
+  --      * Writes a single sentinel byte at the start of the stream
+  --        with a value outside the alphabet used to compose bstrings
+  --        and truncates the region, ensuring that the bytestring on
+  --        the block device is very short and no longer a member of
+  --        bstrings.
+  --
+  --      * Reads back entire stream, and ensures that what is read back
+  --        is either:
+  --          a) a member of bstrings - {bs}, in which case we have
+  --             detected interleaving
+  --          b) equal the single to what was just written, in which
+  --             case we have not detected interleaving
+  -- 
+  --      * Terminates
+  --
+  -- We do it this way to increase the possiblity of write/read
+  -- interleaving.
+  --
+  -- We keep the write regions relatively small since we'll be creating
+  -- many of them.
+
+  let maxBlocks = safeToInt (bdNumBlocks dev)
+      lo        = blkSize * (maxBlocks `div` 32)
+      hi        = blkSize * (maxBlocks `div` 16)
+      blkSize   = safeToInt (bdBlockSize dev)
+  forAllM (min 1048576 `fmap` choose (lo, hi)) $ \dataSz   -> do
+  let dataSz = 15000
+  run $ putStrLn $ show dataSz
+  forAllM (choose (4::Int, 4))                 $ \n        -> do
+  forAllM (foldM (uniqueBS dataSz) [] [1..n])  $ \bstrings -> do
+
+  ch <- run newChan
+
+  -- ^ Kick off the test threads
+  mapM_ (run . forkIO . test fs ch rdirIR dataSz bstrings) bstrings
+  (passed, interleaved) <- unzip `fmap` replicateM n (run $ readChan ch)
+  -- ^ predicate barrier for all threads
+
+  trace ("passed = " ++ show passed) $ do
+--  trace ("interleaved = " ++ show interleaved) $ do
+
+  assert $ and passed
+  when (not $ or interleaved) $
+    run $ putStrLn "WARNING: No interleaving detected in propM_inodeMutexOK"
+
+  where
+    uniqueBS sz acc _ = 
+      (:acc) `fmap` (printableBytes sz `suchThat` (not . (`elem` acc)))
+    --
+    test fs ch inr sz bstrings bs = do
+--      let sentinel = BS.singleton 0
+      runHalfs $ writeStream fs inr 0 False bs
+--      runHalfs $ writeStream fs inr 0 True sentinel
+      eeb <- runHalfs $ readStream fs inr 0 Nothing
+      case eeb of
+        Left _err -> writeChan ch (False, error "interleaved not computed")
+        Right rb  -> do
+          let rb' = bsTake sz rb       
+          writeChan ch (rb' `elem` bstrings, rb' /= bs)
+{-
+          let rb'    = if bsTake (1::Int) rb == sentinel
+                        then sentinel
+                        else bsTake sz rb
+                       -- ^ readStream returns a multiple of the
+                       -- block size, so we have to trim it
+              passed = (rb' `elem` (bstrings \\ [bs])) || rb' == sentinel
+              intlvd = passed && rb' /= sentinel
+          writeChan ch (passed, intlvd)
+-}
+
+--------------------------------------------------------------------------------
+-- Misc utility/helper functions
 
 withFSData :: HalfsCapable b t r l m =>
               BlockDevice m

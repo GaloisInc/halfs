@@ -53,4 +53,4 @@ executable halfs-tests
 
   hs-source-dirs: test/src . 
   main-is: Driver.hs
-  ghc-options: -O2 -Wall -fno-ignore-asserts
+  ghc-options: -O2 -Wall -fno-ignore-asserts -threaded

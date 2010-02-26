@@ -40,7 +40,6 @@ import Tests.Utils
 newtype FileWR a       = FileWR a deriving Show
 newtype DirMutexOk a   = DirMutexOk a deriving Show
 
-
 type HalfsProp = 
   HalfsCapable b t r l m => BDGeom -> BlockDevice m -> PropertyM m ()
 
