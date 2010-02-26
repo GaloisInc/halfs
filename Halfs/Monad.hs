@@ -19,8 +19,6 @@ import Halfs.Classes
 import Halfs.Errors
 import Halfs.Types
 
-import Debug.Trace 
-
 newtype HalfsT m a = HalfsT { runHalfs :: m (Either HalfsError a) }
 type HalfsM m a    = HalfsT m a
 
@@ -77,7 +75,7 @@ hbracket :: Monad m =>
          -> HalfsM m c         -- ^ result of bracketed computation
 hbracket before after act = do
   a <- before
-  r <- act a `catchError` \e -> trace "hbracket exception CAUGHT" (after a >> throwError e)
+  r <- act a `catchError` \e -> after a >> throwError e
   after a
   return r
 
@@ -85,7 +83,7 @@ withLock :: HalfsCapable b t r l m =>
             l -> HalfsM m a -> HalfsM m a
 withLock l act = do
   lock l
-  res <- act `catchError` \e -> trace "withLock exception CAUGHT" (release l >> throwError e)
+  res <- act `catchError` \e -> release l >> throwError e
   release l
   return res
 

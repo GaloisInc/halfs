@@ -114,7 +114,7 @@ mount dev = do
            `ap`   newRef sb'              -- superblock 
            `ap`   newLock                 -- filesystem lock
            `ap`   newLockedRscRef M.empty -- Locked map: InodeRef -> DirHandle
-           `ap`   newLockedRscRef M.empty -- Locked map: InodeRef -> l
+           `ap`   newLockedRscRef M.empty -- Locked map: InodeRef -> (l, refcnt)
        else throwError $ HalfsMountFailed DirtyUnmount
 
 -- | Unmounts the given filesystem.  After this operation completes, the

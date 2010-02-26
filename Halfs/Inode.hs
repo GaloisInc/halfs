@@ -329,7 +329,7 @@ readStream :: HalfsCapable b t r l m =>
                                   --   entire last block)
            -> HalfsM m ByteString -- ^ Stream contents
 readStream fs startIR start mlen = 
-  withLockedInode fs startIR $ const $ do  
+  withLockedInode fs startIR $ do  
   -- ====================== Begin inode critical section ======================
   startInode <- drefInode dev startIR
   if 0 == blockCount (inoCont startInode)
@@ -407,7 +407,7 @@ writeStream :: HalfsCapable b t r l m =>
             -> HalfsM m ()
 writeStream _ _ _ _ bytes | 0 == BS.length bytes = return ()
 writeStream fs startIR start trunc bytes         =
-  withLockedInode fs startIR $ const $ do     
+  withLockedInode fs startIR $ do     
   -- ====================== Begin inode critical section ======================
 
   -- NB: The implementation currently 'flattens' Contig/Discontig block groups
@@ -557,34 +557,51 @@ fileStat fs inr = do
 
 withLockedInode :: HalfsCapable b t r l m =>
                    HalfsState b r l m
-                -> InodeRef
-                -> (l -> HalfsM m a)
+                -> InodeRef   -- ^ reference to inode to lock
+                -> HalfsM m a -- ^ action to take while holding lock
                 -> HalfsM m a
-withLockedInode fs inr =
-  -- Inode Locking: We currently use a single reader/writer lock tracked by the
-  -- InodeRef -> lock map in HalfsState.  The entries in this map are transient
-  -- and only intended to protect access to the stream on a per-call basis to
-  -- either readStream or writeStream (i.e., reads and writes are atomic).
-  hbracket
-    -- before critical section
-    (do inodeLock <-
-          withLockedRscRef (hsInodeLockMap fs) $ \ref -> do
-            mlock <- lookupRM inr ref
-            case mlock of
-              Just lk -> return lk
-              Nothing -> do
-                   lk <- newLock
-                   modifyRef ref (M.insert inr lk)
-                   return lk
-        lock inodeLock
-        return inodeLock
-    ) 
-    -- after critical section
-    (\inodeLock -> do      
-       -- Pull the transient inode lock out of the inode -> lock map
-       withLockedRscRef (hsInodeLockMap fs) (flip modifyRef $ M.delete inr)
-       release inodeLock
-    )
+withLockedInode fs inr act =
+  -- Inode locking: We currently use a single reader/writer lock tracked by the
+  -- InodeRef -> (lock, ref count) map in HalfsState. Reference counting is used
+  -- to determine when it is safe to remove a lock from the map.
+  --
+  -- We use the map to track lock info so that we don't hold locks for lengthy
+  -- intervals when we have access requests for disparate inode refs.
+
+  hbracket before after (const act {- inode lock doesn't escape -}) 
+
+  where
+    before = do
+      -- When the InodeRef is already in the map, atomically increment its
+      -- reference count and acquire; otherwise, create a new lock and acquire.
+      inodeLock <-
+        withLockedRscRef (hsInodeLockMap fs) $ \mapRef -> do
+          -- begin inode lock map critical section
+          lockInfo <- lookupRM inr mapRef
+          case lockInfo of
+            Nothing -> do
+              l <- newLock
+              modifyRef mapRef $ M.insert inr (l, 1)
+              return l
+            Just (l, r) -> do
+              modifyRef mapRef $ M.insert inr (l, r + 1)
+              return l
+          -- end inode lock map critical section
+      lock inodeLock
+      return inodeLock
+    --
+    after inodeLock = do
+      -- Atomically decrement the reference count for the InodeRef and then
+      -- release the lock
+      withLockedRscRef (hsInodeLockMap fs) $ \mapRef -> do
+        -- begin inode lock map critical section
+        lockInfo <- lookupRM inr mapRef
+        case lockInfo of
+          Nothing -> fail "withLockedInode internal: No InodeRef in lock map"
+          Just (l, r) | r == 1    -> modifyRef mapRef $ M.delete inr
+                      | otherwise -> modifyRef mapRef $ M.insert inr (l, r - 1)
+        -- end inode lock map critical section
+      release inodeLock
 
 -- | A wrapper around Data.Serialize.decode that populates transient fields.  We
 -- do this to avoid occupying valuable on-disk inode space where possible.  Bare

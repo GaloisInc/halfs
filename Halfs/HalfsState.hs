@@ -8,9 +8,12 @@ module Halfs.HalfsState
   where
 
 import Data.Map as M
+import Data.Word
+
 import Halfs.BlockMap            (BlockMap)
 import Halfs.SuperBlock          (SuperBlock) 
 import Halfs.Types               (DirHandle, InodeRef, LockedRscRef)
+
 import System.Device.BlockDevice (BlockDevice)
 
 data HalfsState b r l m = HalfsState {
@@ -22,7 +25,7 @@ data HalfsState b r l m = HalfsState {
     -- ^ Tracks active directory handles; we probably want to add a
     -- (refcounting?) expiry mechanism so that the size of the map is
     -- bounded.  TODO.
-  , hsInodeLockMap     :: LockedRscRef l r (M.Map InodeRef l)
+  , hsInodeLockMap     :: LockedRscRef l r (M.Map InodeRef (l, Word64))
     -- ^ Tracks inode locks. For now, these are single reader/writer
     -- locks.
   }
