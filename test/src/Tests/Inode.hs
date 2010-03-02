@@ -108,7 +108,8 @@ propM_basicWRWR _g dev = do
   t2  <- time
   bs1 <- exec "Readback 1" $ readStream fs rdirIR 0 Nothing
   checkReadMD t2 dataSz expBlks 
-  assert (testData == bsTake dataSz bs1)
+  assert (BS.length bs1 == BS.length testData)
+  assert (bs1 == testData)
   -- ^ We leave off the trailing bytes of what we read, since reading until the
   -- end of the stream will include contents of the whole last block
 
@@ -126,13 +127,13 @@ propM_basicWRWR _g dev = do
   t4  <- time
   bs2 <- exec "Readback 2" $ readStream fs rdirIR 0 Nothing
   checkReadMD t4 dataSz expBlks
-  let readBack = bsTake dataSz bs2
-      expected = bsTake startByte testData
+  let expected = bsTake startByte testData
                  `BS.append`
                  newData
                  `BS.append`
                  bsDrop (startByte + overwriteSz) testData
-  assert (readBack == expected)
+  assert (BS.length bs2 == BS.length expected)
+  assert (bs2 == expected)
   where
     time = exec "obtain time" getTime
     exec = execH "propM_basicWRWR"
@@ -174,9 +175,8 @@ propM_truncWRWR _g dev = do
   t3 <- time
   bs <- exec "Readback" $ readStream fs rdirIR (fromIntegral truncIdx) Nothing
   checkReadMD t3 dataSz'' (expBlks dataSz'')
-  assert (BS.length bs >= BS.length testData')
-  assert (bsTake dataSz' bs == testData')
-  assert (all (== truncSentinel) $ BS.unpack $ bsDrop dataSz' bs)
+  assert (BS.length bs == BS.length testData')
+  assert (bs == testData')
 
   -- Sanity check the BlockMap's free count
   freeBlks' <- numFree  -- Free blks after truncate

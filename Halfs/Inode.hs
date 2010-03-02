@@ -374,8 +374,8 @@ readStream fs startIR start mlen =
                  (BS.empty, fromIntegral $ BS.length header) rest
 
              dbug ("==== readStream end ===") $ return ()
-             return $ 
-               (maybe id bsTake mlen) $ header `BS.append` fullBlocks
+             return $ bsTake (maybe (inoFileSize startInode - start) id mlen) $
+               header `BS.append` fullBlocks
      
      now <- getTime
      lift $ writeInode dev $ startInode { inoAccessTime = now }
