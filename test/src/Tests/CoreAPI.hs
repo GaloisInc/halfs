@@ -7,6 +7,7 @@ where
 
 import Control.Concurrent
 import Data.Serialize
+import Foreign.C.Error 
 import Prelude hiding (read)
 import System.FilePath
 import Test.QuickCheck hiding (numTests)
@@ -32,6 +33,8 @@ import Tests.Instances (printableBytes, filename)
 import Tests.Types
 import Tests.Utils
 
+import Debug.Trace
+
 
 --------------------------------------------------------------------------------
 -- CoreAPI properties
@@ -45,14 +48,16 @@ type HalfsProp =
 
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
-  [ exec 10 "Init and mount"         propM_initAndMountOK
-  , exec 10 "Mount/unmount"          propM_mountUnmountOK
-  , exec 10 "Unmount mutex"          propM_unmountMutexOK
-  , exec 10 "Directory construction" propM_dirConstructionOK
-  , exec 10 "Simple file creation"   propM_fileCreationOK
-  , exec  5 "File WR 1" $            propM_fileWR "myfile"
-  , exec  5 "File WR 2" $            propM_fileWR "foo/bar/baz"
-  , exec 50 "Directory mutex"        propM_dirMutexOK
+  [
+--     exec 10 "Init and mount"         propM_initAndMountOK
+--   , exec 10 "Mount/unmount"          propM_mountUnmountOK
+--   , exec 10 "Unmount mutex"          propM_unmountMutexOK
+--   , exec 10 "Directory construction" propM_dirConstructionOK
+--   , exec 10 "Simple file creation"   propM_fileCreationOK
+--   , exec  5 "File WR 1" $            propM_fileWR "myfile"
+--   , exec  5 "File WR 2" $            propM_fileWR "foo/bar/baz"
+--   , exec 50 "Directory mutex"        propM_dirMutexOK
+    exec 1 "Hardlink creation" propM_hardlinksOK
   ]
   where
     exec = mkMemDevExec quick "CoreAPI"
@@ -210,7 +215,7 @@ propM_fileWR pathFromRoot _g dev = do
   fs <- runH (newfs dev) >> mountOK dev
 
   assert (isRelative pathFromRoot)
-  mapM_ (exec "making parent directory" . mkdir fs defaultFilePerms) mkdirs
+  mapM_ (exec "making parent directory" . mkdir fs defaultDirPerms) mkdirs
 
   fh <- exec "create file" $ openFile fs thePath True
 
@@ -291,6 +296,45 @@ propM_dirMutexOK _g dev = do
     threadTest fs ch nms _n = do
       runHalfs $ mapM_ (mkdir fs perms . (</>) rootPath) nms
       writeChan ch ()
+
+propM_hardlinksOK :: HalfsProp
+propM_hardlinksOK _g dev = do
+  -- Create a dummy filesystem with the following hierarchy
+  -- / (directory)
+  --   foo (directory)
+  --     bar (directory)
+  --       baz1 (1 byte file)
+  
+  fs <- runH (newfs dev) >> mountOK dev
+  let d0  = rootPath </> "foo"
+      d1  = d0 </> "bar"
+      src = d1 </> "source"
+      dst = d1 </> "link_to_source"
+
+  exec "mkdir /foo"               $ mkdir fs defaultDirPerms d0
+  exec "mkdir /foo/bar"           $ mkdir fs defaultDirPerms d1
+  fh <- exec "creat /foo/bar/baz" $ openFile fs src True
+  exec "write /foo/bar/baz"       $ write fs fh 0 (BS.singleton 0) 
+  exec "close /foo/bar/baz"       $ closeFile fs fh
+
+  -- Expected error: File named by path1 is a directory
+  expectErrno ePERM =<< runH (mklink fs d1 dst)
+  -- Expected error: A component of path1's prefix is not a directory
+  expectErrno eNOTDIR =<< runH (mklink fs (src </> "source") dst)
+  -- Expected error: A component of path1's prefix does not exist
+  expectErrno eNOENT =<< runH (mklink fs (d1 </> "bad" </> "source") dst)
+  -- Expected error: The file named by path1 does not exist
+  expectErrno eNOENT =<< runH (mklink fs (d1 </> "src2") dst)
+  -- Expected error: A component of path2's prefix is not a directory
+  expectErrno eNOTDIR =<< runH (mklink fs src (src </> "dst"))
+  -- Expected error: A component of path 2's prefix does not exist
+  expectErrno eNOENT =<< runH (mklink fs src (d0 </> "bad" </> "bar"))
+       
+  return ()
+  where
+    expectErrno exp (Left (HE_ErrnoAnnotated _ errno)) = assert (errno == exp)
+    expectErrno _ _                                    = assert False
+    exec = execH "propM_hardlinksOK"
 
 
 --------------------------------------------------------------------------------

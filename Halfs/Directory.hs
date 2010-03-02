@@ -205,10 +205,10 @@ find _ startINR _ [] =
 --
 find fs startINR ftype (pathComp:rest) = do
   dh <- openDirectory fs startINR
-  sr <- findDE dh pathComp ftype
+  sr <- findDE dh pathComp (if null rest then ftype else Directory)
   case sr of
-    DF_NotFound         -> return DF_NotFound
-    DF_WrongFileType ft -> return (DF_WrongFileType ft)
+    DF_NotFound         -> return $ DF_NotFound
+    DF_WrongFileType ft -> return $ DF_WrongFileType ft
     DF_Found de         -> find fs (deInode de) ftype rest
 
 -- | Locate the given directory entry typed file by filename in the

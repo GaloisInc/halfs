@@ -7,6 +7,7 @@ import qualified Data.ByteString as BS
 import qualified Data.Map        as M
 import Data.Serialize
 import Data.Word
+import Foreign.C.Error
 import System.FilePath
 
 import Halfs.BlockMap
@@ -23,7 +24,7 @@ import Halfs.Types
 
 import System.Device.BlockDevice
 
--- import Debug.Trace
+import Debug.Trace
 
 data SyncType = Data | Everything
 
@@ -217,18 +218,20 @@ syncDir = undefined
 -- TODO: modes and flags for open: append, r/w, ronly, truncate, etc., and
 -- enforcement of the same
 openFile :: (HalfsCapable b t r l m) =>
-            HalfsState b r l m -- ^ The FS
-         -> FilePath           -- ^ The absolute path of the file
-         -> Bool               -- ^ Should we create the file if it is not
-                               --   found?
+            HalfsState b r l m              -- ^ The FS
+         -> FilePath                        -- ^ The absolute path of the file
+         -> Bool                            -- ^ Should we create the file if it is not
+                                            --   found?
          -> HalfsM m FileHandle 
 openFile fs fp creat = do
-  withDir fs path $ \pdh -> do 
-    findInDir pdh fname RegularFile >>= \rslt ->
-      case rslt of
-        DF_NotFound         -> noFile pdh
-        DF_WrongFileType ft -> throwError $ HE_UnexpectedFileType ft fp
-        DF_Found fir        -> foundFile fir
+  pdh <- openDir fs path
+  fh  <- findInDir pdh fname RegularFile >>= \rslt ->
+           case rslt of
+             DF_NotFound         -> noFile pdh
+             DF_WrongFileType ft -> throwError $ HE_UnexpectedFileType ft fp
+             DF_Found fir        -> foundFile fir
+  closeDir fs pdh
+  return fh
   where
     (path, fname) = splitFileName fp
     -- 
@@ -330,10 +333,91 @@ access = undefined
 --------------------------------------------------------------------------------
 -- Link manipulation
 
--- A POSIX link(2)-like operation: makes a hard file link.
+-- | A POSIX link(2)-like operation: makes a hard file link.
 mklink :: (HalfsCapable b t r l m) =>
           HalfsState b r l m -> FilePath -> FilePath -> HalfsM m ()
-mklink _fs _srcPath _dstPath = error "mklink NYI!"
+mklink fs path1 {-src-} path2 {-dst-} = do
+
+  {- Currently does not implement the following POSIX error behaviors:
+
+     TODO
+     ---- 
+
+     [EACCES] A component of either path prefix denies search permission.
+     [EACCES] The requested link requires writing in a directory with a mode
+              that denies write permission.
+     [EACCES] The current process cannot access the existing file.
+
+     [EIO]    An I/O error occurs while reading from or writing to the file 
+              system to make the directory entry.
+
+     [ELOOP] Too many symbolic links are encountered in translating one of the
+             pathnames.  This is taken to be indicative of a looping symbolic
+             link.
+
+     [ENOSPC] The directory in which the entry for the new link is being placed
+              cannot be extended because there is no space left on the file
+              system containing the directory.
+
+     [EEXIST] The link named by path2 already exists.
+
+
+     DEFERRED
+     -------- 
+
+     [EROFS] The requested link requires writing in a directory on a read-only
+             file system.
+
+     [EXDEV] The link named by path2 and the file named by path1 are on
+             different file systems.
+
+     NOT APPLICABLE (YET?)
+     ---------------------
+     [EFAULT]       One of the pathnames specified is outside the process's
+                    allocated address space.
+
+     [EDQUOT]       The directory in which the entry for the new link is being
+                    placed cannot be extended because the user's quota of disk
+                    blocks on the file system containing the directory has been
+                    exhausted.
+
+     [EMLINK]       The file already has {LINK_MAX} links.
+
+     [ENAMETOOLONG] A component of a pathname exceeds {NAME_MAX} characters, or
+                    an entire path name exceeded {PATH_MAX} characters.
+  -}
+
+  -- Try to open path1 (the source file)
+  p1h <- openFile fs path1 False `catchError` \e ->
+           let annot errno = throwError $ HE_ErrnoAnnotated e errno in
+           case e of
+             -- [EPERM]: The file named by path1 is a directory
+             HE_UnexpectedFileType Directory _ -> e `annErrno` ePERM
+             -- [ENOTDIR]: A component of path1's prefix is not a directory
+             HE_UnexpectedFileType _ _         -> e `annErrno` eNOTDIR
+             -- [ENOENT] A component of path1's prefix does not exist
+             HE_PathComponentNotFound _        -> e `annErrno` eNOENT
+             -- [ENOENT] The file named by path1 does not exist
+             HE_FileNotFound                   -> e `annErrno` eNOENT
+             _                                 -> throwError e
+
+  -- Try to open path2's path prefix
+  let (p2pfx, p2fname) = splitFileName path2
+  p2pfxdh <- openDir fs p2pfx `catchError` \e ->
+               case e of
+                 -- [ENOTDIR]: A component of path2's prefix is not a directory
+                 HE_UnexpectedFileType{}    -> e `annErrno` eNOTDIR
+                 -- [ENOENT] A component of path2's prefix does not exist
+                 HE_PathComponentNotFound{} -> e `annErrno` eNOENT
+                 _                       -> throwError e
+  
+  -- HERE:
+
+  closeDir fs p2pfxdh
+  
+  error "mklink NYI!"
+  where
+    e `annErrno` errno = throwError (e `HE_ErrnoAnnotated` errno)
 
 rmlink :: (HalfsCapable b t r l m) =>
           HalfsState b r l m -> FilePath -> HalfsM m ()
@@ -363,20 +447,9 @@ fsstat = undefined
 --------------------------------------------------------------------------------
 -- Utility functions
 
-withDir :: HalfsCapable b t r l m =>
-           HalfsState b r l m
-        -> FilePath
-        -> (DirHandle r l -> HalfsM m a)
-        -> HalfsM m a
-withDir fs fp act = do
-  dh   <- openDir fs fp
-  rslt <- act dh
-  closeDir fs dh
-  return rslt
-
--- | Find the InodeRef corresponding to the given path, and call the given
--- function with it.  On error, yields HalfsPathComponentNotFound or
--- HalfsAbsolutePathExpected.
+-- | Find the InodeRef corresponding to the given path.  On error, raises
+-- exceptions HE_PathComponentNotFound, HE_AbsolutePathExpected, or
+-- HE_UnexpectedFileType.
 absPathIR :: HalfsCapable b t r l m =>
              HalfsState b r l m
           -> FilePath
@@ -393,6 +466,17 @@ absPathIR fs fp ftype = do
        DF_Found ir         -> return ir
    else
      throwError HE_AbsolutePathExpected
+
+withDir :: HalfsCapable b t r l m =>
+           HalfsState b r l m
+        -> FilePath
+        -> (DirHandle r l -> HalfsM m a)
+        -> HalfsM m a
+withDir fs fp f = do
+  dh   <- openDir fs fp
+  rslt <- f dh `catchError` \e -> closeDir fs dh >> throwError e
+  closeDir fs dh
+  return rslt
 
 fsElemExists :: HalfsCapable b t r l m =>
                 HalfsState b r l m
