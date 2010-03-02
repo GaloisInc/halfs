@@ -67,6 +67,10 @@ data LockedRscRef l r rsc = LockedRscRef
 -- are guaranteed to not include null or the System.FilePath.pathSeparator
 -- character.
 
+-- | DF_WrongFileType implies the filesystem element with the search key
+-- was found but was not of the correct type.
+data DirFindRslt a = DF_NotFound | DF_WrongFileType FileType | DF_Found a
+
 data DirectoryEntry = DirEnt {
     deName  :: String
   , deInode :: InodeRef
@@ -167,7 +171,7 @@ instance Eq FileMode where
     sort (fmGroupPerms fm1) == sort (fmGroupPerms fm2) &&
     sort (fmUserPerms  fm1) == sort (fmUserPerms  fm2)
 
-
-
-               
-
+instance Functor DirFindRslt where
+  fmap _ DF_NotFound           = DF_NotFound
+  fmap _ (DF_WrongFileType ft) = DF_WrongFileType ft
+  fmap f (DF_Found r)          = DF_Found (f r)

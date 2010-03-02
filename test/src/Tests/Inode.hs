@@ -83,8 +83,8 @@ propM_basicWRWR _g dev = do
   -- Expected error: attempted write past end of (empty) stream
   e0 <- runH $ writeStream fs rdirIR (bdBlockSize dev) False testData
   case e0 of
-    Left (HalfsInvalidStreamIndex idx) -> assert (idx == bdBlockSize dev)
-    _                                  -> assert False
+    Left (HE_InvalidStreamIndex idx) -> assert (idx == bdBlockSize dev)
+    _                                -> assert False
                                         
   -- TODO/FIXME: We need to catch byte offset errors, not just block/cont offset
   -- errors; see commented-out region below.

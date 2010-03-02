@@ -1,24 +1,32 @@
+{-# OPTIONS_GHC -fno-warn-orphans #-}
+
 module Halfs.Errors
 where
+
+import Foreign.C.Error (Errno)
 
 import System.FilePath
 import Data.Word
 
+import Halfs.Types
+
 data HalfsError =
-    HalfsFileNotFound
-  | HalfsObjectExists FilePath
-  | HalfsPathComponentNotFound String
-  | HalfsAbsolutePathExpected
-  | HalfsMountFailed RsnHalfsMountFail
-  | HalfsUnmountFailed 
-  | HalfsAllocFailed
-  | HalfsInvalidStreamIndex Word64
-  | HalfsDecodeFail_Directory String
-  | HalfsDecodeFail_Inode String
-  | HalfsDecodeFail_Cont String
-  | HalfsDecodeFail_BlockCarrier String
-  | HalfsTestFailed String
-  | HalfsInternalError String
+    HE_FileNotFound
+  | HE_UnexpectedFileType FileType FilePath
+  | HE_ObjectExists FilePath
+  | HE_PathComponentNotFound String
+  | HE_AbsolutePathExpected
+  | HE_MountFailed RsnHalfsMountFail
+  | HE_UnmountFailed 
+  | HE_AllocFailed
+  | HE_InvalidStreamIndex Word64
+  | HE_DecodeFail_Directory String
+  | HE_DecodeFail_Inode String
+  | HE_DecodeFail_Cont String
+  | HE_DecodeFail_BlockCarrier String
+  | HE_TestFailed String
+  | HE_InternalError String
+  | HE_ErrnoAnnotated HalfsError Errno
   deriving (Eq, Show)
 
 data RsnHalfsMountFail = 
@@ -26,3 +34,5 @@ data RsnHalfsMountFail =
   | DirtyUnmount
   deriving (Eq, Show)
            
+instance Show Errno where
+  show _ = "<errno>"

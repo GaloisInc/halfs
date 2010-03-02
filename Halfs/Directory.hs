@@ -62,11 +62,11 @@ makeDirectory fs parentIR dname user group perms =
   -- Begin critical section over parent's DirHandle 
   contents <- readRef (dhContents pdh)
   if M.member dname contents
-   then throwError $ HalfsObjectExists dname 
+   then throwError $ HE_ObjectExists dname 
    else do
      mir <- (fmap . fmap) blockAddrToInodeRef $ alloc1 (hsBlockMap fs)
      case mir of
-       Nothing     -> throwError HalfsAllocFailed
+       Nothing     -> throwError HE_AllocFailed
        Just thisIR -> do
          -- Build the directory inode and persist it
          bstr <- lift $ buildEmptyInodeEnc
@@ -130,7 +130,7 @@ openDirectory fs inr = do
       dirEnts     <- if BS.null rawDirBytes
                      then do return []
                      else case decode rawDirBytes of 
-                       Left msg -> throwError $ HalfsDecodeFail_Directory msg
+                       Left msg -> throwError $ HE_DecodeFail_Directory msg
                        Right x  -> return x
       dh <- DirHandle inr
               `fmap` newRef (M.fromList $ map deName dirEnts `zip` dirEnts)
@@ -184,53 +184,63 @@ addDirEnt_lckd dh name ir u g mode ftype = do
   -- Precond: (dhLock dh) is currently held (can we assert this? TODO)
   -- begin sanity check
   mfound <- lookupRM name (dhContents dh)
-  maybe (return ()) (const $ throwError $ HalfsObjectExists name) mfound
+  maybe (return ()) (const $ throwError $ HE_ObjectExists name) mfound
   -- end sanity check
   modifyRef (dhContents dh) (M.insert name $ DirEnt name ir u g mode ftype)
   modifyRef (dhState dh) dirStTransAdd
 
--- | Finds a directory, file, or symlink given a starting inode reference (i.e.,
--- the directory inode at which to begin the search) and a list of path
--- components.  Yields Nothing if any of the path components cannot be found in
--- the recursive descent of the directory hierarchy, otherwise yields the
--- InodeRef of the final path component.
+-- | Finds a directory, file, or symlink given a starting inode
+-- reference (i.e., the directory inode at which to begin the search)
+-- and a list of path components.  Success is denoted using the DF_Found
+-- constructor of the DirFindRslt type.
 find :: HalfsCapable b t r l m => 
         HalfsState b r l m -- ^ The filesystem to search
      -> InodeRef           -- ^ The starting inode reference
      -> FileType           -- ^ A match must be of this filetype
      -> [FilePath]         -- ^ Path components
-     -> HalfsM m (Maybe InodeRef)
+     -> HalfsM m (DirFindRslt InodeRef)
 --
 find _ startINR _ [] = 
-  return $ Just startINR
+  return $ DF_Found startINR
 --
 find fs startINR ftype (pathComp:rest) = do
-  dh  <- openDirectory fs startINR
-  mde <- findInDir' dh pathComp ftype
-  case mde of
-    Nothing -> return Nothing
-    Just de -> find fs (deInode de) ftype rest
+  dh <- openDirectory fs startINR
+  sr <- findDE dh pathComp ftype
+  case sr of
+    DF_NotFound         -> return DF_NotFound
+    DF_WrongFileType ft -> return (DF_WrongFileType ft)
+    DF_Found de         -> find fs (deInode de) ftype rest
 
--- | Locate the given typed file by filename in the DirHandle's content map
-findInDir' :: HalfsCapable b t r l m =>
-              DirHandle r l
-           -> String
-           -> FileType
-           -> HalfsM m (Maybe DirectoryEntry)
-findInDir' dh fname ftype = do
+-- | Locate the given directory entry typed file by filename in the
+-- DirHandle's content map
+findDE :: HalfsCapable b t r l m =>
+          DirHandle r l
+       -> String
+       -> FileType
+       -> HalfsM m (DirFindRslt DirectoryEntry)
+findDE dh fname ftype = do
   mde <- withLock (dhLock dh) $ lookupRM fname (dhContents dh)
   case mde of
-    Nothing -> return Nothing
-    Just de -> return $ if de `isFileType` ftype then Just de else Nothing
+    Nothing -> return DF_NotFound
+    Just de -> return $ if de `isFileType` ftype
+                         then DF_Found de
+                         else DF_WrongFileType (deType de)
 
--- Exportable version of findInDir; doesn't expose DirectoryEntry to caller
+-- Exportable version of findDE; doesn't expose DirectoryEntry to caller
 findInDir :: HalfsCapable b t r l m =>
              DirHandle r l
           -> String
           -> FileType
-          -> HalfsM m (Maybe InodeRef)
-findInDir dh fname ftype = 
-  findInDir' dh fname ftype >>= return . maybe Nothing (Just . deInode)
+          -> HalfsM m (DirFindRslt InodeRef)
+findInDir dh fname ftype = (fmap . fmap) deInode (findDE dh fname ftype)
+--  rslt <- findDE dh fname ftype
+--  return $ deInode `fmap` rslt
+--  rslt <- findDE dh fname ftype
+--   case rslt of
+--     DF_NotFound      -> DF_NotFound
+--     DF_WrongFileType -> DF_WrongFileType
+--     DF_Found x       -> DF_Found (deInode x)
+--  findInDir' dh fname ftype >>= return . maybe Nothing (Just . deInode)
 
 
 --------------------------------------------------------------------------------

@@ -104,7 +104,7 @@ mount :: (HalfsCapable b t r l m) =>
 mount dev = do
   esb <- decode `fmap` lift (bdReadBlock dev 0)
   case esb of
-    Left msg -> throwError $ HalfsMountFailed $ BadSuperBlock msg
+    Left msg -> throwError $ HE_MountFailed $ BadSuperBlock msg
     Right sb -> do
       if unmountClean sb
        then do
@@ -115,7 +115,7 @@ mount dev = do
            `ap`   newLock                 -- filesystem lock
            `ap`   newLockedRscRef M.empty -- Locked map: InodeRef -> DirHandle
            `ap`   newLockedRscRef M.empty -- Locked map: InodeRef -> (l, refcnt)
-       else throwError $ HalfsMountFailed DirtyUnmount
+       else throwError $ HE_MountFailed DirtyUnmount
 
 -- | Unmounts the given filesystem.  After this operation completes, the
 -- superblock will have its unmountClean flag set to True.
@@ -129,7 +129,7 @@ unmount fs@HalfsState{hsBlockDev = dev, hsSuperBlock = sbRef} =
 
   sb <- readRef sbRef
   if (unmountClean sb)
-   then throwError HalfsUnmountFailed
+   then throwError HE_UnmountFailed
    else do
      -- TODO:
      -- * Persist all dirty data structures (dirents, files w/ buffered IO, etc.)
@@ -224,33 +224,37 @@ openFile :: (HalfsCapable b t r l m) =>
          -> HalfsM m FileHandle 
 openFile fs fp creat = do
   withDir fs path $ \pdh -> do 
-    findInDir pdh fname RegularFile >>= maybe (noFile pdh) foundFile
+    findInDir pdh fname RegularFile >>= \rslt ->
+      case rslt of
+        DF_NotFound         -> noFile pdh
+        DF_WrongFileType ft -> throwError $ HE_UnexpectedFileType ft fp
+        DF_Found fir        -> foundFile fir
   where
     (path, fname) = splitFileName fp
     -- 
     noFile parentDH =
       if creat
-        then do
-          usr <- getUser
-          grp <- getGroup
-          fir <- createFile
-                   fs
-                   parentDH
-                   fname
-                   usr
-                   grp
-                   defaultFilePerms -- FIXME
-          fh <- openFilePrim fir
-          -- TODO/FIXME: mark this FH as open in FD structures &
-          -- r/w'able perms etc.?
-          return fh
-        else do
-          throwError $ HalfsFileNotFound
+       then do
+         usr <- getUser
+         grp <- getGroup
+         fir <- createFile
+                  fs
+                  parentDH
+                  fname
+                  usr
+                  grp
+                  defaultFilePerms -- FIXME
+         fh <- openFilePrim fir
+         -- TODO/FIXME: mark this FH as open in FD structures &
+         -- r/w'able perms etc.?
+         return fh
+       else do
+          throwError $ HE_FileNotFound
     --
     foundFile fir = do
       if creat
        then do
-         throwError $ HalfsObjectExists fp
+         throwError $ HE_ObjectExists fp
        else do
          fh <- openFilePrim fir
          -- TODO/FIXME: mark this FH as open in FD structures, store
@@ -326,9 +330,10 @@ access = undefined
 --------------------------------------------------------------------------------
 -- Link manipulation
 
+-- A POSIX link(2)-like operation: makes a hard file link.
 mklink :: (HalfsCapable b t r l m) =>
           HalfsState b r l m -> FilePath -> FilePath -> HalfsM m ()
-mklink = undefined
+mklink _fs _srcPath _dstPath = error "mklink NYI!"
 
 rmlink :: (HalfsCapable b t r l m) =>
           HalfsState b r l m -> FilePath -> HalfsM m ()
@@ -383,20 +388,27 @@ absPathIR fs fp ftype = do
      rdirIR <- rootDir `fmap` readRef (hsSuperBlock fs)
      mir    <- find fs rdirIR ftype (drop 1 $ splitDirectories fp)
      case mir of
-       Nothing -> throwError $ HalfsPathComponentNotFound fp
-       Just ir -> return ir
+       DF_NotFound         -> throwError $ HE_PathComponentNotFound fp
+       DF_WrongFileType ft -> throwError $ HE_UnexpectedFileType ft fp
+       DF_Found ir         -> return ir
    else
-     throwError HalfsAbsolutePathExpected
+     throwError HE_AbsolutePathExpected
+
+fsElemExists :: HalfsCapable b t r l m =>
+                HalfsState b r l m
+             -> FilePath
+             -> FileType
+             -> HalfsM m Bool
+fsElemExists = undefined
 
 writeSB :: (HalfsCapable b t r l m) =>
            BlockDevice m -> SuperBlock -> m SuperBlock
 writeSB dev sb = do 
+  let sbdata = encode sb
   assert (BS.length sbdata <= fromIntegral (bdBlockSize dev)) $ return ()
   bdWriteBlock dev 0 sbdata
   bdFlush dev
   return sb
-  where
-    sbdata = encode sb
 
 -- TODO: Placeholder
 getUser :: Monad m => m UserID

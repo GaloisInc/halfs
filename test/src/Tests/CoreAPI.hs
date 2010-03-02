@@ -24,13 +24,13 @@ import qualified Halfs.Inode as IN
 import Halfs.Monad
 import Halfs.SuperBlock
 import Halfs.Types
+import Halfs.Utils
+
 import System.Device.BlockDevice (BlockDevice(..))
 
 import Tests.Instances (printableBytes, filename)
 import Tests.Types
 import Tests.Utils
-
--- import Debug.Trace
 
 
 --------------------------------------------------------------------------------
@@ -50,7 +50,8 @@ qcProps quick =
   , exec 10 "Unmount mutex"          propM_unmountMutexOK
   , exec 10 "Directory construction" propM_dirConstructionOK
   , exec 10 "Simple file creation"   propM_fileCreationOK
-  , exec 10 "File WR"                propM_fileWR
+  , exec  5 "File WR 1" $            propM_fileWR "myfile"
+  , exec  5 "File WR 2" $            propM_fileWR "foo/bar/baz"
   , exec 50 "Directory mutex"        propM_dirMutexOK
   ]
   where
@@ -82,17 +83,17 @@ propM_initAndMountOK _g dev = do
     
       -- Mount the filesystem again and ensure "dirty unmount" failure
       runH (mount dev) >>= \efs -> case efs of
-        Left (HalfsMountFailed DirtyUnmount) -> ok
-        Left err                             -> unexpectedErr err
-        Right _                              ->
+        Left (HE_MountFailed DirtyUnmount) -> ok
+        Left err                           -> unexpectedErr err
+        Right _                            ->
           fail "Mount of unclean filesystem succeeded"
     
       -- Corrupt the superblock and ensure "bad superblock" failure
       run $ bdWriteBlock dev 0 $ BS.replicate (fromIntegral $ bdBlockSize dev) 0
       runH (mount dev) >>= \efs -> case efs of
-        Left (HalfsMountFailed BadSuperBlock{}) -> ok
-        Left err                                -> unexpectedErr err
-        Right _                                 ->
+        Left (HE_MountFailed BadSuperBlock{}) -> ok
+        Left err                              -> unexpectedErr err
+        Right _                               ->
           fail "Mount of filesystem with corrupt superblock succeeded"
 
 propM_mountUnmountOK :: HalfsProp
@@ -115,9 +116,9 @@ propM_mountUnmountOK _g dev = do
   mountOK dev >>= \fs' -> do
     unmountOK fs'                              -- Unmount #1
     runH (unmount fs') >>= \efs -> case efs of -- Unmount #2
-      Left HalfsUnmountFailed -> ok
-      Left err                -> unexpectedErr err
-      Right _                 -> fail "Two successive unmounts succeeded"
+      Left HE_UnmountFailed -> ok
+      Left err              -> unexpectedErr err
+      Right _               -> fail "Two successive unmounts succeeded"
 
 -- | Sanity check: unmount is mutex'd sensibly
 
@@ -193,9 +194,9 @@ propM_fileCreationOK _g dev = do
 
   e <- runH $ openFile fs fp True
   case e of
-    Left HalfsObjectExists{} -> return ()
-    Left err                 -> unexpectedErr err
-    Right _                  ->
+    Left HE_ObjectExists{} -> return ()
+    Left err               -> unexpectedErr err
+    Right _                ->
       fail "Open w/ creat of existing file should fail"
 
   quickRemountCheck fs
@@ -204,10 +205,14 @@ propM_fileCreationOK _g dev = do
 
 -- | Ensure that simple write/readback works for a new file in a new
 -- filesystem
-propM_fileWR :: HalfsProp
-propM_fileWR _g dev = do
+propM_fileWR :: FilePath -> HalfsProp
+propM_fileWR pathFromRoot _g dev = do
   fs <- runH (newfs dev) >> mountOK dev
-  fh <- exec "create /myfile" $ openFile fs (rootPath </> "myfile") True
+
+  assert (isRelative pathFromRoot)
+  mapM_ (exec "making parent directory" . mkdir fs defaultFilePerms) mkdirs
+
+  fh <- exec "create file" $ openFile fs thePath True
 
   forAllM (FileWR `fmap` choose (1, maxBytes)) $ \(FileWR fileSz) -> do
   forAllM (printableBytes fileSz)              $ \fileData        -> do 
@@ -217,26 +222,37 @@ propM_fileWR _g dev = do
 
   let checkFileStat' atp mtp = do
         (usr, grp) <- (,) `fmap` getUser `ap` getGroup
-        st         <- exec "fstat /myfile" $ fstat fs "/myfile"
+        st         <- exec "fstat file" $ fstat fs thePath
         checkFileStat st fileSz RegularFile defaultFilePerms
                       usr grp expBlks atp mtp
 
   t1 <- time
-  exec "bytes -> /myfile" $ write fs fh 0 fileData
+  exec "bytes -> file" $ write fs fh 0 fileData
   checkFileStat' (t1 <) (t1 <)
 
-  -- Readback and check
+  -- Readback and check before closing the file
   t2 <- time
-  fileData' <- exec "bytes <- /myfile" $ read fs fh 0 (fromIntegral fileSz)
+  fileData' <- exec "bytes <- file" $ read fs fh 0 (fromIntegral fileSz)
   checkFileStat' (t2 <) (t2 >)
   assrt "File readback OK" $ fileData == fileData'
 
+  exec "close file" $ closeFile fs fh
+
+  -- Reacquire the FH, read and check
+  fh' <- exec "reopen file" $ openFile fs thePath False
+  fileData'' <- exec "bytes <- file 2" $ read fs fh' 0 (fromIntegral fileSz)
+  checkFileStat' (t2 <) (t2 >)
+  assrt "Reopened file readback OK" $ fileData == fileData''
+
   quickRemountCheck fs
   where
-    time     = exec "obtain time" getTime
-    exec     = execH "propM_fileWR"
-    assrt    = assertMsg "propM_fileWR"
-    maxBytes = fromIntegral $ bdBlockSize dev * bdNumBlocks dev `div` 8
+    pathComps = splitDirectories $ fst $ splitFileName pathFromRoot
+    mkdirs    = drop 1 $ scanl (\l r -> l ++ [pathSeparator] ++ r) "" pathComps
+    thePath   = rootPath </> pathFromRoot
+    time      = exec "obtain time" getTime
+    exec      = execH "propM_fileWR"
+    assrt     = assertMsg "propM_fileWR"
+    maxBytes  = fromIntegral $ bdBlockSize dev * bdNumBlocks dev `div` 8
 
 -- | Sanity check: multiple threads making many new directories
 -- simultaneously are interleaved in a sensible manner.

@@ -613,7 +613,7 @@ decodeInode :: HalfsCapable b t r l m =>
 decodeInode blkSz bs = do
   numAddrs' <- computeNumInodeAddrsM blkSz
   case decode bs of
-    Left s  -> throwError $ HalfsDecodeFail_Inode s
+    Left s  -> throwError $ HE_DecodeFail_Inode s
     Right n -> return n{ inoCont = (inoCont n){ numAddrs = numAddrs' } }
 
 -- | A wrapper around Data.Serialize.decode that populates transient fields.  We
@@ -626,7 +626,7 @@ decodeCont :: HalfsCapable b t r l m =>
 decodeCont blkSz bs = do
   numAddrs' <- computeNumContAddrsM blkSz
   case decode bs of
-    Left s  -> throwError $ HalfsDecodeFail_Cont s
+    Left s  -> throwError $ HE_DecodeFail_Cont s
     Right c -> return c{ numAddrs = numAddrs' }
 
 -- | Allocate the given number of Conts and blocks, and fill blocks into the
@@ -678,7 +678,7 @@ allocFill dev bm avail blksToAlloc contsToAlloc existing = do
       -- currently "flattens" BlockGroup; see comment in writeStream
       mbg <- lift $ BM.allocBlocks bm blksToAlloc
       case mbg of
-        Nothing -> throwError HalfsAllocFailed
+        Nothing -> throwError HE_AllocFailed
         Just bg -> return $ BM.blkRangeBG bg
     -- 
     allocConts =
@@ -691,7 +691,7 @@ allocFill dev bm avail blksToAlloc contsToAlloc existing = do
           case mcr of
             Nothing -> return Nothing
             Just cr -> Just `fmap` lift (buildEmptyCont dev cr)
-        maybe (throwError HalfsAllocFailed) (return) mconts
+        maybe (throwError HE_AllocFailed) (return) mconts
 
 -- | Truncates the stream at the given a stream index and length offset, and
 -- unallocates all resources in the corresponding free region
@@ -846,7 +846,7 @@ getStreamIdx :: HalfsCapable b t r l m =>
              -> HalfsM m StreamIdx
 getStreamIdx blkSz start conts  = do
   sIdx <- decompStreamOffset blkSz start
-  when (bad sIdx) $ throwError $ HalfsInvalidStreamIndex start
+  when (bad sIdx) $ throwError $ HE_InvalidStreamIndex start
   return sIdx
   where
     -- Sanity check
