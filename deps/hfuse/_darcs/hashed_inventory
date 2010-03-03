@@ -1,0 +1,184 @@
+pristine:0000000645-27f23bc7b0a10cbd8bf319a9af76a1a5d77b1e75860b6d83bb3f3038849aea4c
+[initial import of jeremy.bobbio@etu.upmc.fr HFuse
+ijones@syntaxpolice.org**20050531203804] 
+hash: 0000052460-2e4544bbef26495603f6ac95ee859f325bc009a6ba4fcb3b7dc25f2c6ce672b1
+[various fixes to make it compile and run
+ijones@syntaxpolice.org**20050531204112] 
+hash: 0000000267-17c7c9cb4a065501dddf310512363fcb50a465372b54f9449fd18021166f0006
+[added README
+ijones@syntaxpolice.org**20050531204445] 
+hash: 0000000271-6bc95fd1174eab351322c5d4774545daf00c97d15706273ec4e6a0c6bac03e9a
+[implemented defaultFuseOps for convinience.
+ijones@syntaxpolice.org**20050531205246] 
+hash: 0000003285-564cb6bcdbb405fd02ed1b874d379812e27925e5c64ae1f39cf805b35548401f
+[Upgrade interface to FUSE 2.3 - untested
+Jeremy Bobbio <jeremy.bobbio@etu.upmc.fr>**20050611004251] 
+hash: 0000010812-f84d4a4b5d1dbe443914ce8ee2e87cb20d3d4da0896ffee77d09eb82c3cdbae2
+[minor change to compile w/ new hfuse
+ijones@syntaxpolice.org**20050613224727] 
+hash: 0000000325-49b5836890981162c4916c0a68a3e0f33823a8e0dd9527be7206aefd3c7ac4ce
+[updated info on fuse compatibility
+ijones@syntaxpolice.org**20050613225415] 
+hash: 0000000174-87b6ed8cfc855ece30f336bd4694ffcb4fde996e35e4e929a79d974567cc38ea
+[tweak to make cabal work
+ijones@syntaxpolice.org**20050725175647] 
+hash: 0000000417-735efe7521c701c9e4ee0a0a1969caddd5f69f6d170df4ba2fcd4d86c8ae30a2
+[Convert from 6.2 to 6.6
+awick@galois.com**20070124223244] 
+hash: 0000000156-b2cfe969e37da99094cecd678c5a3ad9941e64795ca535a3f37bdecd69e8a1f9
+[Add Show instance for EntryType
+Taru Karttunen <taruti@taruti.net>**20080209140129] 
+hash: 0000000131-0ae513631dbd1a4ab0ebf70ef1ebec67881212b27df73bf9ca53dfcfee87099d
+[Change read/write to ByteStrings, add state to open files, and upgrade Fuse-api version
+Taru Karttunen <taruti@taruti.net>**20080210151600] 
+hash: 0000005103-c8cdc805c69f2b2f2b43015d999990a5bd94f63f35b8f85030bb7f6a1010de28
+[Add support for fuseAccess
+Taru Karttunen <taruti@taruti.net>**20080216163139] 
+hash: 0000000817-ffaecd47d0b6cc1545d0699372aae4072103758e22058870752bb2027e71c1d4
+[Update BindFS and HelloFS
+Taru Karttunen <taruti@taruti.net>**20080304094507] 
+hash: 0000004797-b5f8bc776382d8cfe51b172848d05646093a97bbd60216daaa82541eb49932c9
+[Update cabal file and bump version
+Taru Karttunen <taruti@taruti.net>**20080304094522] 
+hash: 0000000612-6d0b41f00543fe665539b8658a09ac980b0d935906a3a22c5a32b7aa3d602a78
+[Move examples to their own directory, with a simple Makefile
+Will Thompson <will@willthompson.co.uk>**20080315170247] 
+hash: 0000000544-d23dc1807a7b86dca711e0dda9372ae9c5b3e626bde723f81adb38a18e375650
+[Remove old Makefile-based build stuff, in favour of cabal.
+Will Thompson <will@willthompson.co.uk>**20080315170343] 
+hash: 0000002169-739ed26eb933871296007ffc35428121afc21cdd4811a87aa0183c2da83596a3
+[Move FuseOperations' members' documentation inline, where Haddock can see it.
+Will Thompson <will@willthompson.co.uk>**20080315193547] 
+hash: 0000010337-067fcf47572e562614fbb4047790abf7f681e66a96626739365f04906eb9c1d2
+[utime() is deprecated according to the fuse docs.
+Will Thompson <will@willthompson.co.uk>**20080315193640] 
+hash: 0000000179-72d84580f24179c693787016eae011bbca6ee6ad869c84c0dc8afcf3db2e71f0
+[Document fuseAccess
+Will Thompson <will@willthompson.co.uk>**20080315195237] 
+hash: 0000000381-086b280c75e3b04b990e16f1d245b8688702895af5a063a093ecfd83ca18b450
+[Misc. spelling correction.
+Will Thompson <will@willthompson.co.uk>**20080316105625] 
+hash: 0000000160-19038ad379ed762a54e6aa4198af0318ad9deaf406433e33bc6d45d002be04a7
+[Extract FileStat -> Ptr CStat marshalling.
+Will Thompson <will@willthompson.co.uk>**20080316110212] 
+hash: 0000002929-5d24e387ce3d0b90346e57d2d725c6e5439c0217ec441dbaf43c09660c7c4465
+[Correct the type of fuse_init to match the 2.6 API.
+Will Thompson <will@willthompson.co.uk>**20080316110251] 
+hash: 0000000491-4baca1fe0c66e237e106146d6319fbb29c104457eb0881115f4fbecaefc10112
+[Comment tweaks.
+Will Thompson <will@willthompson.co.uk>**20080316110633] 
+hash: 0000000875-35f02f058b01c577c26f35a496181f663955733aabde22f0dd3f21c49d30ce1a
+[Un-magic-number the value of eOK.
+Will Thompson <will@willthompson.co.uk>**20080316110737] 
+hash: 0000000148-a368700522d248208545d1bc89d73933e57cedb480f0b162e33f27a407b3f1b4
+[Wrap readdir, replacing getdir.
+Will Thompson <will@willthompson.co.uk>**20080316110754] 
+hash: 0000003578-0b7c8f0a356c9700bcc2958891b03af7d0027ab9131259a00ebef980e7c45176
+[Use a C wrapper around the fuse_main macro, not fuse_main_real directly.
+Will Thompson <will@willthompson.co.uk>**20080316112010] 
+hash: 0000001340-40c72d0011b63f4798944f5a016881b6a2477de820f4df544411aeb7ce95d6b7
+[add boring file
+Will Thompson <will@willthompson.co.uk>**20080316112131] 
+hash: 0000000718-3326a2a6e2f822fc6e3297f2c89068db518e5cdda70cf03140edd95dfb00c0f4
+[Update HelloFS to implement fuseReadDirectory.
+Will Thompson <will@willthompson.co.uk>**20080316112701] 
+hash: 0000005302-475caeb11d1255efc024f0f93f4e4e3f2456894251c682a133019e1445ba5ca0
+[Update BindFS to implement ReadDirectory
+Will Thompson <will@willthompson.co.uk>**20080316131932] 
+hash: 0000003184-7d984ab516a3f6489b00630e4a9907cc357279e66b4cd662d2de64b04a7901db
+[Rename the file handle type parameter to 'fh'.
+Will Thompson <will@willthompson.co.uk>**20080316140250] 
+hash: 0000001735-57ec45d27876a424c2b60caa72c6dc4b2c5f9e03350f7957f340aff09caebebe
+[Make fuseOpen use Either Errno fh, not an (Errno, fh) tuple.
+Will Thompson <will@willthompson.co.uk>**20080316141200] 
+hash: 0000002620-992b7a252be6af15286d179cac6a33cca7bdc7ce04574204a7a26b94ea01cac6
+[Remove obsolete comment about getdir().
+Will Thompson <will@willthompson.co.uk>**20080317145026] 
+hash: 0000000283-7d2b646344ed93671abd0eda394a85b8c351e07df38634fceba5f13b67a5f000
+[More concise documentation of EntryType
+Will Thompson <will@willthompson.co.uk>**20080317145109] 
+hash: 0000000269-f2ec2dd5f8bddfdc57e10e17c52fdb77403fe43789fa0ee8ca3dac4dfa29010e
+[Move salient information from readlink() comment to wrapReadLink
+Will Thompson <will@willthompson.co.uk>**20080317145454] 
+hash: 0000000608-520c158465815a1e4367e0d24f29019598d67f0e6cbc00e0753434746e5ab65d
+[Remove outdated TODO about switching to ByteString
+Will Thompson <will@willthompson.co.uk>**20080317150107] 
+hash: 0000000279-2713a42bc289e18fa9f817af8e555aeb8dad2f3ca2fa5cce79736d24b72475b4
+[Remove redundant comment about open().
+Will Thompson <will@willthompson.co.uk>**20080317150126] 
+hash: 0000000487-97bc4ff0138745fc533e64b68751b2cb66d692764f9ff4377e4920dd8f106f56
+[Remove redundant (and incorrect) comment about read() and write().
+Will Thompson <will@willthompson.co.uk>**20080317204434] 
+hash: 0000000442-379789cfc88eac4a2f752b9484225bd1e7ada246b7435a8c3b2c53a58a0ed414
+[Move TODO about release()'s flags to wrapRelease; remove redundant comment.
+Will Thompson <will@willthompson.co.uk>**20080317204504] 
+hash: 0000001363-366a703f977ea1b8f6003e59b3666e7a0eddbf9fe95076928c6a7d08366b6ce5
+[Remove redundant comment about fsync()'s datasync parameter.
+Will Thompson <will@willthompson.co.uk>**20080317204711] 
+hash: 0000000244-fe5e6ee043b8924ee969c4c16e66cb5d8d13467d57089c49dcca2188baa97654
+[Mention fuseSynchronizeDirectory in SyncType's documentation
+Will Thompson <will@willthompson.co.uk>**20080317204753] 
+hash: 0000000244-61c7e09eb8d81a7f9e8e0d605715af1cc2dda5d4ddae1fe5b5596be3a36373b9
+[Rename HFuse module to System.Fuse
+Will Thompson <will@willthompson.co.uk>**20080319155650] 
+hash: 0000000378-1c023ae5a07d0c8760ec35eefdd73f71848c2c79f008fd82b7960400e1c73689
+[Tweak System.Fuse documentation introduction
+Will Thompson <will@willthompson.co.uk>**20080319155807] 
+hash: 0000000865-0012bcd704d399f5f2f7387a7c0dbe24e12a82ece661323303ced5d4dd13b8a5
+[Fix haddock markup.
+Taru Karttunen <taruti@taruti.net>**20080706073549] 
+hash: 0000000398-9c40bc415e7a9955156a67dee9f59914f6811a5831c367d63644da402a0d7b69
+[MacFUSE support
+kramer@acm.org**20080715001624
+ Added support for OSX MacFUSE. Fixed HelloFS and BindFS. Added helloGetFileSystemStats to enable HelloFS mount operation on OSX. Upated Cabal file to 1.2 format.
+] 
+hash: 0000002386-4c2a63de99523e393dade4f14936f3872c133df0f9c7754702c3a617e15440ea
+[MacFUSE test config doc
+kramer@acm.org**20080715002542] 
+hash: 0000000205-22195579e890b7f9a46b4928ff4a09408fa38378fbf02ad2950795af8b01370c
+[Bump the version to 0.2.1 since the API didn't change
+Taru Karttunen <taruti@taruti.net>**20080715123040] 
+hash: 0000000187-39042252cb833afc0f7e5962bc67d9869aa53217602abe4079358877033f6933
+[Correctly handle fuse_wrappers.h for cabal sdist
+Taru Karttunen <taruti@taruti.net>**20080716144551] 
+hash: 0000000209-f50769394663117fc895f4542d0ab6f91d5ec81e5ff1a3259fef3d7d1f435bc8
+[Add Build-Type: Simple to cabal
+Taru Karttunen <taruti@taruti.net>**20080716145039] 
+hash: 0000000138-f08a86785fb04f901ff2c4664cc1dcd3e03bce2f4f1b6515e1bae05eddb6e6a3
+[Fix author name for Hackage
+Taru Karttunen <taruti@taruti.net>**20080826094026] 
+hash: 0000000181-4fbb05755adba2b6debd90a1f4d798ecb3df8c45c79766c07fdb4a0ff51a8249
+[Use custom fuse_main (patch from Brian B <phunge0@hotmail.com>)
+Taru Karttunen <taruti@taruti.net>**20080826094105] 
+hash: 0000012539-ef804e6d1f5a2304cf8a5aacbe4759cca1dc56262eb6e7027a4258a6c023697e
+[Update build-depends to deal with base4 being the default, rather than base3.
+awick@galois.com**20090308053207
+ Ignore-this: 45f72c69f1a78fac715cb6e10b4c2657
+] 
+hash: 0000000294-3d978e3400ae14f85cfe667f8e7256c58745bb615e18191161c6c0fcb4da8068
+[Fix a bug with libfuse 2.7.
+awick@galois.com**20090308053242
+ Ignore-this: 732b1e78d09865134fcaa71ce34b1930
+ 
+ This fixes a bug with libfuse 2.7 (and possibly other versions) by explicitly
+ clearing out the memory used for fuse_operations before poking the operations
+ in. This way, if there are operations the Haskell doesn't know about -- and
+ there appear to be several -- they default correctly to NULL rather than 
+ random junk on the stack.
+] 
+hash: 0000000668-16e115d2a3a4016f1020a0d16cc65920b9600ff654c6f518f8e3bcdbc2b6e60d
+[threadsafe -> safe on FFI imports
+Taru Karttunen <taruti@taruti.net>**20100112010151
+ Ignore-this: 4213ea53ae4c9b65c8dd5d120a44c6c0
+] 
+hash: 0000005019-f907be5c0f1dc1c0b95b75259958f3b286cc41d4fd0d0a5da84d9a82268827a1
+[Update copyright notes
+Taru Karttunen <taruti@taruti.net>**20100112012345
+ Ignore-this: 173302b0e31335942ae014edf595c411
+] 
+hash: 0000000464-0ad24f580777de73c244344f768850a789c71104823d14272307cefedbb4b0ae
+[Added README to extra-source-files
+Taru Karttunen <taruti@taruti.net>**20100120231008
+ Ignore-this: 83a3643230994976e4890cebf798d12c
+] 
+hash: 0000000189-e4f5869ad611a56b0e5a1c47200ca7b1c82a4d6e1878c3315ae438c78582f0fb

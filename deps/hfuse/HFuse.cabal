@@ -1,0 +1,44 @@
+Name:                   HFuse
+Version:                0.2.1
+License:                BSD3
+License-File:		LICENSE
+Author:                 Jeremy Bobbio
+Maintainer: 		Taru Karttunen <taruti@taruti.net>
+Synopsis:               HFuse is a binding for the Linux FUSE library.
+Homepage:               http://code.haskell.org/hfuse
+Category:               System
+Stability:              Experimental
+Cabal-Version:          >= 1.2
+Build-Type:             Simple
+Extra-source-files:     README
+
+Library
+  Build-Depends:          base >= 3 && < 4, unix, bytestring
+  exposed-Modules:        System.Fuse
+  Extensions:             ForeignFunctionInterface ScopedTypeVariables EmptyDataDecls
+
+  Include-Dirs:           /usr/include, /usr/local/include, .
+  Includes:               dirent.h, fuse.h, fcntl.h
+
+  if os(darwin) {
+    Include-Dirs:         /usr/local/include/fuse
+    Includes:             sys/mount.h
+  } 
+  else { 
+    Includes:             sys/statfs.h
+  }
+
+  if os(darwin) {
+    Extra-Libraries:      fuse_ino64
+  }
+  else {
+    Extra-Libraries:      fuse
+  }
+  Extra-Lib-Dirs:         /usr/local/lib
+
+  CC-Options:             -D_FILE_OFFSET_BITS=64 -DFUSE_USE_VERSION=26
+
+  -- Following assumes Mac OS X on 64-bit x86 architectures
+  if os(darwin) {
+    CC-Options: -DMACFUSE -D__FreeBSD__=10 -D__DARWIN_64_BIT_INO_T=1 -arch i386
+  }

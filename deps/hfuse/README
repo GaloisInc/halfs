@@ -1,0 +1,33 @@
+Programs using HFuse should be compiled with -threaded.
+
+HelloFS seems to work with:
+* Linux 2.6.24
+* The Glorious Glasgow Haskell Compilation System, version 6.8.2
+* fuse-2.6
+
+BindFS (?) is known to have a lurking deadlock problem.
+
+LiveFS is broken (from the old distribution).
+
+Added support for MacFUSE. Tested HelloFS and BindFS with:
+* OSX 10.4.11 on a PPC G4 mac
+* GHC 6.8.3
+* MacFUSE 10.4-1.7.0
+
+--------------------------------------------------------------------------------
+
+Galois:
+
+JS 03 Mar 2009: I've tweaked the cabal file a bit and the current
+version builds and works (for HelloFS at least) on:
+
+* OS X 10.5.8 on a 64 bit Intel Mac
+* GHC 6.10.4
+* MacFUSE 2.0.3 
+
+Checking the darcs repo into git (wha!?) as well so we can easily submit
+patches later if we so choose.
+
+--------------------------------------------------------------------------------
+
+
