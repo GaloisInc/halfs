@@ -57,6 +57,3 @@ openFilePrim = return . FH
 
 fhInode :: FileHandle -> InodeRef
 fhInode (FH ir) = ir
-
-_foo :: Int
-_foo = undefined FH

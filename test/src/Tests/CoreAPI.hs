@@ -8,13 +8,14 @@ where
 import Control.Concurrent
 import Data.Serialize
 import Foreign.C.Error 
-import Prelude hiding (read)
+import Prelude hiding (read, exp)
 import System.FilePath
 import Test.QuickCheck hiding (numTests)
 import Test.QuickCheck.Monadic 
 import qualified Data.ByteString as BS
 import qualified Data.List as L
 import qualified Data.Map as M
+
 
 import Halfs.BlockMap
 import Halfs.Classes
@@ -33,7 +34,7 @@ import Tests.Instances (printableBytes, filename)
 import Tests.Types
 import Tests.Utils
 
-import Debug.Trace
+-- import Debug.Trace
 
 
 --------------------------------------------------------------------------------
@@ -49,15 +50,15 @@ type HalfsProp =
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [
---     exec 10 "Init and mount"         propM_initAndMountOK
---   , exec 10 "Mount/unmount"          propM_mountUnmountOK
---   , exec 10 "Unmount mutex"          propM_unmountMutexOK
---   , exec 10 "Directory construction" propM_dirConstructionOK
---   , exec 10 "Simple file creation"   propM_fileCreationOK
---   , exec  5 "File WR 1" $            propM_fileWR "myfile"
---   , exec  5 "File WR 2" $            propM_fileWR "foo/bar/baz"
---   , exec 50 "Directory mutex"        propM_dirMutexOK
-    exec 1 "Hardlink creation" propM_hardlinksOK
+    exec 10 "Init and mount"         propM_initAndMountOK
+  , exec 10 "Mount/unmount"          propM_mountUnmountOK
+  , exec 10 "Unmount mutex"          propM_unmountMutexOK
+  , exec 10 "Directory construction" propM_dirConstructionOK
+  , exec 10 "Simple file creation"   propM_fileCreationOK
+  , exec  5 "File WR 1" $            propM_fileWR "myfile"
+  , exec  5 "File WR 2" $            propM_fileWR "foo/bar/baz"
+  , exec 50 "Directory mutex"        propM_dirMutexOK
+  , exec 10 "Hardlink creation"      propM_hardlinksOK
   ]
   where
     exec = mkMemDevExec quick "CoreAPI"
@@ -299,42 +300,62 @@ propM_dirMutexOK _g dev = do
 
 propM_hardlinksOK :: HalfsProp
 propM_hardlinksOK _g dev = do
+
   -- Create a dummy filesystem with the following hierarchy
   -- / (directory)
   --   foo (directory)
   --     bar (directory)
-  --       baz1 (1 byte file)
+  --       source (1 byte file)
   
   fs <- runH (newfs dev) >> mountOK dev
-  let d0  = rootPath </> "foo"
-      d1  = d0 </> "bar"
-      src = d1 </> "source"
-      dst = d1 </> "link_to_source"
+  exec "mkdir /foo"                  $ mkdir fs defaultDirPerms d0
+  exec "mkdir /foo/bar"              $ mkdir fs defaultDirPerms d1
+  fh <- exec "creat /foo/bar/source" $ openFile fs src True
 
-  exec "mkdir /foo"               $ mkdir fs defaultDirPerms d0
-  exec "mkdir /foo/bar"           $ mkdir fs defaultDirPerms d1
-  fh <- exec "creat /foo/bar/baz" $ openFile fs src True
-  exec "write /foo/bar/baz"       $ write fs fh 0 (BS.singleton 0) 
-  exec "close /foo/bar/baz"       $ closeFile fs fh
+  forAllM (choose (1, maxBytes))  $ \fileSz   -> do
+  forAllM (printableBytes fileSz) $ \srcBytes -> do 
+
+  exec "write /foo/bar/source"       $ write fs fh 0 srcBytes
+  exec "close /foo/bar/source"       $ closeFile fs fh
 
   -- Expected error: File named by path1 is a directory
-  expectErrno ePERM =<< runH (mklink fs d1 dst)
+  expectErrno ePERM   =<< runH (mklink fs d1 dst1)
   -- Expected error: A component of path1's prefix is not a directory
-  expectErrno eNOTDIR =<< runH (mklink fs (src </> "source") dst)
+  expectErrno eNOTDIR =<< runH (mklink fs (src </> "source") dst1)
   -- Expected error: A component of path1's prefix does not exist
-  expectErrno eNOENT =<< runH (mklink fs (d1 </> "bad" </> "source") dst)
+  expectErrno eNOENT  =<< runH (mklink fs (d1 </> "bad" </> "source") dst1)
   -- Expected error: The file named by path1 does not exist
-  expectErrno eNOENT =<< runH (mklink fs (d1 </> "src2") dst)
+  expectErrno eNOENT  =<< runH (mklink fs (d1 </> "src2") dst1)
   -- Expected error: A component of path2's prefix is not a directory
-  expectErrno eNOTDIR =<< runH (mklink fs src (src </> "dst"))
+  expectErrno eNOTDIR =<< runH (mklink fs src (src </> "dst1"))
   -- Expected error: A component of path 2's prefix does not exist
-  expectErrno eNOENT =<< runH (mklink fs src (d0 </> "bad" </> "bar"))
+  expectErrno eNOENT  =<< runH (mklink fs src (d0 </> "bad" </> "bar"))
        
-  return ()
+  mapM_ (\dst -> exec "mklink" $ mklink fs src dst) dests
+
+  fhs <- mapM (\nm -> exec "open dst" $ openFile fs nm False) dests
+  ds  <- mapM (\dh -> exec "read dst" $ read fs dh 0 (fromIntegral fileSz)) fhs
+
+  assert $ all (== srcBytes) ds
+
+  mapM (\dh -> exec "close dst" $ closeFile fs dh) fhs
+
+  -- TODO: Test rmlink here
+
+  quickRemountCheck fs
   where
+    exec           = execH "propM_hardlinksOK"
+    d0             = rootPath </> "foo"
+    d1             = d0 </> "bar"
+    src            = d1 </> "source"
+    dests@(dst1:_) = [ d1 </> "link_to_source"
+                     , d1 </> "link_2_to_source"
+                     , d1 </> "link_3_to_source"
+                     ]
+    maxBytes       = fromIntegral $ bdBlockSize dev * bdNumBlocks dev `div` 8
+    --
     expectErrno exp (Left (HE_ErrnoAnnotated _ errno)) = assert (errno == exp)
     expectErrno _ _                                    = assert False
-    exec = execH "propM_hardlinksOK"
 
 
 --------------------------------------------------------------------------------

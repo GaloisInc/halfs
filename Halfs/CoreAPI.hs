@@ -355,13 +355,6 @@ mklink fs path1 {-src-} path2 {-dst-} = do
              pathnames.  This is taken to be indicative of a looping symbolic
              link.
 
-     [ENOSPC] The directory in which the entry for the new link is being placed
-              cannot be extended because there is no space left on the file
-              system containing the directory.
-
-     [EEXIST] The link named by path2 already exists.
-
-
      DEFERRED
      -------- 
 
@@ -371,8 +364,9 @@ mklink fs path1 {-src-} path2 {-dst-} = do
      [EXDEV] The link named by path2 and the file named by path1 are on
              different file systems.
 
-     NOT APPLICABLE (YET?)
-     ---------------------
+     NOT APPLICABLE (but may be reconsidered later)
+     ----------------------------------------------
+
      [EFAULT]       One of the pathnames specified is outside the process's
                     allocated address space.
 
@@ -388,34 +382,61 @@ mklink fs path1 {-src-} path2 {-dst-} = do
   -}
 
   -- Try to open path1 (the source file)
-  p1h <- openFile fs path1 False `catchError` \e ->
-           let annot errno = throwError $ HE_ErrnoAnnotated e errno in
-           case e of
-             -- [EPERM]: The file named by path1 is a directory
-             HE_UnexpectedFileType Directory _ -> e `annErrno` ePERM
-             -- [ENOTDIR]: A component of path1's prefix is not a directory
-             HE_UnexpectedFileType _ _         -> e `annErrno` eNOTDIR
-             -- [ENOENT] A component of path1's prefix does not exist
-             HE_PathComponentNotFound _        -> e `annErrno` eNOENT
-             -- [ENOENT] The file named by path1 does not exist
-             HE_FileNotFound                   -> e `annErrno` eNOENT
-             _                                 -> throwError e
+  p1h <- openFile fs path1 False
+           `catchError` \e ->
+             case e of
+               -- [EPERM]: The file named by path1 is a directory
+               HE_UnexpectedFileType Directory _ -> e `annErrno` ePERM
+               -- [ENOTDIR]: A component of path1's pfx is not a directory
+               HE_UnexpectedFileType _ _         -> e `annErrno` eNOTDIR
+               -- [ENOENT] A component of path1's pfx does not exist
+               HE_PathComponentNotFound _        -> e `annErrno` eNOENT
+               -- [ENOENT] The file named by path1 does not exist
+               HE_FileNotFound                   -> e `annErrno` eNOENT
+               _                                 -> throwError e
 
   -- Try to open path2's path prefix
   let (p2pfx, p2fname) = splitFileName path2
-  p2pfxdh <- openDir fs p2pfx `catchError` \e ->
-               case e of
-                 -- [ENOTDIR]: A component of path2's prefix is not a directory
-                 HE_UnexpectedFileType{}    -> e `annErrno` eNOTDIR
-                 -- [ENOENT] A component of path2's prefix does not exist
-                 HE_PathComponentNotFound{} -> e `annErrno` eNOENT
-                 _                       -> throwError e
+  p2pfxdh <- openDir fs p2pfx
+               `catchError` \e ->
+                 case e of
+                   -- [ENOTDIR]: A component of path2's pfx is not a directory
+                   HE_UnexpectedFileType{}    -> e `annErrno` eNOTDIR
+                   -- [ENOENT] A component of path2's pfx does not exist
+                   HE_PathComponentNotFound{} -> e `annErrno` eNOENT
+                   _                       -> throwError e
   
-  -- HERE:
+  usr <- getUser
+  grp <- getGroup
+  let srcINR  = fhInode p1h
+      cleanup = decLinkCount fs srcINR
 
+  incLinkCount fs srcINR
+
+  addDirEnt p2pfxdh p2fname srcINR usr grp defaultFilePerms RegularFile
+    `catchError` \e -> do
+      cleanup
+      case e of
+        -- [EEXIST]: The link named by path2 already exists.
+        HE_ObjectExists{} -> e `annErrno` eEXIST
+        _                 -> throwError e
+
+  -- TODO: If the syncDirectory belows fails, we'll need to remove the new
+  -- DirEnt from the map.  This kind of rollback-on-exception will be common,
+  -- and must maintain thread safety properties, so we probably want to think of
+  -- a clean way to handle it.
+
+  syncDirectory fs p2pfxdh
+    `catchError` \e -> do
+      cleanup
+      case e of
+        -- [ENOSPC]: The directory in which the entry for the new link is being
+        -- placed cannot be extended because there is no space left on the file
+        -- system containing the directory.
+        HE_AllocFailed{} -> e `annErrno` eNOSPC
+        _                -> throwError e
+          
   closeDir fs p2pfxdh
-  
-  error "mklink NYI!"
   where
     e `annErrno` errno = throwError (e `HE_ErrnoAnnotated` errno)
 

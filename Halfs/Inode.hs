@@ -4,7 +4,9 @@ module Halfs.Inode
     InodeRef(..)
   , blockAddrToInodeRef
   , buildEmptyInodeEnc
+  , decLinkCount
   , fileStat
+  , incLinkCount
   , inodeKey
   , inodeRefToBlockAddr
   , nilInodeRef
@@ -55,7 +57,7 @@ import Halfs.Utils
 
 import System.Device.BlockDevice
 
---import Debug.Trace
+import Debug.Trace
 dbug :: String -> a -> a
 dbug _ = id
 --dbug = trace
@@ -407,7 +409,7 @@ writeStream :: HalfsCapable b t r l m =>
             -> HalfsM m ()
 writeStream _ _ _ _ bytes | 0 == BS.length bytes = return ()
 writeStream fs startIR start trunc bytes         =
-  withLockedInode fs startIR $ do     
+  withLockedInode fs startIR $ do
   -- ====================== Begin inode critical section ======================
 
   -- NB: The implementation currently 'flattens' Contig/Discontig block groups
@@ -532,12 +534,38 @@ writeStream fs startIR start trunc bytes         =
 --------------------------------------------------------------------------------
 -- Inode operations
 
+incLinkCount :: HalfsCapable b t r l m =>
+                HalfsState b r l m
+             -> InodeRef -- ^ Source inode ref
+             -> HalfsM m ()
+incLinkCount fs inr =
+  atomicModifyInode fs inr $ \nd ->
+    nd{ inoNumLinks = inoNumLinks nd + 1 }
+
+decLinkCount :: HalfsCapable b t r l m =>
+                HalfsState b r l m
+             -> InodeRef -- ^ Source inode ref
+             -> HalfsM m ()
+decLinkCount fs inr =
+  atomicModifyInode fs inr $ \nd ->
+    nd{ inoNumLinks = inoNumLinks nd - 1 }
+
+atomicModifyInode :: HalfsCapable b t r l m =>
+                     HalfsState b r l m
+                  -> InodeRef
+                  -> (Inode t -> Inode t)
+                  -> HalfsM m ()
+atomicModifyInode fs inr f = 
+  withLockedInode fs inr $ do 
+    inode <- drefInode (hsBlockDev fs) inr
+    lift $ writeInode (hsBlockDev fs) (f inode)
+
 fileStat :: HalfsCapable b t r l m =>
             HalfsState b r l m
          -> InodeRef
          -> HalfsM m (FileStat t)
 fileStat fs inr = do
-  inode <- drefInode (hsBlockDev fs) inr
+  inode <- withLockedInode fs inr $ drefInode (hsBlockDev fs) inr
   return $ FileStat
     { fsInode      = inr
     , fsType       = inoFileType    inode

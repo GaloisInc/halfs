@@ -120,6 +120,17 @@ openDirectory :: HalfsCapable b t r l m =>
               -> InodeRef
               -> HalfsM m (DirHandle r l)
 openDirectory fs inr = do
+  -- TODO: Consider potential race conditions / danging dirhandle ref
+  -- problems here, e.g. w.r.t. directory removal being interleaved
+  -- immediately after the dhmap lock acquisition/release window via
+  -- withLockedRscRef.  What can go wrong? Is the subsequent lookup on
+  -- reacq sufficient to mitigate the problem?
+  --
+  -- NB: Even when there are no race conditions here, We'll need a clean way to
+  -- invalidate DirHandles that escape from here, so that users of the handle
+  -- are informed when their handle is dangling (which can occur, e.g., if
+  -- another process removes a directory).
+
   mdh <- withLockedRscRef (hsDHMap fs) (lookupRM inr)
   case mdh of
     Just dh -> return dh
@@ -233,14 +244,6 @@ findInDir :: HalfsCapable b t r l m =>
           -> FileType
           -> HalfsM m (DirFindRslt InodeRef)
 findInDir dh fname ftype = (fmap . fmap) deInode (findDE dh fname ftype)
---  rslt <- findDE dh fname ftype
---  return $ deInode `fmap` rslt
---  rslt <- findDE dh fname ftype
---   case rslt of
---     DF_NotFound      -> DF_NotFound
---     DF_WrongFileType -> DF_WrongFileType
---     DF_Found x       -> DF_Found (deInode x)
---  findInDir' dh fname ftype >>= return . maybe Nothing (Just . deInode)
 
 
 --------------------------------------------------------------------------------
@@ -279,4 +282,3 @@ _dirStTransRm _           = VeryDirty
 
 dirStTransClean :: DirectoryState -> DirectoryState
 dirStTransClean = const Clean
-
