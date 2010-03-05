@@ -277,11 +277,15 @@ propM_dirMutexOK _g dev = do
   replicateM n (run $ readChan ch)
   -- ^ barrier
 
-  dh     <- exec "openDir /" $ openDir fs "/"
-  dnames <- exec "readDir /" $ map fst `fmap` readDir fs dh
+  dh               <- exec "openDir /" $ openDir fs "/"
+  (dnames, dstats) <- exec "readDir /" $ unzip `fmap` readDir fs dh
 
   assertMsg "propM_dirMutexOK" "Directory contents are coherent" $
     L.sort dnames == L.sort (concat nmss)
+
+  -- Misc extra check; convenient to do it here
+  assertMsg "propM_dirMutexOK" "FileStats report Directory type" $
+    all (== Directory) $ map fsType dstats
 
   quickRemountCheck fs 
   where
@@ -300,7 +304,6 @@ propM_dirMutexOK _g dev = do
 
 propM_hardlinksOK :: HalfsProp
 propM_hardlinksOK _g dev = do
-
   -- Create a dummy filesystem with the following hierarchy
   -- / (directory)
   --   foo (directory)

@@ -190,10 +190,10 @@ readDir :: (HalfsCapable b t r l m) =>
            HalfsState b r l m
         -> DirHandle r l
         -> HalfsM m [(FilePath, FileStat t)]
-readDir _fs dh = do
-  contents <- withLock (dhLock dh) $ readRef $ dhContents dh
-  return $ M.keys contents `zip`
-           repeat (error "readDir Internal: FileStat aggregation NYI")
+readDir fs dh = getFileStats =<< withLock (dhLock dh) (readRef $ dhContents dh)
+  where
+    getFileStats  = mapM doSnd . M.toList . M.map (fileStat fs . deInode)
+    doSnd (x,act) = act >>= return . (,) x
 
 -- | Synchronize the given directory to disk.
 syncDir :: (HalfsCapable b t r l m) =>
