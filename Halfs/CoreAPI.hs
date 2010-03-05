@@ -3,9 +3,10 @@ module Halfs.CoreAPI where
 
 import Control.Exception (assert)
 import Data.ByteString   (ByteString)
-import qualified Data.ByteString as BS
-import qualified Data.Map        as M
+import qualified Data.ByteString  as BS
+import qualified Data.Map         as M
 import Data.Serialize
+import qualified Data.Traversable as T
 import Data.Word
 import Foreign.C.Error
 import System.FilePath
@@ -190,10 +191,10 @@ readDir :: (HalfsCapable b t r l m) =>
            HalfsState b r l m
         -> DirHandle r l
         -> HalfsM m [(FilePath, FileStat t)]
-readDir fs dh = getFileStats =<< withLock (dhLock dh) (readRef $ dhContents dh)
-  where
-    getFileStats  = mapM doSnd . M.toList . M.map (fileStat fs . deInode)
-    doSnd (x,act) = act >>= return . (,) x
+readDir fs dh =
+  liftM M.toList $
+    T.mapM (fileStat fs . deInode)
+      =<< withLock (dhLock dh) (readRef $ dhContents dh)
 
 -- | Synchronize the given directory to disk.
 syncDir :: (HalfsCapable b t r l m) =>
