@@ -25,7 +25,7 @@ import Halfs.Types
 
 import System.Device.BlockDevice
 
-import Debug.Trace
+-- import Debug.Trace
 
 data SyncType = Data | Everything
 

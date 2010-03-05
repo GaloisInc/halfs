@@ -54,3 +54,10 @@ executable halfs-tests
   hs-source-dirs: test/src . 
   main-is: Driver.hs
   ghc-options: -O2 -Wall -fno-ignore-asserts -threaded
+
+executable halfs
+  build-depends:    HFuse >= 0.2.1
+
+  hs-source-dirs: fuse/src .
+  main-is: Halfs.hs
+  ghc-options: -O2 -Wall -fno-ignore-asserts -threaded

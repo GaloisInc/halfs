@@ -57,7 +57,7 @@ import Halfs.Utils
 
 import System.Device.BlockDevice
 
-import Debug.Trace
+--import Debug.Trace
 dbug :: String -> a -> a
 dbug _ = id
 --dbug = trace
