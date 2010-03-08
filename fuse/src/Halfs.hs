@@ -4,6 +4,7 @@ module Main
 where
 
 import Control.Applicative
+import Control.Monad
 import qualified Data.ByteString as BS
 import Data.Word
 import Prelude hiding (log)
@@ -74,19 +75,21 @@ main = do
         where hdr = "Usage: halfs [OPTION...] <FUSE CMDLINE>"
 
   let sz = optSecSize opts; n = optNumSecs opts
-  dev <- maybe (fail "Unable to create device") return
+  (exists, dev) <- maybe (fail "Unable to create device") return
     =<<
+    let wb = (liftM . liftM) . (,) in
     if optMemDev opts
-     then newMemoryBlockDevice n sz <* putStrLn "Created memory device."
+     then wb False $ newMemoryBlockDevice n sz <* putStrLn "Created new memdev."
      else case optFileDev opts of
             Nothing -> fail "Can't happen"
             Just fp -> do
               exists <- doesFileExist fp
-              if exists
-               then newFileBlockDevice fp sz 
-                      <* putStrLn "Created file device from existing file."
-               else withFileStore False fp sz n (`newFileBlockDevice` sz)
-                      <* putStrLn "Created file device from new file."  
+              wb exists $ 
+                if exists
+                 then newFileBlockDevice fp sz 
+                        <* putStrLn "Created filedev from existing file."
+                 else withFileStore False fp sz n (`newFileBlockDevice` sz)
+                        <* putStrLn "Created filedev from new file."  
 
   -- Successful dev acquisition and newfs/mountfs invocation from the above will
   -- yield a HalfsState structure that can be passed to hOps and mixed in with
