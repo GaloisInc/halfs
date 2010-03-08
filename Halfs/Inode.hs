@@ -486,7 +486,7 @@ writeStream fs startIR start trunc bytes         =
 
   assert (all ((== safeToInt bs) . BS.length) chunks) $ do
 
-  -- Write the data into the appopriate blocks
+  -- Write the data into the appropriate blocks
   mapM_ (\(a,d) -> lift $ bdWriteBlock dev a d) (blkAddrs `zip` chunks)
 
   -- If this is a truncating write where we're not growing the region, free all
