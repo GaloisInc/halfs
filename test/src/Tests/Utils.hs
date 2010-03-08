@@ -8,6 +8,7 @@ import Control.Monad.ST
 import System.Directory
 import System.IO
 import System.IO.Unsafe (unsafePerformIO)
+import System.FilePath
 import Test.QuickCheck hiding (numTests)
 import Test.QuickCheck.Monadic
 
@@ -37,7 +38,12 @@ type DevCtor = BDGeom -> IO (Maybe (BlockDevice IO))
 -- Utility functions
 
 fileDev :: DevCtor
-fileDev g = withFileStore g (`newFileBlockDevice` (bdgSecSz g))
+fileDev g = withFileStore
+              True
+              ("./pseudo.dsk")
+              (bdgSecSz g)
+              (bdgSecCnt g)
+              (`newFileBlockDevice` (bdgSecSz g))
 
 memDev :: DevCtor
 memDev g = newMemoryBlockDevice (bdgSecCnt g) (bdgSecSz g)
@@ -69,14 +75,21 @@ rescaledDev oldG newG ctor =
 monadicBCMIOProp :: PropertyM (BCM IO) a -> Property
 monadicBCMIOProp = monadic (unsafePerformIO . runBCM)
 
-withFileStore :: BDGeom -> (FilePath -> IO a) -> IO a
-withFileStore geom act = do
-  let numBytes = fromIntegral (bdgSecSz geom * bdgSecCnt geom)
-  (fname, h) <- openTempFile "." "pseudo.dsk"
+withFileStore :: Bool -> FilePath -> Word64 -> Word64 -> (FilePath -> IO a)
+              -> IO a
+withFileStore temp fp secSize secCnt act = do
+  let numBytes = fromIntegral (secSize * secCnt)
+  (fname, h) <-
+    if temp
+     then openBinaryTempFile
+            (let d = takeDirectory "." in if null d then "." else d)
+            (takeFileName fp)
+     else (,) fp `fmap` openBinaryFile fp ReadWriteMode
+
   BS.hPut h $ BS.replicate numBytes 0
   hClose h
   rslt <- act fname
-  removeFile fname
+  when temp $ removeFile fname
   return rslt
 
 whenDev :: (Monad m) => (a -> m b) -> (a -> m ()) -> Maybe a -> m b
