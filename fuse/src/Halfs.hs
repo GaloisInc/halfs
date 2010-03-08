@@ -1,4 +1,6 @@
-{-# LANGUAGE Rank2Types #-}
+-- | Command line tool for mounting a halfs filesystem from userspace via
+-- hFUSE/FUSE.
+
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
 module Main
@@ -29,13 +31,17 @@ import Halfs.CoreAPI
 import Halfs.File (FileHandle)
 import Halfs.HalfsState
 import Halfs.Monad
+import System.Device.BlockDevice
 import System.Device.File
 import System.Device.Memory
 import Tests.Utils
 
 import qualified Data.ByteString as BS
 
--- Halfs-specific stuff we carry around in our FUSE functions
+-- Halfs-specific stuff we carry around in our FUSE functions; note that the
+-- FUSE library does this via opaque ptr to user data, but since hFUSE
+-- reimplements fuse_main and doesn't seem to provide a way to hang onto private
+-- data, we just carry the data ourselves.
 type Logger m              = String -> m ()
 type HalfsSpecific b r l m = (Logger m, HalfsState b r l m)
 
@@ -68,22 +74,15 @@ main = do
   when (not exists) $ exec $ newfs dev >> return ()
   fs <- exec $ mount dev
 
-  -- Successful dev acquisition and newfs/mountfs invocation from the above will
-  -- yield a HalfsState structure that can be passed to hOps and mixed in with
-  -- the various filesystem operations.  Note that the true fuse library way to
-  -- do this is via opaque ptr to user data, but since HFuse reimplements
-  -- fuse_main, we carry our filesystem-private data ourselves.
-
-  -- TODO: exception handling and cleanup (Device flush and shutdown etc.)
-
   log <- liftM (logger . snd) $
            (`openTempFile` "halfs.log") =<< getCurrentDirectory
 
   withArgs argv1 $ fuseMain (ops (log, fs)) defaultExceptionHandler
 
 --------------------------------------------------------------------------------
--- Halfs-FUSE filesystem operation implementation
+-- Halfs-hFUSE filesystem operation implementation
 
+-- JS: ST monad impls will have to get mapped to hFUSE ops via stToIO?
 ops :: HalfsSpecific (IOUArray Word64 Bool) IORef IOLock IO
     -> FuseOperations FileHandle
 ops hspec = FuseOperations
@@ -329,6 +328,8 @@ halfsDestroy :: HalfsCapable b t r l m =>
 halfsDestroy (log, fs) = do
   log "halfsDestroy: Unmounting..." 
   exec $ unmount fs
+  log "halfsDestroy: Shutting block device down..."        
+  exec $ lift $ bdShutdown (hsBlockDev fs)
   log $ "halfsDestroy: Done."
   return ()
 

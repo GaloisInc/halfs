@@ -26,7 +26,6 @@ import qualified Halfs.Inode as IN
 import Halfs.Monad
 import Halfs.SuperBlock
 import Halfs.Types
-import Halfs.Utils
 
 import System.Device.BlockDevice (BlockDevice(..))
 
