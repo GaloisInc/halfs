@@ -50,6 +50,7 @@ createFile fs parentDH fname usr grp mode = do
                     grp
       lift $ bdWriteBlock dev (inodeRefToBlockAddr fileIR) n 
       addDirEnt parentDH fname fileIR usr grp mode RegularFile
+      atomicModifyLockedRscRef (hsNumFileNodes fs) (+1)
       return $ fileIR
 
 openFilePrim :: Monad m => InodeRef -> HalfsM m FileHandle

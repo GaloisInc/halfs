@@ -5,6 +5,7 @@ module Halfs.Monad
     module Control.Monad.Error
   , HalfsM
   , HalfsT (runHalfs)
+  , atomicModifyLockedRscRef
   , hbracket
   , newLockedRscRef
   , withLock
@@ -63,7 +64,8 @@ instance Lockable l m => Lockable l (HalfsT m) where
   release = lift . release
 
 instance Timed t m => Timed t (HalfsT m) where
-  getTime = lift getTime
+  getTime        = lift getTime
+--  toPOSIXSeconds = lift . toPOSIXSeconds
 
 --------------------------------------------------------------------------------
 -- Utility functions specific to the Halfs monad
@@ -109,4 +111,8 @@ withLockedRscRef :: HalfsCapable b t r l m =>
                  -> HalfsM m rslt
 withLockedRscRef lr f = withLock (lrLock lr) $ f (lrRsc lr)
 
-
+atomicModifyLockedRscRef :: HalfsCapable b t r l m =>
+                            LockedRscRef l r rsc
+                         -> (rsc -> rsc)
+                         -> HalfsM m ()
+atomicModifyLockedRscRef lr f = withLockedRscRef lr (`modifyRef` f)

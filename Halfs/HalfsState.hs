@@ -21,6 +21,7 @@ data HalfsState b r l m = HalfsState {
   , hsBlockMap         :: BlockMap b r l
   , hsSuperBlock       :: r SuperBlock
   , hsLock             :: l
+  , hsNumFileNodes     :: LockedRscRef l r Word64 
   , hsDHMap            :: LockedRscRef l r (M.Map InodeRef (DirHandle r l))
     -- ^ Tracks active directory handles; we probably want to add a
     -- (refcounting?) expiry mechanism so that the size of the map is

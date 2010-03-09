@@ -27,6 +27,7 @@ import Data.Serialize.Get
 import Data.Serialize.Put
 import Data.STRef
 import Data.Time.Clock
+import Data.Time.Clock.POSIX (POSIXTime, utcTimeToPOSIXSeconds)
 import Data.Time.LocalTime () -- for Show UTCTime instance
 import Data.Word
 
@@ -53,7 +54,8 @@ instance HalfsCapable (STUArray s Word64 Bool) Word64  (STRef s) ()     (ST s)
 -- from. One obvious implementation is using the system clock. Another might be
 -- a step counter.
 class (Monad m, Eq t, Ord t) => Timed t m | m -> t where
-  getTime :: m t
+  getTime        :: m t
+  toPOSIXSeconds :: t -> POSIXTime
 
 -- |This is a monad transformer for the Timed monad, which will work for 2^64
 -- steps of an arbitrary underlying monad.
@@ -87,13 +89,16 @@ instance Serialize UTCTime where
     <*> (picosecondsToDiffTime . fromIntegral) `fmap` getWord64be
 
 instance Timed UTCTime IO where
-  getTime = getCurrentTime
+  getTime        = getCurrentTime
+  toPOSIXSeconds = utcTimeToPOSIXSeconds
 
 instance Timed Word64 (ST s) where
-  getTime = undefined
+  getTime        = undefined
+  toPOSIXSeconds = undefined
 
 instance Monad m => Timed Word64 (TimedT m) where
-  getTime = ttGetTime
+  getTime        = ttGetTime
+  toPOSIXSeconds = undefined
 
 -- ---------------------------------------------------------------------------
 

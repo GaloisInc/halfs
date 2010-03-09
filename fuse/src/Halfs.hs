@@ -7,22 +7,23 @@ module Main
 where
 
 import Control.Applicative
-import Data.Array.IO (IOUArray)
-import Data.IORef (IORef)
-import Data.Word
-import Prelude hiding (log)
-import System.Console.GetOpt
-import System.Directory   (doesFileExist, getCurrentDirectory)
+import Control.Exception     (assert)
+import Data.Array.IO         (IOUArray)
+import Data.IORef            (IORef)
+import Data.Word             
+import Prelude hiding (log)  
+import System.Console.GetOpt 
+import System.Directory      (doesFileExist, getCurrentDirectory)
 import System.Environment
 import System.IO
-import System.Posix.Types ( ByteCount
-                          , DeviceID
-                          , EpochTime
-                          , FileMode
-                          , FileOffset
-                          , GroupID
-                          , UserID
-                          )
+import System.Posix.Types    ( ByteCount
+                             , DeviceID
+                             , EpochTime
+                             , FileMode
+                             , FileOffset
+                             , GroupID
+                             , UserID
+                             )
 
 import System.Fuse     
 
@@ -37,6 +38,7 @@ import System.Device.Memory
 import Tests.Utils
 
 import qualified Data.ByteString as BS
+import qualified Halfs.Types     as H
 
 -- Halfs-specific stuff we carry around in our FUSE functions; note that the
 -- FUSE library does this via opaque ptr to user data, but since hFUSE
@@ -44,6 +46,10 @@ import qualified Data.ByteString as BS
 -- data, we just carry the data ourselves.
 type Logger m              = String -> m ()
 type HalfsSpecific b r l m = (Logger m, HalfsState b r l m)
+
+-- This isn't a halfs limit, but we have to pick something for FUSE.
+maxNameLength :: Integer
+maxNameLength = 32768
 
 main :: IO ()
 main = do
@@ -78,6 +84,9 @@ main = do
            (`openTempFile` "halfs.log") =<< getCurrentDirectory
 
   withArgs argv1 $ fuseMain (ops (log, fs)) defaultExceptionHandler
+  -- TODO: If a new file was created and fuseMain fails to mount (e.g.,
+  -- because the mount point was not given or invalid, etc.), delete the
+  -- file or CoreAPI.unmount it.
 
 --------------------------------------------------------------------------------
 -- Halfs-hFUSE filesystem operation implementation
@@ -85,43 +94,92 @@ main = do
 -- JS: ST monad impls will have to get mapped to hFUSE ops via stToIO?
 ops :: HalfsSpecific (IOUArray Word64 Bool) IORef IOLock IO
     -> FuseOperations FileHandle
-ops hspec = FuseOperations
-  { fuseGetFileStat          = halfsGetFileStat          hspec
-  , fuseReadSymbolicLink     = halfsReadSymbolicLink     hspec
-  , fuseCreateDevice         = halfsCreateDevice         hspec
-  , fuseCreateDirectory      = halfsCreateDirectory      hspec
-  , fuseRemoveLink           = halfsRemoveLink           hspec
-  , fuseRemoveDirectory      = halfsRemoveDirectory      hspec
-  , fuseCreateSymbolicLink   = halfsCreateSymbolicLink   hspec
-  , fuseRename               = halfsRename               hspec
-  , fuseCreateLink           = halfsCreateLink           hspec
-  , fuseSetFileMode          = halfsSetFileMode          hspec
-  , fuseSetOwnerAndGroup     = halfsSetOwnerAndGroup     hspec
-  , fuseSetFileSize          = halfsSetFileSize          hspec
-  , fuseSetFileTimes         = halfsSetFileTimes         hspec
-  , fuseOpen                 = halfsOpen                 hspec
-  , fuseRead                 = halfsRead                 hspec
-  , fuseWrite                = halfsWrite                hspec
-  , fuseGetFileSystemStats   = halfsGetFileSystemStats   hspec
-  , fuseFlush                = halfsFlush                hspec
-  , fuseRelease              = halfsRelease              hspec
-  , fuseSynchronizeFile      = halfsSynchronizeFile      hspec
-  , fuseOpenDirectory        = halfsOpenDirectory        hspec
-  , fuseReadDirectory        = halfsReadDirectory        hspec
-  , fuseReleaseDirectory     = halfsReleaseDirectory     hspec
-  , fuseSynchronizeDirectory = halfsSynchronizeDirectory hspec
-  , fuseAccess               = halfsAccess               hspec
-  , fuseInit                 = halfsInit                 hspec
-  , fuseDestroy              = halfsDestroy              hspec
+ops hsp = FuseOperations
+  { fuseGetFileStat          = \fp -> do ctx <- getFuseContext
+                                         halfsGetFileStat hsp ctx fp
+  , fuseReadSymbolicLink     = halfsReadSymbolicLink     hsp
+  , fuseCreateDevice         = halfsCreateDevice         hsp
+  , fuseCreateDirectory      = halfsCreateDirectory      hsp
+  , fuseRemoveLink           = halfsRemoveLink           hsp
+  , fuseRemoveDirectory      = halfsRemoveDirectory      hsp
+  , fuseCreateSymbolicLink   = halfsCreateSymbolicLink   hsp
+  , fuseRename               = halfsRename               hsp
+  , fuseCreateLink           = halfsCreateLink           hsp
+  , fuseSetFileMode          = halfsSetFileMode          hsp
+  , fuseSetOwnerAndGroup     = halfsSetOwnerAndGroup     hsp
+  , fuseSetFileSize          = halfsSetFileSize          hsp
+  , fuseSetFileTimes         = halfsSetFileTimes         hsp
+  , fuseOpen                 = halfsOpen                 hsp
+  , fuseRead                 = halfsRead                 hsp
+  , fuseWrite                = halfsWrite                hsp
+  , fuseGetFileSystemStats   = halfsGetFileSystemStats   hsp
+  , fuseFlush                = halfsFlush                hsp
+  , fuseRelease              = halfsRelease              hsp
+  , fuseSynchronizeFile      = halfsSynchronizeFile      hsp
+  , fuseOpenDirectory        = halfsOpenDirectory        hsp
+  , fuseReadDirectory        = halfsReadDirectory        hsp
+  , fuseReleaseDirectory     = halfsReleaseDirectory     hsp
+  , fuseSynchronizeDirectory = halfsSynchronizeDirectory hsp
+  , fuseAccess               = halfsAccess               hsp
+  , fuseInit                 = halfsInit                 hsp
+  , fuseDestroy              = halfsDestroy              hsp
   }
 
 halfsGetFileStat :: HalfsCapable b t r l m =>
                     HalfsSpecific b r l m
+                 -> FuseContext
                  -> FilePath
                  -> m (Either Errno FileStat)
-halfsGetFileStat (log, _fs) fp = do
+halfsGetFileStat (log, fs) _ctx fp = do
   log $ "halfsGetFileStat: fp = " ++ show fp
-  return (Left eOK)
+  x <- execOrErrno eINVAL id $ fstat fs fp
+  log $ "halfsGetFileStat: fstat = " ++ show x  
+  return (f2f `fmap` x)
+  where
+    -- TODO: Check how these asserts are handled by the fuse EH.
+    chkb16 x = assert (x' <= fromIntegral (maxBound :: Word16)) x'
+               where x' = fromIntegral x
+    chkb32 x = assert (x' <= fromIntegral (maxBound :: Word32)) x'
+               where x' = fromIntegral x
+    -- 
+    f2f stat =
+      let entryType = case H.fsType stat of
+                        H.RegularFile -> RegularFile
+                        H.Directory   -> Directory
+                        H.Symlink     -> SymbolicLink
+                        -- TODO: Represent remaining FUSE entry types
+                        H.AnyFileType -> error "Invalid fstat type"
+      in FileStat
+      { statEntryType        = entryType
+      , statFileMode         = entryTypeToFileMode entryType
+      , statLinkCount        = chkb16 $ H.fsNumLinks stat
+      , statFileOwner        = chkb32 $ H.fsUID stat
+      , statFileGroup        = chkb32 $ H.fsGID stat
+      , statSpecialDeviceID  = 0 -- XXX/TODO: Do we need to distinguish by
+                                 -- blkdev, or is this for something else?
+      , statFileSize         = fromIntegral $ H.fsSize stat
+      , statBlocks           = fromIntegral $ H.fsNumBlocks stat
+      , statAccessTime       = toPOSIXTime $ H.fsAccessTime stat
+      , statModificationTime = undefined
+      , statStatusChangeTime = undefined
+      }
+
+
+{-
+data FileStat = FileStat { statEntryType :: EntryType
+                         , statFileMode :: FileMode
+                         , statLinkCount :: LinkCount
+                         , statFileOwner :: UserID
+                         , statFileGroup :: GroupID
+                         , statSpecialDeviceID :: DeviceID
+                         , statFileSize :: FileOffset
+                         , statBlocks :: Integer
+                         , statAccessTime :: EpochTime
+                         , statModificationTime :: EpochTime
+                         , statStatusChangeTime :: EpochTime
+                         }
+-}
+
 
 halfsReadSymbolicLink :: HalfsCapable b t r l m =>
                          HalfsSpecific b r l m
@@ -129,95 +187,95 @@ halfsReadSymbolicLink :: HalfsCapable b t r l m =>
                       -> m (Either Errno FilePath)
 halfsReadSymbolicLink (log, _fs) _fp = do 
   log $ "halfsReadSymbolicLink: Not Yet Implemented"
-  return (Left eINVAL)
+  return (Left eNOSYS)
 
 halfsCreateDevice :: HalfsCapable b t r l m =>
                      HalfsSpecific b r l m
                   -> FilePath -> EntryType -> FileMode -> DeviceID
                   -> m Errno
 halfsCreateDevice (log, _fs) _fp _etype _mode _devID = do
-  log $ "halfsCreateDevice: Not Yet Implemented."
-  return eINVAL
+  log $ "halfsCreateDevice: Not Yet Implemented." -- TODO
+  return eNOSYS
 
 halfsCreateDirectory :: HalfsCapable b t r l m =>
                         HalfsSpecific b r l m
                      -> FilePath -> FileMode
                      -> m Errno
 halfsCreateDirectory (log, _fs) _fp _mode = do
-  log $ "halfsCreateDirectory: Not Yet Implemented."
-  return eINVAL
+  log $ "halfsCreateDirectory: Not Yet Implemented." -- TODO
+  return eNOSYS
          
 halfsRemoveLink :: HalfsCapable b t r l m =>
                    HalfsSpecific b r l m
                 -> FilePath
                 -> m Errno
 halfsRemoveLink (log, _fs) _fp = do
-  log $ "halfsRemoveLink: Not Yet Implemented."
-  return eINVAL
+  log $ "halfsRemoveLink: Not Yet Implemented." -- TODO
+  return eNOSYS
          
 halfsRemoveDirectory :: HalfsCapable b t r l m =>
                         HalfsSpecific b r l m
                      -> FilePath
                      -> m Errno
 halfsRemoveDirectory (log, _fs) _fp = do
-  log $ "halfsRemoveDirectory: Not Yet Implemented."
-  return eINVAL
+  log $ "halfsRemoveDirectory: Not Yet Implemented." -- TODO
+  return eNOSYS
          
 halfsCreateSymbolicLink :: HalfsCapable b t r l m =>
                            HalfsSpecific b r l m
                         -> FilePath -> FilePath
                         -> m Errno
 halfsCreateSymbolicLink (log, _fs) _src _dst = do
-  log $ "halfsCreateSymbolicLink: Not Yet Implemented."
-  return eINVAL
+  log $ "halfsCreateSymbolicLink: Not Yet Implemented." -- TODO
+  return eNOSYS
          
 halfsRename :: HalfsCapable b t r l m =>
                HalfsSpecific b r l m
             -> FilePath -> FilePath
             -> m Errno
 halfsRename (log, _fs) _old _new = do
-  log $ "halfsRename: Not Yet Implemented."
-  return eINVAL
+  log $ "halfsRename: Not Yet Implemented." -- TODO
+  return eNOSYS
          
 halfsCreateLink :: HalfsCapable b t r l m =>
                    HalfsSpecific b r l m
                 -> FilePath -> FilePath
                 -> m Errno
 halfsCreateLink (log, _fs) _src _dst = do
-  log $ "halfsCreateLink: Not Yet Implemented."
-  return eINVAL
+  log $ "halfsCreateLink: Not Yet Implemented." -- TODO
+  return eNOSYS
          
 halfsSetFileMode :: HalfsCapable b t r l m =>
                     HalfsSpecific b r l m
                  -> FilePath -> FileMode
                  -> m Errno
 halfsSetFileMode (log, _fs) _fp _mode = do
-  log $ "halfsSetFileMode: Not Yet Implemented."
-  return eINVAL
+  log $ "halfsSetFileMode: Not Yet Implemented." -- TODO
+  return eNOSYS
          
 halfsSetOwnerAndGroup :: HalfsCapable b t r l m =>
                          HalfsSpecific b r l m
                       -> FilePath -> UserID -> GroupID
                       -> m Errno
 halfsSetOwnerAndGroup (log, _fs) _fp _uid _gid = do
-  log $ "halfsSetOwnerAndGroup: Not Yet Implemented."
-  return eINVAL
+  log $ "halfsSetOwnerAndGroup: Not Yet Implemented." -- TODO
+  return eNOSYS
          
 halfsSetFileSize :: HalfsCapable b t r l m =>
                     HalfsSpecific b r l m
                  -> FilePath -> FileOffset
                  -> m Errno
 halfsSetFileSize (log, _fs) _fp _offset = do
-  log $ "halfsSetFileSize: Not Yet Implemented."
-  return eINVAL
+  log $ "halfsSetFileSize: Not Yet Implemented." -- TODO
+  return eNOSYS
          
 halfsSetFileTimes :: HalfsCapable b t r l m =>
                      HalfsSpecific b r l m
                   -> FilePath -> EpochTime -> EpochTime
                   -> m Errno
 halfsSetFileTimes (log, _fs) _fp _tm0 _tm1 = do
-  log $ "halfsSetFileTimes: Not Yet Implemented."
-  return eINVAL
+  log $ "halfsSetFileTimes: Not Yet Implemented." -- TODO
+  return eNOSYS
          
 halfsOpen :: HalfsCapable b t r l m =>
              HalfsSpecific b r l m             
@@ -240,31 +298,43 @@ halfsWrite :: HalfsCapable b t r l m =>
            -> FilePath -> FileHandle -> BS.ByteString -> FileOffset
            -> m (Either Errno ByteCount)
 halfsWrite (log, _fs) _fp _fh _bytes _offset = do
-  log $ "halfsWrite: Not Yet Implemented."
-  return (Left eINVAL)
+  log $ "halfsWrite: Not Yet Implemented." -- TODO
+  return (Left eNOSYS)
 
 halfsGetFileSystemStats :: HalfsCapable b t r l m =>
                            HalfsSpecific b r l m
                         -> FilePath
                         -> m (Either Errno System.Fuse.FileSystemStats)
-halfsGetFileSystemStats (log, _fs) fp = do
-  log $ "halfsGetFileSystemStats: Not Yet Implemented. fp = " ++ show fp
-  return (Left eOK)
+halfsGetFileSystemStats (log, fs) fp = do
+  log $ "halfsGetFileSystemStats: fp = " ++ show fp
+  x <- execOrErrno eINVAL id (fsstat fs)
+  log $ "FileSystemStats: " ++ show x
+  return (fss2fss `fmap` x)
+  where
+    fss2fss (FSS bs bc bf ba fc ff) = System.Fuse.FileSystemStats
+      { fsStatBlockSize       = bs
+      , fsStatBlockCount      = bc
+      , fsStatBlocksFree      = bf
+      , fsStatBlocksAvailable = ba
+      , fsStatFileCount       = fc
+      , fsStatFilesFree       = ff
+      , fsStatMaxNameLength   = maxNameLength
+      }
 
 halfsFlush :: HalfsCapable b t r l m =>
               HalfsSpecific b r l m
            -> FilePath -> FileHandle
            -> m Errno
 halfsFlush (log, _fs) _fp _fh = do
-  log $ "halfsFlush: Not Yet Implemented."
-  return eINVAL
+  log $ "halfsFlush: Not Yet Implemented." -- TODO
+  return eNOSYS
          
 halfsRelease :: HalfsCapable b t r l m =>
                 HalfsSpecific b r l m
              -> FilePath -> FileHandle
              -> m ()
 halfsRelease (log, _fs) _fp _fh = do
-  log $ "halfsRelease: Not Yet Implemented."
+  log $ "halfsRelease: Not Yet Implemented." -- TODO
   return ()
          
 halfsSynchronizeFile :: HalfsCapable b t r l m =>
@@ -272,8 +342,8 @@ halfsSynchronizeFile :: HalfsCapable b t r l m =>
                      -> FilePath -> System.Fuse.SyncType
                      -> m Errno
 halfsSynchronizeFile (log, _fs) _fp _syncType = do
-  log $ "halfsSynchronizeFile: Not Yet Implemented."
-  return eINVAL
+  log $ "halfsSynchronizeFile: Not Yet Implemented." -- TODO
+  return eNOSYS
          
 halfsOpenDirectory :: HalfsCapable b t r l m =>
                       HalfsSpecific b r l m
@@ -296,30 +366,30 @@ halfsReleaseDirectory :: HalfsCapable b t r l m =>
                       -> FilePath
                       -> m Errno
 halfsReleaseDirectory (log, _fs) _fp = do
-  log $ "halfsReleaseDirectory: Not Yet Implemented."
-  return eINVAL
+  log $ "halfsReleaseDirectory: Not Yet Implemented." -- TODO
+  return eNOSYS
          
 halfsSynchronizeDirectory :: HalfsCapable b t r l m =>
                              HalfsSpecific b r l m
                           -> FilePath -> System.Fuse.SyncType
                           -> m Errno
 halfsSynchronizeDirectory (log, _fs) _fp _syncType = do
-  log $ "halfsSynchronizeDirectory: Not Yet Implemented."
-  return eINVAL
+  log $ "halfsSynchronizeDirectory: Not Yet Implemented." -- TODO
+  return eNOSYS
          
 halfsAccess :: HalfsCapable b t r l m =>
                HalfsSpecific b r l m
             -> FilePath -> Int
             -> m Errno
 halfsAccess (log, _fs) _fp _n = do
-  log $ "halfsAccess: Not Yet Implemented."
-  return eINVAL
+  log $ "halfsAccess: Not Yet Implemented." -- TODO
+  return eNOSYS
          
 halfsInit :: HalfsCapable b t r l m =>
              HalfsSpecific b r l m
           -> m ()
 halfsInit (log, _fs) = do
-  log $ "halfsInit: Not Yet Implemented."
+  log $ "halfsInit: Not Yet Implemented." -- TODO
   return ()
 
 halfsDestroy :: HalfsCapable b t r l m =>
@@ -343,9 +413,16 @@ logger h s = do
 -- logger _ _ = return ()
 
 exec :: Monad m => HalfsT m a -> m a
-exec act = runHalfs act >>= \ea -> case ea of
-  Left e  -> fail $ show e
-  Right x -> return x
+exec act =
+  runHalfs act >>= \ea -> case ea of
+    Left e  -> fail $ show e
+    Right x -> return x
+
+execOrErrno :: Monad m => Errno -> (a -> b) -> HalfsT m a -> m (Either Errno b)
+execOrErrno en f act =
+ runHalfs act >>= \ea -> case ea of
+   Left _  -> return $ Left en
+   Right x -> return $ Right (f x)
 
 --------------------------------------------------------------------------------
 -- Command line stuff

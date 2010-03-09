@@ -71,8 +71,8 @@ data LockedRscRef l r rsc = LockedRscRef
 -- was found but was not of the correct type.
 data DirFindRslt a = DF_NotFound | DF_WrongFileType FileType | DF_Found a
 
-data DirectoryEntry = DirEnt {
-    deName  :: String
+data DirectoryEntry = DirEnt
+  { deName  :: String
   , deInode :: InodeRef
   , deUser  :: UserID
   , deGroup :: GroupID
@@ -81,8 +81,8 @@ data DirectoryEntry = DirEnt {
   }
   deriving (Show, Eq)
 
-data DirHandle r l = DirHandle {
-    dhInode       :: InodeRef
+data DirHandle r l = DirHandle
+  { dhInode       :: InodeRef
   , dhContents    :: r (M.Map FilePath DirectoryEntry)
   , dhState       :: r DirectoryState
   , dhLock        :: l
@@ -94,8 +94,8 @@ data AccessRight = Read | Write | Execute
 data DirectoryState = Clean | OnlyAdded | OnlyDeleted | VeryDirty
   deriving (Show, Eq)
 
-data FileMode = FileMode {
-    fmOwnerPerms :: [AccessRight]
+data FileMode = FileMode
+  { fmOwnerPerms :: [AccessRight]
   , fmGroupPerms :: [AccessRight]
   , fmUserPerms  :: [AccessRight]
   }
@@ -104,8 +104,8 @@ data FileMode = FileMode {
 data FileType = RegularFile | Directory | Symlink | AnyFileType
   deriving (Show, Eq)
 
-data Show t => FileStat t = FileStat {
-    fsInode      :: InodeRef
+data Show t => FileStat t = FileStat
+  { fsInode      :: InodeRef
   , fsType       :: FileType
   , fsMode       :: FileMode 
   , fsNumLinks   :: Word64   -- ^ Number of hardlinks to the file
@@ -116,7 +116,8 @@ data Show t => FileStat t = FileStat {
   , fsAccessTime :: t        -- ^ Time of last access
   , fsModTime    :: t        -- ^ Time of last data modification
 --  , fsChangeTime :: t -- Time of last status change
-  } deriving Show
+  }
+  deriving Show
 
 
 --------------------------------------------------------------------------------

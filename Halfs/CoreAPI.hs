@@ -29,14 +29,15 @@ import System.Device.BlockDevice
 
 data SyncType = Data | Everything
 
-data FileSystemStats = FSS {
-    fssBlockSize     :: Integer
-  , fssBlockCount    :: Integer
-  , fssBlocksFree    :: Integer
-  , fssBlocksAvail   :: Integer
-  , fssFileCount     :: Integer
-  , fssMaxNameLength :: Integer
+data FileSystemStats = FSS
+  { fssBlockSize   :: Integer -- ^ fundamental file system block size
+  , fssBlockCount  :: Integer -- ^ #data blocks in filesystem
+  , fssBlocksFree  :: Integer -- ^ #free blocks in filesystem
+  , fssBlocksAvail :: Integer -- ^ #free blocks avail to non-superuser
+  , fssFileCount   :: Integer -- ^ #num file nodes in filesystem
+  , fssFilesFree   :: Integer -- ^ #free file nodes in filesystem
   }
+  deriving (Show)
 
 
 --------------------------------------------------------------------------------
@@ -115,6 +116,7 @@ mount dev = do
            `fmap` lift (readBlockMap dev) -- blockmap
            `ap`   newRef sb'              -- superblock 
            `ap`   newLock                 -- filesystem lock
+           `ap`   newLockedRscRef 0       -- Locked file node count
            `ap`   newLockedRscRef M.empty -- Locked map: InodeRef -> DirHandle
            `ap`   newLockedRscRef M.empty -- Locked map: InodeRef -> (l, refcnt)
        else throwError $ HE_MountFailed DirtyUnmount
@@ -463,7 +465,19 @@ fstat fs fp = absPathIR fs fp AnyFileType >>= fileStat fs
 
 fsstat :: (HalfsCapable b t r l m) =>
           HalfsState b r l m -> HalfsM m FileSystemStats
-fsstat = undefined
+fsstat fs = do
+  fileCnt <- fromIntegral `fmap` withLockedRscRef (hsNumFileNodes fs) readRef
+  freeCnt <- fromIntegral `fmap` numFreeBlocks bm
+  return FSS
+    { fssBlockSize   = fromIntegral $ bdBlockSize $ hsBlockDev fs
+    , fssBlockCount  = fromIntegral $ bdNumBlocks $ hsBlockDev fs
+    , fssBlocksFree  = freeCnt
+    , fssBlocksAvail = freeCnt -- TODO/XXX: avail to non-superuser?
+    , fssFileCount   = fileCnt
+    , fssFilesFree   = freeCnt -- TODO/XXX: free file nodes ?==? free blocks
+    }
+  where
+    bm = hsBlockMap fs
 
 
 --------------------------------------------------------------------------------
