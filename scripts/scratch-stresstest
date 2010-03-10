@@ -1,24 +1,28 @@
 #!/bin/bash
 
-echo $0
+mkdir -p $1
 
 rm -f *.log
-cabal build
+
+#cabal build
 
 echo "Mounting..."
-dist/build/halfs/halfs -m /private/tmp/tmp_mnt
+dist/build/halfs/halfs -m $1
 echo "Mounted."
 
 echo "Waiting..."
-sleep 10
+sleep 1
 echo "Woke up."
 
 echo "Unmounting..."
-umount /private/tmp/tmp_mnt
+umount $1
 echo "Unmounted."
 
 echo "*** Log begin ***"
-cat halfs*.log
+if [ -e /tmp/halfs.log ] 
+  then
+    cat /tmp/halfs.log 
+fi
 echo "*** Log end ***"
 
 echo "Done."

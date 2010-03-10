@@ -7,17 +7,13 @@ module Main
 where
 
 import Control.Applicative
-import Control.Exception     (assert, catch, finally)
+import Control.Exception     (assert)
 import Data.Array.IO         (IOUArray)
 import Data.IORef            (IORef)
-import Data.Time             
 import Data.Word             
-import Foreign.C.Types       (CTime)
-import GHC.Exception         (SomeException)
 import System.Console.GetOpt 
-import System.Directory      (doesFileExist, getCurrentDirectory)
+import System.Directory      (doesFileExist)
 import System.Environment
-import System.IO
 import System.Posix.Types    ( ByteCount
                              , DeviceID
                              , EpochTime
@@ -83,8 +79,7 @@ main = do
   when (not exists) $ exec $ newfs dev >> return ()
   fs <- exec $ mount dev
 
-  log <- liftM (logger . snd) $
-           (`openTempFile` "halfs.log") =<< getCurrentDirectory
+  let log = logger "halfs.log"
 
   withArgs argv1 $ fuseMain (ops (log, fs)) $ \e -> do
     log $ "*** Exception: " ++ show e
@@ -94,9 +89,15 @@ main = do
 -- Halfs-hFUSE filesystem operation implementation
 
 -- JS: ST monad impls will have to get mapped to hFUSE ops via stToIO?
+
 ops :: HalfsSpecific (IOUArray Word64 Bool) IORef IOLock IO
     -> FuseOperations FileHandle
-ops hsp@(log,fs) = FuseOperations
+{-
+ops hsp@(log,fs) = defaultFuseOps
+                     { fuseGetFileSystemStats = const $ return (Left eOK)
+                     }
+-}
+ops hsp@(_log, _) = FuseOperations
   { fuseGetFileStat          = halfsGetFileStat          hsp
   , fuseReadSymbolicLink     = halfsReadSymbolicLink     hsp
   , fuseCreateDevice         = halfsCreateDevice         hsp
@@ -113,7 +114,7 @@ ops hsp@(log,fs) = FuseOperations
   , fuseOpen                 = halfsOpen                 hsp
   , fuseRead                 = halfsRead                 hsp
   , fuseWrite                = halfsWrite                hsp
-  , fuseGetFileSystemStats   = halfsGetFileSystemStats   hsp
+  , fuseGetFileSystemStats   = halfsGetFileSystemStats   hsp -- (appendFile "/tmp/halfs.log" . flip (++) "\n", fs)
   , fuseFlush                = halfsFlush                hsp
   , fuseRelease              = halfsRelease              hsp
   , fuseSynchronizeFile      = halfsSynchronizeFile      hsp
@@ -133,6 +134,8 @@ halfsGetFileStat :: HalfsCapable b t r l m =>
 halfsGetFileStat (log, fs) fp = do
   log $ replicate 80 '-'
   log $ "halfsGetFileStat entry: fp = " ++ show fp
+  return (Left eOK)
+{-
   eestat <- execOrErrno eINVAL id (fstat fs fp)
   case eestat of
     Left _     -> do
@@ -144,7 +147,6 @@ halfsGetFileStat (log, fs) fp = do
       mtm <- toCTime $ H.fsModTime stat
       return $ Right $ f2f atm mtm stat
   where
-    -- TODO: Check how these asserts are handled by the fuse EH.
     chkb16 x = assert (x' <= fromIntegral (maxBound :: Word16)) x'
                where x' = fromIntegral x
     chkb32 x = assert (x' <= fromIntegral (maxBound :: Word32)) x'
@@ -169,8 +171,10 @@ halfsGetFileStat (log, fs) fp = do
         , statBlocks           = fromIntegral $ H.fsNumBlocks stat
         , statAccessTime       = atm
         , statModificationTime = mtm
-        , statStatusChangeTime = 0 -- error "Status change time not yet computed"
+        , statStatusChangeTime = 0 -- FIXME: We need to track this
+                                   -- error "Status change time not yet computed"
         }
+-}
 
 halfsReadSymbolicLink :: HalfsCapable b t r l m =>
                          HalfsSpecific b r l m
@@ -274,7 +278,7 @@ halfsOpen :: HalfsCapable b t r l m =>
           -> m (Either Errno FileHandle)
 halfsOpen (log, _fs) fp mode flags = do
   log $ "halfsOpen: fp = " ++ show fp ++ ", mode = " ++ show mode ++ ", flags = " ++ show flags
-  return (Left eOK)
+  return (Left eNOSYS)
 
 halfsRead :: HalfsCapable b t r l m =>
              HalfsSpecific b r l m
@@ -282,7 +286,7 @@ halfsRead :: HalfsCapable b t r l m =>
           -> m (Either Errno BS.ByteString)
 halfsRead (log, _fs) fp _fh byteCnt offset = do
   log $ "halfsRead: fp = " ++ show fp ++ ", byteCnt = " ++ show byteCnt ++ ", offset = " ++ show offset
-  return (Left eOK)
+  return (Left eNOSYS)
 
 halfsWrite :: HalfsCapable b t r l m =>
               HalfsSpecific b r l m
@@ -344,7 +348,7 @@ halfsOpenDirectory :: HalfsCapable b t r l m =>
                    -> m Errno
 halfsOpenDirectory (log, _fs) fp = do
   log $ "halfsOpenDirectory: fp = " ++ show fp
-  return eOK
+  return eNOSYS
 
 halfsReadDirectory :: HalfsCapable b t r l m =>  
                       HalfsSpecific b r l m
@@ -352,7 +356,7 @@ halfsReadDirectory :: HalfsCapable b t r l m =>
                    -> m (Either Errno [(FilePath, FileStat)])
 halfsReadDirectory (log, _fs) fp = do
   log $ "halfsReadDirectory: fp = " ++ show fp
-  return (Left eOK)
+  return (Left eNOSYS)
 
 halfsReleaseDirectory :: HalfsCapable b t r l m =>
                          HalfsSpecific b r l m
@@ -399,11 +403,9 @@ halfsDestroy (log, fs) = do
 --------------------------------------------------------------------------------
 -- Misc
 
-logger :: Handle -> Logger IO
-logger h s = do
- hPutStrLn h s 
- hFlush h
---logger _ _ = return ()
+logger :: FilePath -> Logger IO
+--logger = appendFile -- hPutStrLn h s >> hFlush h
+logger _ _ = return ()
 
 exec :: Monad m => HalfsT m a -> m a
 exec act =
@@ -414,7 +416,7 @@ exec act =
 execOrErrno :: Monad m => Errno -> (a -> b) -> HalfsT m a -> m (Either Errno b)
 execOrErrno en f act = do
  runHalfs act >>= \ea -> case ea of
-   Left e  -> return $ Left en
+   Left _e -> return $ Left en
    Right x -> return $ Right (f x)
 
 --------------------------------------------------------------------------------
