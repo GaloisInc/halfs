@@ -1,0 +1,25 @@
+#!/bin/bash
+
+echo $0
+
+rm -f *.log
+cabal build
+
+echo "Mounting..."
+dist/build/halfs/halfs -m /private/tmp/tmp_mnt
+echo "Mounted."
+
+echo "Waiting..."
+sleep 10
+echo "Woke up."
+
+echo "Unmounting..."
+umount /private/tmp/tmp_mnt
+echo "Unmounted."
+
+echo "*** Log begin ***"
+cat halfs*.log
+echo "*** Log end ***"
+
+echo "Done."
+

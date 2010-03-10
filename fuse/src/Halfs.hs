@@ -7,13 +7,13 @@ module Main
 where
 
 import Control.Applicative
-import Control.Exception     (assert)
+import Control.Exception     (assert, catch, finally)
 import Data.Array.IO         (IOUArray)
 import Data.IORef            (IORef)
 import Data.Time             
 import Data.Word             
 import Foreign.C.Types       (CTime)
-import Prelude hiding (log)  
+import GHC.Exception         (SomeException)
 import System.Console.GetOpt 
 import System.Directory      (doesFileExist, getCurrentDirectory)
 import System.Environment
@@ -41,6 +41,7 @@ import Tests.Utils
 
 import qualified Data.ByteString as BS
 import qualified Halfs.Types     as H
+import Prelude hiding (log, catch)  
 
 -- Halfs-specific stuff we carry around in our FUSE functions; note that the
 -- FUSE library does this via opaque ptr to user data, but since hFUSE
@@ -85,10 +86,9 @@ main = do
   log <- liftM (logger . snd) $
            (`openTempFile` "halfs.log") =<< getCurrentDirectory
 
-  withArgs argv1 $ fuseMain (ops (log, fs)) defaultExceptionHandler
-  -- TODO: If a new file was created and fuseMain fails to mount (e.g.,
-  -- because the mount point was not given or invalid, etc.), delete the
-  -- file or CoreAPI.unmount it.
+  withArgs argv1 $ fuseMain (ops (log, fs)) $ \e -> do
+    log $ "*** Exception: " ++ show e
+    return eFAULT
 
 --------------------------------------------------------------------------------
 -- Halfs-hFUSE filesystem operation implementation
@@ -96,7 +96,7 @@ main = do
 -- JS: ST monad impls will have to get mapped to hFUSE ops via stToIO?
 ops :: HalfsSpecific (IOUArray Word64 Bool) IORef IOLock IO
     -> FuseOperations FileHandle
-ops hsp = FuseOperations
+ops hsp@(log,fs) = FuseOperations
   { fuseGetFileStat          = halfsGetFileStat          hsp
   , fuseReadSymbolicLink     = halfsReadSymbolicLink     hsp
   , fuseCreateDevice         = halfsCreateDevice         hsp
@@ -131,15 +131,15 @@ halfsGetFileStat :: HalfsCapable b t r l m =>
                  -> FilePath
                  -> m (Either Errno FileStat)
 halfsGetFileStat (log, fs) fp = do
+  log $ replicate 80 '-'
   log $ "halfsGetFileStat entry: fp = " ++ show fp
-  eestat <- execOrErrno log eINVAL id (fstat fs fp)
-  log $ " dbug: crossed execOrErrno threshold, eestat: " ++ show eestat
+  eestat <- execOrErrno eINVAL id (fstat fs fp)
   case eestat of
     Left _     -> do
       log $ "halfsGetFileStat: fstat failed."
       return $ f2f undefined undefined `fmap` eestat
     Right stat -> do
-      log $ "halfsGetFileStat: fstat = " ++ show stat
+      log $ "halfsGetFileStat: Halfs.Types.FileStat = " ++ show stat
       atm <- toCTime $ H.fsAccessTime stat
       mtm <- toCTime $ H.fsModTime stat
       return $ Right $ f2f atm mtm stat
@@ -158,19 +158,19 @@ halfsGetFileStat (log, fs) fp = do
                         -- TODO: Represent remaining FUSE entry types
                         H.AnyFileType -> error "Invalid fstat type"
       in FileStat
-      { statEntryType        = entryType
-      , statFileMode         = entryTypeToFileMode entryType
-      , statLinkCount        = chkb16 $ H.fsNumLinks stat
-      , statFileOwner        = chkb32 $ H.fsUID stat
-      , statFileGroup        = chkb32 $ H.fsGID stat
-      , statSpecialDeviceID  = 0 -- XXX/TODO: Do we need to distinguish by
-                                 -- blkdev, or is this for something else?
-      , statFileSize         = fromIntegral $ H.fsSize stat
-      , statBlocks           = fromIntegral $ H.fsNumBlocks stat
-      , statAccessTime       = atm
-      , statModificationTime = mtm
-      , statStatusChangeTime = error "Status change time not yet computed"
-      }
+        { statEntryType        = entryType
+        , statFileMode         = entryTypeToFileMode entryType
+        , statLinkCount        = chkb16 $ H.fsNumLinks stat
+        , statFileOwner        = chkb32 $ H.fsUID stat
+        , statFileGroup        = chkb32 $ H.fsGID stat
+        , statSpecialDeviceID  = 0 -- XXX/TODO: Do we need to distinguish by
+                                   -- blkdev, or is this for something else?
+        , statFileSize         = fromIntegral $ H.fsSize stat
+        , statBlocks           = fromIntegral $ H.fsNumBlocks stat
+        , statAccessTime       = atm
+        , statModificationTime = mtm
+        , statStatusChangeTime = 0 -- error "Status change time not yet computed"
+        }
 
 halfsReadSymbolicLink :: HalfsCapable b t r l m =>
                          HalfsSpecific b r l m
@@ -297,10 +297,11 @@ halfsGetFileSystemStats :: HalfsCapable b t r l m =>
                         -> FilePath
                         -> m (Either Errno System.Fuse.FileSystemStats)
 halfsGetFileSystemStats (log, fs) fp = do
---  log $ "halfsGetFileSystemStats: fp = " ++ show fp
-  x <- execOrErrno (const $ return ()) eINVAL id (fsstat fs)
---  log $ "FileSystemStats: " ++ show x
---  log $ "halfsGetFileSystemStats: exiting"
+  log $ replicate 80 '-'
+  log $ "halfsGetFileSystemStats: fp = " ++ show fp
+  -- TODO: execOrErrno eINVAL fss2fss (fsstat fs)
+  x <- execOrErrno eINVAL id (fsstat fs)
+  log $ "Halfs.Types.FileSystemStats: " ++ show x
   return (fss2fss `fmap` x)
   where
     fss2fss (FSS bs bc bf ba fc ff) = System.Fuse.FileSystemStats
@@ -400,9 +401,9 @@ halfsDestroy (log, fs) = do
 
 logger :: Handle -> Logger IO
 logger h s = do
-  hPutStrLn h s 
-  hFlush h
--- logger _ _ = return ()
+ hPutStrLn h s 
+ hFlush h
+--logger _ _ = return ()
 
 exec :: Monad m => HalfsT m a -> m a
 exec act =
@@ -410,19 +411,11 @@ exec act =
     Left e  -> fail $ show e
     Right x -> return x
 
-execOrErrno :: (Show a, Monad m) => Logger m -> Errno -> (a -> b) -> HalfsT m a -> m (Either Errno b)
-execOrErrno log en f act = do
- log $ "in execOrErrno" 
+execOrErrno :: Monad m => Errno -> (a -> b) -> HalfsT m a -> m (Either Errno b)
+execOrErrno en f act = do
  runHalfs act >>= \ea -> case ea of
-   Left _  -> do
-     log "execOrErrno: Left"
-     return $ Left en
-   Right x -> do
-     log $ "execOrErrno: Right: x = " ++ show (42 :: Integer)
-     log $ "statement1"
-     log $ (show en)
-     log $ "statement3"
-     return $ Right (f x)
+   Left e  -> return $ Left en
+   Right x -> return $ Right (f x)
 
 --------------------------------------------------------------------------------
 -- Command line stuff
