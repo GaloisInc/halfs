@@ -1,6 +1,6 @@
 {-# LANGUAGE MultiParamTypeClasses, GeneralizedNewtypeDeriving,
              FunctionalDependencies, FlexibleContexts,
-             FlexibleInstances #-}
+             FlexibleInstances, ScopedTypeVariables #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Halfs.Classes
   ( HalfsCapable
@@ -21,15 +21,18 @@ import Control.Monad.ST
 import Data.Array.IO
 import Data.Array.ST
 import Data.IORef
-import Data.Ratio (numerator)
+import Data.Ratio            (numerator)
 import Data.Serialize
 import Data.Serialize.Get
 import Data.Serialize.Put
 import Data.STRef
 import Data.Time.Clock
-import Data.Time.Clock.POSIX (POSIXTime, utcTimeToPOSIXSeconds)
-import Data.Time.LocalTime () -- for Show UTCTime instance
-import Data.Word
+import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
+import Data.Time.LocalTime   () -- for Show UTCTime instance
+import Data.Word             
+
+import Foreign.C.Types       (CTime)
+import GHC.Int               (Int32)
 
 -- ----------------------------------------------------------------------------
 
@@ -54,8 +57,8 @@ instance HalfsCapable (STUArray s Word64 Bool) Word64  (STRef s) ()     (ST s)
 -- from. One obvious implementation is using the system clock. Another might be
 -- a step counter.
 class (Monad m, Eq t, Ord t) => Timed t m | m -> t where
-  getTime        :: m t
-  toPOSIXSeconds :: t -> POSIXTime
+  getTime :: m t
+  toCTime :: t -> m CTime
 
 -- |This is a monad transformer for the Timed monad, which will work for 2^64
 -- steps of an arbitrary underlying monad.
@@ -75,10 +78,10 @@ instance Serialize UTCTime where
     putWord64be $ fromIntegral $ fromEnum $ utctDay x
     putWord64be $
       -- We have no way to extract the underlying fixed-precision Integer from
-      -- the DiffTime, but picosecond resolution for DiffTime documented, so we
-      -- scale via conversion to Rational (i.e., we reconstruct the underlying
-      -- fixed-precision Integer).  The assert is simply in case the underlying
-      -- representation changes at some point in the future.
+      -- the DiffTime, but picosecond resolution for DiffTime is documented, so
+      -- we scale via conversion to Rational (i.e., we reconstruct the
+      -- underlying fixed-precision Integer).  The assert is simply in case the
+      -- underlying representation changes at some point in the future.
       let dt2pico = numerator . (1000000000000*) . toRational
           off     = fromIntegral $ dt2pico $ utctDayTime x
       in assert (off >= (minBound :: Word64) && off <= (maxBound :: Word64)) off
@@ -89,16 +92,26 @@ instance Serialize UTCTime where
     <*> (picosecondsToDiffTime . fromIntegral) `fmap` getWord64be
 
 instance Timed UTCTime IO where
-  getTime        = getCurrentTime
-  toPOSIXSeconds = utcTimeToPOSIXSeconds
+  getTime   = getCurrentTime
+  toCTime t =
+    -- We'll be converting UTCTimes to POSIXTimes to CTime values, which have
+    -- implementation-specific size.  I don't think it's safe to truncate based
+    -- on the size reported by the Storable instance for CTime, as we'd still
+    -- have to make assumptions about the underlying rep (e.g., it's not a real,
+    -- etc.).  As a keep-it-simple concession, we'll err on the side of caution
+    -- and assume that we have a 32 bit signed int representation, and clamp
+    -- values based on that.  This should be okay unilt until early 2038 :).
+    let ub = fromIntegral (maxBound :: Int32)
+        i :: Integer = round $ utcTimeToPOSIXSeconds t
+    in return ((fromIntegral $ if i >= ub then ub else i) :: CTime)
 
 instance Timed Word64 (ST s) where
-  getTime        = undefined
-  toPOSIXSeconds = undefined
+  getTime = undefined
+  toCTime = undefined
 
 instance Monad m => Timed Word64 (TimedT m) where
-  getTime        = ttGetTime
-  toPOSIXSeconds = undefined
+  getTime = ttGetTime
+  toCTime = undefined
 
 -- ---------------------------------------------------------------------------
 

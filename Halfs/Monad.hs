@@ -64,9 +64,8 @@ instance Lockable l m => Lockable l (HalfsT m) where
   release = lift . release
 
 instance Timed t m => Timed t (HalfsT m) where
-  getTime        = lift getTime
---  toPOSIXSeconds = lift . toPOSIXSeconds
-
+  getTime   = lift getTime
+  toCTime   = lift . toCTime
 --------------------------------------------------------------------------------
 -- Utility functions specific to the Halfs monad
 

@@ -1,7 +1,7 @@
+{-# OPTIONS_GHC -fno-warn-orphans #-}
+
 -- | Command line tool for mounting a halfs filesystem from userspace via
 -- hFUSE/FUSE.
-
-{-# OPTIONS_GHC -fno-warn-orphans #-}
 
 module Main
 where
@@ -10,7 +10,9 @@ import Control.Applicative
 import Control.Exception     (assert)
 import Data.Array.IO         (IOUArray)
 import Data.IORef            (IORef)
+import Data.Time             
 import Data.Word             
+import Foreign.C.Types       (CTime)
 import Prelude hiding (log)  
 import System.Console.GetOpt 
 import System.Directory      (doesFileExist, getCurrentDirectory)
@@ -95,8 +97,7 @@ main = do
 ops :: HalfsSpecific (IOUArray Word64 Bool) IORef IOLock IO
     -> FuseOperations FileHandle
 ops hsp = FuseOperations
-  { fuseGetFileStat          = \fp -> do ctx <- getFuseContext
-                                         halfsGetFileStat hsp ctx fp
+  { fuseGetFileStat          = halfsGetFileStat          hsp
   , fuseReadSymbolicLink     = halfsReadSymbolicLink     hsp
   , fuseCreateDevice         = halfsCreateDevice         hsp
   , fuseCreateDirectory      = halfsCreateDirectory      hsp
@@ -127,22 +128,29 @@ ops hsp = FuseOperations
 
 halfsGetFileStat :: HalfsCapable b t r l m =>
                     HalfsSpecific b r l m
-                 -> FuseContext
                  -> FilePath
                  -> m (Either Errno FileStat)
-halfsGetFileStat (log, fs) _ctx fp = do
-  log $ "halfsGetFileStat: fp = " ++ show fp
-  x <- execOrErrno eINVAL id $ fstat fs fp
-  log $ "halfsGetFileStat: fstat = " ++ show x  
-  return (f2f `fmap` x)
+halfsGetFileStat (log, fs) fp = do
+  log $ "halfsGetFileStat entry: fp = " ++ show fp
+  eestat <- execOrErrno log eINVAL id (fstat fs fp)
+  log $ " dbug: crossed execOrErrno threshold, eestat: " ++ show eestat
+  case eestat of
+    Left _     -> do
+      log $ "halfsGetFileStat: fstat failed."
+      return $ f2f undefined undefined `fmap` eestat
+    Right stat -> do
+      log $ "halfsGetFileStat: fstat = " ++ show stat
+      atm <- toCTime $ H.fsAccessTime stat
+      mtm <- toCTime $ H.fsModTime stat
+      return $ Right $ f2f atm mtm stat
   where
     -- TODO: Check how these asserts are handled by the fuse EH.
     chkb16 x = assert (x' <= fromIntegral (maxBound :: Word16)) x'
                where x' = fromIntegral x
     chkb32 x = assert (x' <= fromIntegral (maxBound :: Word32)) x'
                where x' = fromIntegral x
-    -- 
-    f2f stat =
+    --
+    f2f atm mtm stat =
       let entryType = case H.fsType stat of
                         H.RegularFile -> RegularFile
                         H.Directory   -> Directory
@@ -159,27 +167,10 @@ halfsGetFileStat (log, fs) _ctx fp = do
                                  -- blkdev, or is this for something else?
       , statFileSize         = fromIntegral $ H.fsSize stat
       , statBlocks           = fromIntegral $ H.fsNumBlocks stat
-      , statAccessTime       = toPOSIXTime $ H.fsAccessTime stat
-      , statModificationTime = undefined
-      , statStatusChangeTime = undefined
+      , statAccessTime       = atm
+      , statModificationTime = mtm
+      , statStatusChangeTime = error "Status change time not yet computed"
       }
-
-
-{-
-data FileStat = FileStat { statEntryType :: EntryType
-                         , statFileMode :: FileMode
-                         , statLinkCount :: LinkCount
-                         , statFileOwner :: UserID
-                         , statFileGroup :: GroupID
-                         , statSpecialDeviceID :: DeviceID
-                         , statFileSize :: FileOffset
-                         , statBlocks :: Integer
-                         , statAccessTime :: EpochTime
-                         , statModificationTime :: EpochTime
-                         , statStatusChangeTime :: EpochTime
-                         }
--}
-
 
 halfsReadSymbolicLink :: HalfsCapable b t r l m =>
                          HalfsSpecific b r l m
@@ -306,9 +297,10 @@ halfsGetFileSystemStats :: HalfsCapable b t r l m =>
                         -> FilePath
                         -> m (Either Errno System.Fuse.FileSystemStats)
 halfsGetFileSystemStats (log, fs) fp = do
-  log $ "halfsGetFileSystemStats: fp = " ++ show fp
-  x <- execOrErrno eINVAL id (fsstat fs)
-  log $ "FileSystemStats: " ++ show x
+--  log $ "halfsGetFileSystemStats: fp = " ++ show fp
+  x <- execOrErrno (const $ return ()) eINVAL id (fsstat fs)
+--  log $ "FileSystemStats: " ++ show x
+--  log $ "halfsGetFileSystemStats: exiting"
   return (fss2fss `fmap` x)
   where
     fss2fss (FSS bs bc bf ba fc ff) = System.Fuse.FileSystemStats
@@ -418,11 +410,19 @@ exec act =
     Left e  -> fail $ show e
     Right x -> return x
 
-execOrErrno :: Monad m => Errno -> (a -> b) -> HalfsT m a -> m (Either Errno b)
-execOrErrno en f act =
+execOrErrno :: (Show a, Monad m) => Logger m -> Errno -> (a -> b) -> HalfsT m a -> m (Either Errno b)
+execOrErrno log en f act = do
+ log $ "in execOrErrno" 
  runHalfs act >>= \ea -> case ea of
-   Left _  -> return $ Left en
-   Right x -> return $ Right (f x)
+   Left _  -> do
+     log "execOrErrno: Left"
+     return $ Left en
+   Right x -> do
+     log $ "execOrErrno: Right: x = " ++ show (42 :: Integer)
+     log $ "statement1"
+     log $ (show en)
+     log $ "statement3"
+     return $ Right (f x)
 
 --------------------------------------------------------------------------------
 -- Command line stuff
