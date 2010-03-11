@@ -80,7 +80,7 @@ main = do
   when (not exists) $ exec $ newfs dev >> return ()
   fs <- exec $ mount dev
 
-  let log s = hPutStrLn stderr s -- appendFile "/tmp/halfs.log" (s++"\n")
+  let log s = hPutStrLn stderr s
   withArgs argv1 $ fuseMain (ops (log, fs)) $ \e -> do
     log $ "*** Exception: " ++ show e
     return eFAULT
@@ -114,7 +114,7 @@ ops hsp@(_log, _) = FuseOperations
   , fuseOpen                 = halfsOpen                 hsp
   , fuseRead                 = halfsRead                 hsp
   , fuseWrite                = halfsWrite                hsp
-  , fuseGetFileSystemStats   = halfsGetFileSystemStats   hsp -- (appendFile "/tmp/halfs.log" . flip (++) "\n", fs)
+  , fuseGetFileSystemStats   = halfsGetFileSystemStats   hsp
   , fuseFlush                = halfsFlush                hsp
   , fuseRelease              = halfsRelease              hsp
   , fuseSynchronizeFile      = halfsSynchronizeFile      hsp
