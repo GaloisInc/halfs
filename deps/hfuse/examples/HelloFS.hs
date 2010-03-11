@@ -104,10 +104,10 @@ helloGetFileSystemStats :: String -> IO (Either Errno FileSystemStats)
 helloGetFileSystemStats str =
   return $ Right $ FileSystemStats
     { fsStatBlockSize = 512
-    , fsStatBlockCount = 1
-    , fsStatBlocksFree = 1
-    , fsStatBlocksAvailable = 1
-    , fsStatFileCount = 5
-    , fsStatFilesFree = 10
+    , fsStatBlockCount = 16
+    , fsStatBlocksFree = 8
+    , fsStatBlocksAvailable = 8
+    , fsStatFileCount = 1
+    , fsStatFilesFree = 3
     , fsStatMaxNameLength = 255
     }
