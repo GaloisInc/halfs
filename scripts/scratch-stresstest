@@ -7,7 +7,7 @@ rm -f /tmp/halfs.log
 #cabal build
 
 echo "Mounting..."
-dist/build/halfs/halfs -m $1
+dist/build/halfs/halfs -m $1 
 #df -a
 #ls -lrt $1
 #echo foo > $1/bar

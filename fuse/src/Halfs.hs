@@ -92,11 +92,14 @@ main = do
 
 ops :: HalfsSpecific (IOUArray Word64 Bool) IORef IOLock IO
     -> FuseOperations FileHandle
-{-
 ops hsp@(log,fs) = defaultFuseOps
-                     { fuseGetFileSystemStats = const $ return (Left eOK)
-                     }
--}
+  { fuseGetFileStat        = halfsGetFileStat        hsp
+  , fuseGetFileSystemStats = halfsGetFileSystemStats hsp
+  , fuseInit               = halfsInit               hsp
+  , fuseDestroy            = halfsDestroy            hsp
+  }
+
+{-
 ops hsp@(_log, _) = FuseOperations
   { fuseGetFileStat          = halfsGetFileStat          hsp
   , fuseReadSymbolicLink     = halfsReadSymbolicLink     hsp
@@ -126,6 +129,7 @@ ops hsp@(_log, _) = FuseOperations
   , fuseInit                 = halfsInit                 hsp
   , fuseDestroy              = halfsDestroy              hsp
   }
+-}
 
 halfsGetFileStat :: HalfsCapable b t r l m =>
                     HalfsSpecific b r l m
@@ -301,7 +305,10 @@ halfsGetFileSystemStats :: HalfsCapable b t r l m =>
                         -> FilePath
                         -> m (Either Errno System.Fuse.FileSystemStats)
 halfsGetFileSystemStats (log, fs) fp = do
-  error "halfsGetFileSystemStats: Not Yet Implemented." -- TODO
+--  error "halfsGetFileSystemStats: Not Yet Implemented." -- TODO
+--  return $ Left $ eNOTTY
+  log $ "halfsGetFileSystemStats: fp = " ++ show fp
+  return $ Right $ System.Fuse.FileSystemStats 1024 2048 42 0 455 20 255
 {-
   log $ "halfsGetFileSystemStats: fp = " ++ show fp
   -- TODO: execOrErrno eINVAL fss2fss (fsstat fs)
@@ -388,7 +395,8 @@ halfsInit :: HalfsCapable b t r l m =>
              HalfsSpecific b r l m
           -> m ()
 halfsInit (log, _fs) = do
-  error "halfsInit: Not Yet Implemented." -- TODO
+--  error "halfsInit: Not Yet Implemented." -- TODO
+  log $ "halfsInit: Invoked."
   return ()
 
 halfsDestroy :: HalfsCapable b t r l m =>
