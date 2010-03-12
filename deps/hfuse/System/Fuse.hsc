@@ -631,11 +631,13 @@ withStructFuse pFuseChan pArgs ops handler f =
                  Right stat         ->
                    do
 #ifdef MACFUSE
-                   -- NB: f_frsize is used instead of f_bsize for block sizes on
-                   -- OS X 10.5+.
+                   -- NB: f_frsize ("fragment size") is used instead of f_bsize
+                   -- for block sizes on OS X 10.5+.  This is strange, but it
+                   -- works.
                    (#poke struct statvfs, f_frsize)  pStatFS
                      (fromIntegral (fsStatBlockSize stat)     :: (#type unsigned long))
 #else
+                   -- Linux uses the f_bsize field as we'd expect.
                    (#poke struct statvfs, f_bsize)   pStatFS
                      (fromIntegral (fsStatBlockSize stat)     :: (#type unsigned long))
 #endif
