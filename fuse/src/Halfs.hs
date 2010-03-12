@@ -7,7 +7,7 @@ module Main
 where
 
 import Control.Applicative
-import Control.Exception     (assert)
+-- import Control.Exception     (assert)
 import Data.Array.IO         (IOUArray)
 import Data.IORef            (IORef)
 import Data.Word             
@@ -37,7 +37,6 @@ import System.Device.Memory
 import Tests.Utils
 
 import qualified Data.ByteString as BS
-import qualified Halfs.Types     as H
 import Prelude hiding (log, catch)  
 
 -- Halfs-specific stuff we carry around in our FUSE functions; note that the
@@ -92,7 +91,7 @@ main = do
 
 ops :: HalfsSpecific (IOUArray Word64 Bool) IORef IOLock IO
     -> FuseOperations FileHandle
-ops hsp@(log,fs) = defaultFuseOps
+ops hsp@(_log,_fs) = defaultFuseOps
   { fuseGetFileStat        = halfsGetFileStat        hsp
   , fuseGetFileSystemStats = halfsGetFileSystemStats hsp
   , fuseInit               = halfsInit               hsp
@@ -135,7 +134,7 @@ halfsGetFileStat :: HalfsCapable b t r l m =>
                     HalfsSpecific b r l m
                  -> FilePath
                  -> m (Either Errno FileStat)
-halfsGetFileStat (log, fs) fp = do
+halfsGetFileStat (_log, _fs) _fp = do
   error "halfsGetFileStat: Not Yet Implemented." -- TODO
 {-
   log $ replicate 80 '-'
@@ -184,7 +183,7 @@ halfsReadSymbolicLink :: HalfsCapable b t r l m =>
                          HalfsSpecific b r l m
                       -> FilePath
                       -> m (Either Errno FilePath)
-halfsReadSymbolicLink (log, _fs) _fp = do 
+halfsReadSymbolicLink (_log, _fs) _fp = do 
   error "halfsReadSymbolicLink: Not Yet Implemented" -- TODO
   return (Left eNOSYS)
 
@@ -192,7 +191,7 @@ halfsCreateDevice :: HalfsCapable b t r l m =>
                      HalfsSpecific b r l m
                   -> FilePath -> EntryType -> FileMode -> DeviceID
                   -> m Errno
-halfsCreateDevice (log, _fs) _fp _etype _mode _devID = do
+halfsCreateDevice (_log, _fs) _fp _etype _mode _devID = do
   error "halfsCreateDevice: Not Yet Implemented." -- TODO
   return eNOSYS
 
@@ -200,7 +199,7 @@ halfsCreateDirectory :: HalfsCapable b t r l m =>
                         HalfsSpecific b r l m
                      -> FilePath -> FileMode
                      -> m Errno
-halfsCreateDirectory (log, _fs) _fp _mode = do
+halfsCreateDirectory (_log, _fs) _fp _mode = do
   error "halfsCreateDirectory: Not Yet Implemented." -- TODO
   return eNOSYS
          
@@ -208,7 +207,7 @@ halfsRemoveLink :: HalfsCapable b t r l m =>
                    HalfsSpecific b r l m
                 -> FilePath
                 -> m Errno
-halfsRemoveLink (log, _fs) _fp = do
+halfsRemoveLink (_log, _fs) _fp = do
   error "halfsRemoveLink: Not Yet Implemented." -- TODO
   return eNOSYS
          
@@ -216,7 +215,7 @@ halfsRemoveDirectory :: HalfsCapable b t r l m =>
                         HalfsSpecific b r l m
                      -> FilePath
                      -> m Errno
-halfsRemoveDirectory (log, _fs) _fp = do
+halfsRemoveDirectory (_log, _fs) _fp = do
   error "halfsRemoveDirectory: Not Yet Implemented." -- TODO
   return eNOSYS
          
@@ -224,7 +223,7 @@ halfsCreateSymbolicLink :: HalfsCapable b t r l m =>
                            HalfsSpecific b r l m
                         -> FilePath -> FilePath
                         -> m Errno
-halfsCreateSymbolicLink (log, _fs) _src _dst = do
+halfsCreateSymbolicLink (_log, _fs) _src _dst = do
   error $ "halfsCreateSymbolicLink: Not Yet Implemented." -- TODO
   return eNOSYS
          
@@ -232,7 +231,7 @@ halfsRename :: HalfsCapable b t r l m =>
                HalfsSpecific b r l m
             -> FilePath -> FilePath
             -> m Errno
-halfsRename (log, _fs) _old _new = do
+halfsRename (_log, _fs) _old _new = do
   error $ "halfsRename: Not Yet Implemented." -- TODO
   return eNOSYS
          
@@ -240,7 +239,7 @@ halfsCreateLink :: HalfsCapable b t r l m =>
                    HalfsSpecific b r l m
                 -> FilePath -> FilePath
                 -> m Errno
-halfsCreateLink (log, _fs) _src _dst = do
+halfsCreateLink (_log, _fs) _src _dst = do
   error $ "halfsCreateLink: Not Yet Implemented." -- TODO
   return eNOSYS
          
@@ -248,7 +247,7 @@ halfsSetFileMode :: HalfsCapable b t r l m =>
                     HalfsSpecific b r l m
                  -> FilePath -> FileMode
                  -> m Errno
-halfsSetFileMode (log, _fs) _fp _mode = do
+halfsSetFileMode (_log, _fs) _fp _mode = do
   error $ "halfsSetFileMode: Not Yet Implemented." -- TODO
   return eNOSYS
          
@@ -256,7 +255,7 @@ halfsSetOwnerAndGroup :: HalfsCapable b t r l m =>
                          HalfsSpecific b r l m
                       -> FilePath -> UserID -> GroupID
                       -> m Errno
-halfsSetOwnerAndGroup (log, _fs) _fp _uid _gid = do
+halfsSetOwnerAndGroup (_log, _fs) _fp _uid _gid = do
   error $ "halfsSetOwnerAndGroup: Not Yet Implemented." -- TODO
   return eNOSYS
          
@@ -264,7 +263,7 @@ halfsSetFileSize :: HalfsCapable b t r l m =>
                     HalfsSpecific b r l m
                  -> FilePath -> FileOffset
                  -> m Errno
-halfsSetFileSize (log, _fs) _fp _offset = do
+halfsSetFileSize (_log, _fs) _fp _offset = do
   error $ "halfsSetFileSize: Not Yet Implemented." -- TODO
   return eNOSYS
          
@@ -272,7 +271,7 @@ halfsSetFileTimes :: HalfsCapable b t r l m =>
                      HalfsSpecific b r l m
                   -> FilePath -> EpochTime -> EpochTime
                   -> m Errno
-halfsSetFileTimes (log, _fs) _fp _tm0 _tm1 = do
+halfsSetFileTimes (_log, _fs) _fp _tm0 _tm1 = do
   error $ "halfsSetFileTimes: Not Yet Implemented." -- TODO
   return eNOSYS
          
@@ -280,7 +279,7 @@ halfsOpen :: HalfsCapable b t r l m =>
              HalfsSpecific b r l m             
           -> FilePath -> OpenMode -> OpenFileFlags
           -> m (Either Errno FileHandle)
-halfsOpen (log, _fs) fp mode flags = do
+halfsOpen (_log, _fs) _fp _mode _flags = do
   error $ "halfsOpen: Not Yet Implemented." -- TODO
   return (Left eNOSYS)
 
@@ -288,7 +287,7 @@ halfsRead :: HalfsCapable b t r l m =>
              HalfsSpecific b r l m
           -> FilePath -> FileHandle -> ByteCount -> FileOffset
           -> m (Either Errno BS.ByteString)
-halfsRead (log, _fs) fp _fh byteCnt offset = do
+halfsRead (_log, _fs) _fp _fh _byteCnt _offset = do
   error $ "halfsRead: Not Yet Implemented." -- TODO
   return (Left eNOSYS)
 
@@ -296,7 +295,7 @@ halfsWrite :: HalfsCapable b t r l m =>
               HalfsSpecific b r l m
            -> FilePath -> FileHandle -> BS.ByteString -> FileOffset
            -> m (Either Errno ByteCount)
-halfsWrite (log, _fs) _fp _fh _bytes _offset = do
+halfsWrite (_log, _fs) _fp _fh _bytes _offset = do
   error $ "halfsWrite: Not Yet Implemented." -- TODO
   return (Left eNOSYS)
 
@@ -305,16 +304,11 @@ halfsGetFileSystemStats :: HalfsCapable b t r l m =>
                         -> FilePath
                         -> m (Either Errno System.Fuse.FileSystemStats)
 halfsGetFileSystemStats (log, fs) fp = do
---  error "halfsGetFileSystemStats: Not Yet Implemented." -- TODO
---  return $ Left $ eNOTTY
---  log $ "halfsGetFileSystemStats: fp = " ++ show fp
---  return $ Right $ System.Fuse.FileSystemStats 512 512 16 8 8 1 3 3 255
---  log $ "halfsGetFileSystemStats: fp = " ++ show fp
-  -- TODO: execOrErrno eINVAL fss2fss (fsstat fs)
---  x <- execOrErrno eINVAL id (fsstat fs)
---  log $ "Halfs.Types.FileSystemStats: " ++ show x
---  return (fss2fss `fmap` x)
-  execOrErrno eINVAL fss2fss (fsstat fs)
+  log $ "halfsGetFileSystemStats: fp = " ++ show fp
+  x <- execOrErrno eINVAL id (fsstat fs)
+  log $ "Halfs.Types.FileSystemStats: " ++ show x
+  return (fss2fss `fmap` x)
+  -- execOrErrno eINVAL fss2fss (fsstat fs)
   where
     fss2fss (FSS bs bc bf ba fc ff fa) = System.Fuse.FileSystemStats
       { fsStatBlockSize     = bs
@@ -331,7 +325,7 @@ halfsFlush :: HalfsCapable b t r l m =>
               HalfsSpecific b r l m
            -> FilePath -> FileHandle
            -> m Errno
-halfsFlush (log, _fs) _fp _fh = do
+halfsFlush (_log, _fs) _fp _fh = do
   error "halfsFlush: Not Yet Implemented." -- TODO
   return eNOSYS
          
@@ -339,7 +333,7 @@ halfsRelease :: HalfsCapable b t r l m =>
                 HalfsSpecific b r l m
              -> FilePath -> FileHandle
              -> m ()
-halfsRelease (log, _fs) _fp _fh = do
+halfsRelease (_log, _fs) _fp _fh = do
   error "halfsRelease: Not Yet Implemented." -- TODO
   return ()
          
@@ -347,7 +341,7 @@ halfsSynchronizeFile :: HalfsCapable b t r l m =>
                         HalfsSpecific b r l m
                      -> FilePath -> System.Fuse.SyncType
                      -> m Errno
-halfsSynchronizeFile (log, _fs) _fp _syncType = do
+halfsSynchronizeFile (_log, _fs) _fp _syncType = do
   error "halfsSynchronizeFile: Not Yet Implemented." -- TODO
   return eNOSYS
          
@@ -355,7 +349,7 @@ halfsOpenDirectory :: HalfsCapable b t r l m =>
                       HalfsSpecific b r l m
                    -> FilePath
                    -> m Errno
-halfsOpenDirectory (log, _fs) fp = do
+halfsOpenDirectory (_log, _fs) _fp = do
   error "halfsOpenDirectory: Not Yet Implemented." -- TODO
   return eNOSYS
 
@@ -363,7 +357,7 @@ halfsReadDirectory :: HalfsCapable b t r l m =>
                       HalfsSpecific b r l m
                    -> FilePath
                    -> m (Either Errno [(FilePath, FileStat)])
-halfsReadDirectory (log, _fs) fp = do
+halfsReadDirectory (_log, _fs) _fp = do
   error "halfsReadDirectory: Not Yet Implemented." -- TODO
   return (Left eNOSYS)
 
@@ -371,7 +365,7 @@ halfsReleaseDirectory :: HalfsCapable b t r l m =>
                          HalfsSpecific b r l m
                       -> FilePath
                       -> m Errno
-halfsReleaseDirectory (log, _fs) _fp = do
+halfsReleaseDirectory (_log, _fs) _fp = do
   error "halfsReleaseDirectory: Not Yet Implemented." -- TODO
   return eNOSYS
          
@@ -379,7 +373,7 @@ halfsSynchronizeDirectory :: HalfsCapable b t r l m =>
                              HalfsSpecific b r l m
                           -> FilePath -> System.Fuse.SyncType
                           -> m Errno
-halfsSynchronizeDirectory (log, _fs) _fp _syncType = do
+halfsSynchronizeDirectory (_log, _fs) _fp _syncType = do
   error "halfsSynchronizeDirectory: Not Yet Implemented." -- TODO
   return eNOSYS
          
@@ -387,7 +381,7 @@ halfsAccess :: HalfsCapable b t r l m =>
                HalfsSpecific b r l m
             -> FilePath -> Int
             -> m Errno
-halfsAccess (log, _fs) _fp _n = do
+halfsAccess (_log, _fs) _fp _n = do
   error "halfsAccess: Not Yet Implemented." -- TODO
   return eNOSYS
          
