@@ -635,6 +635,10 @@ withStructFuse pFuseChan pArgs ops handler f =
                    -- OS X 10.5+.
                    (#poke struct statvfs, f_frsize)  pStatFS
                      (fromIntegral (fsStatBlockSize stat)     :: (#type unsigned long))
+#else
+                   (#poke struct statvfs, f_bsize)   pStatFS
+                     (fromIntegral (fsStatBlockSize stat)     :: (#type unsigned long))
+#endif
                    (#poke struct statvfs, f_blocks)  pStatFS
                      (fromIntegral (fsStatBlockCount stat)    :: (#type fsblkcnt_t))
                    (#poke struct statvfs, f_bfree)   pStatFS
@@ -649,9 +653,6 @@ withStructFuse pFuseChan pArgs ops handler f =
                      (fromIntegral (fsStatFilesAvail stat)    :: (#type fsfilcnt_t))
                    (#poke struct statvfs, f_namemax) pStatFS
                      (fromIntegral (fsStatMaxNameLength stat) :: (#type unsigned long))
-#else
-               TODO
-#endif
                    return 0
 
           wrapFlush :: CFlush
