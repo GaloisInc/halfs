@@ -40,5 +40,6 @@ Library
 
   -- Following assumes Mac OS X on 64-bit x86 architectures
   if os(darwin) {
-    CC-Options: -DMACFUSE -D__FreeBSD__=10 -D__DARWIN_64_BIT_INO_T=1 -arch i386
+--  CC-Options: -DMACFUSE -D__FreeBSD__=10 -D__DARWIN_64_BIT_INO_T=1 -arch i386
+    CC-Options: -DMACFUSE -D__FreeBSD__=10 -arch i386
   }

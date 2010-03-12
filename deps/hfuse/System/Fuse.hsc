@@ -77,7 +77,7 @@ import qualified System.IO.Error as IO(catch,ioeGetErrorString)
 #define FUSE_USE_VERSION 26
 
 #ifdef MACFUSE
-#include <sys/mount.h>
+#include <sys/statvfs.h>
 #else
 #include <sys/statfs.h>
 #endif
@@ -630,25 +630,23 @@ withStructFuse pFuseChan pArgs ops handler f =
                case eitherStatFS of
                  Left (Errno errno) -> return (- errno)
                  Right stat         ->
-                   do (#poke struct statfs, f_bsize) pStatFS
+                   do (#poke struct statvfs, f_bsize) pStatFS
                           (fromIntegral (fsStatBlockSize stat) :: (#type long))
-                      (#poke struct statfs, f_blocks) pStatFS
+                      (#poke struct statvfs, f_blocks) pStatFS
                           (fromIntegral (fsStatBlockCount stat) :: (#type long))
-                      (#poke struct statfs, f_bfree) pStatFS
+                      (#poke struct statvfs, f_bfree) pStatFS
                           (fromIntegral (fsStatBlocksFree stat) :: (#type long))
-                      (#poke struct statfs, f_bavail) pStatFS
+                      (#poke struct statvfs, f_bavail) pStatFS
                           (fromIntegral (fsStatBlocksAvailable
                                              stat) :: (#type long))
-                      (#poke struct statfs, f_files) pStatFS
+                      (#poke struct statvfs, f_files) pStatFS
                            (fromIntegral (fsStatFileCount stat) :: (#type long))
-                      (#poke struct statfs, f_ffree) pStatFS
+                      (#poke struct statvfs, f_ffree) pStatFS
                           (fromIntegral (fsStatFilesFree stat) :: (#type long))
-#ifndef MACFUSE
--- OSX doesn't support 'max name length'
-                      (#poke struct statfs, f_namelen) pStatFS
+                      (#poke struct statvfs, f_namemax) pStatFS
                           (fromIntegral (fsStatMaxNameLength stat) :: (#type long))
-#endif
                       return 0
+
           wrapFlush :: CFlush
           wrapFlush pFilePath pFuseFileInfo = handle fuseHandler $
               do filePath <- peekCString pFilePath

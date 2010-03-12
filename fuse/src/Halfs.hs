@@ -308,7 +308,7 @@ halfsGetFileSystemStats (log, fs) fp = do
 --  error "halfsGetFileSystemStats: Not Yet Implemented." -- TODO
 --  return $ Left $ eNOTTY
   log $ "halfsGetFileSystemStats: fp = " ++ show fp
-  return $ Right $ System.Fuse.FileSystemStats 1024 2048 42 0 455 20 255
+  return $ Right $ System.Fuse.FileSystemStats 512 16 8 8 1 3 255
 {-
   log $ "halfsGetFileSystemStats: fp = " ++ show fp
   -- TODO: execOrErrno eINVAL fss2fss (fsstat fs)

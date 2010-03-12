@@ -35,11 +35,11 @@ dirStat ctx = FileStat { statEntryType = Directory
                                           , otherReadMode
                                           , otherExecuteMode
                                           ]
-                       , statLinkCount = 2
+                       , statLinkCount = 0
                        , statFileOwner = fuseCtxUserID ctx
                        , statFileGroup = fuseCtxGroupID ctx
                        , statSpecialDeviceID = 0
-                       , statFileSize = 4096
+                       , statFileSize = 42
                        , statBlocks = 1
                        , statAccessTime = 0
                        , statModificationTime = 0
@@ -52,7 +52,7 @@ fileStat ctx = FileStat { statEntryType = RegularFile
                                            , groupReadMode
                                            , otherReadMode
                                            ]
-                        , statLinkCount = 1
+                        , statLinkCount = 0
                         , statFileOwner = fuseCtxUserID ctx
                         , statFileGroup = fuseCtxGroupID ctx
                         , statSpecialDeviceID = 0
@@ -103,11 +103,11 @@ helloRead path _ byteCount offset
 helloGetFileSystemStats :: String -> IO (Either Errno FileSystemStats)
 helloGetFileSystemStats str =
   return $ Right $ FileSystemStats
-    { fsStatBlockSize = 512
-    , fsStatBlockCount = 1
-    , fsStatBlocksFree = 1
-    , fsStatBlocksAvailable = 1
-    , fsStatFileCount = 5
-    , fsStatFilesFree = 10
-    , fsStatMaxNameLength = 255
+    { fsStatBlockSize       = 512
+    , fsStatBlockCount      = 16
+    , fsStatBlocksFree      = 8
+    , fsStatBlocksAvailable = 8
+    , fsStatFileCount       = 1
+    , fsStatFilesFree       = 3
+    , fsStatMaxNameLength   = 255
     }
