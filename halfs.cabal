@@ -56,7 +56,7 @@ executable halfs-tests
   ghc-options: -O2 -Wall -fno-ignore-asserts -threaded
 
 executable halfs
-  build-depends:    HFuse >= 0.2.1
+  build-depends:    HFuse >= 0.2.2
 
   hs-source-dirs: test/src fuse/src .
   main-is: Halfs.hs

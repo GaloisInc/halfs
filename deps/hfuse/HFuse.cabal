@@ -1,5 +1,5 @@
 Name:                   HFuse
-Version:                0.2.1
+Version:                0.2.2
 License:                BSD3
 License-File:		LICENSE
 Author:                 Jeremy Bobbio
@@ -18,14 +18,10 @@ Library
   Extensions:             ForeignFunctionInterface ScopedTypeVariables EmptyDataDecls
 
   Include-Dirs:           /usr/include, /usr/local/include, .
-  Includes:               dirent.h, fuse.h, fcntl.h
+  Includes:               dirent.h, fuse.h, fcntl.h, sys/statvfs.h
 
   if os(darwin) {
     Include-Dirs:         /usr/local/include/fuse
-    Includes:             sys/mount.h
-  } 
-  else { 
-    Includes:             sys/statfs.h
   }
 
   if os(darwin) {
