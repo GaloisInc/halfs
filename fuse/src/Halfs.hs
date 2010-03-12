@@ -307,25 +307,25 @@ halfsGetFileSystemStats :: HalfsCapable b t r l m =>
 halfsGetFileSystemStats (log, fs) fp = do
 --  error "halfsGetFileSystemStats: Not Yet Implemented." -- TODO
 --  return $ Left $ eNOTTY
-  log $ "halfsGetFileSystemStats: fp = " ++ show fp
-  return $ Right $ System.Fuse.FileSystemStats 512 16 8 8 1 3 255
-{-
-  log $ "halfsGetFileSystemStats: fp = " ++ show fp
+--  log $ "halfsGetFileSystemStats: fp = " ++ show fp
+--  return $ Right $ System.Fuse.FileSystemStats 512 512 16 8 8 1 3 3 255
+--  log $ "halfsGetFileSystemStats: fp = " ++ show fp
   -- TODO: execOrErrno eINVAL fss2fss (fsstat fs)
-  x <- execOrErrno eINVAL id (fsstat fs)
-  log $ "Halfs.Types.FileSystemStats: " ++ show x
-  return (fss2fss `fmap` x)
+--  x <- execOrErrno eINVAL id (fsstat fs)
+--  log $ "Halfs.Types.FileSystemStats: " ++ show x
+--  return (fss2fss `fmap` x)
+  execOrErrno eINVAL fss2fss (fsstat fs)
   where
-    fss2fss (FSS bs bc bf ba fc ff) = System.Fuse.FileSystemStats
-      { fsStatBlockSize       = bs
-      , fsStatBlockCount      = bc
-      , fsStatBlocksFree      = bf
-      , fsStatBlocksAvailable = ba
-      , fsStatFileCount       = fc
-      , fsStatFilesFree       = ff
-      , fsStatMaxNameLength   = maxNameLength
+    fss2fss (FSS bs bc bf ba fc ff fa) = System.Fuse.FileSystemStats
+      { fsStatBlockSize     = bs
+      , fsStatBlockCount    = bc
+      , fsStatBlocksFree    = bf
+      , fsStatBlocksAvail   = ba
+      , fsStatFileCount     = fc
+      , fsStatFilesFree     = ff
+      , fsStatFilesAvail    = fa
+      , fsStatMaxNameLength = maxNameLength
       }
--}
 
 halfsFlush :: HalfsCapable b t r l m =>
               HalfsSpecific b r l m
@@ -458,12 +458,12 @@ options =
       (ReqArg (\s0 opts -> let s1 = Prelude.read s0 in opts{ optNumSecs = s1 })
               "SIZE"
       )
-      "number of sectors (ignored for filedevs)"
+      "number of sectors (ignored for filedevs; default 512)"
   , Option ['s'] ["secsize"]
       (ReqArg (\s0 opts -> let s1 = Prelude.read s0 in opts{ optSecSize = s1 })
               "SIZE"
       )
-      "sector size in bytes (ignored for already-existing filedevs)"
+      "sector size in bytes (ignored for existing filedevs; default 512)"
   ]
 
 --------------------------------------------------------------------------------

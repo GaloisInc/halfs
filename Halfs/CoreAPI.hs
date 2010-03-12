@@ -33,9 +33,10 @@ data FileSystemStats = FSS
   { fssBlockSize   :: Integer -- ^ fundamental file system block size
   , fssBlockCount  :: Integer -- ^ #data blocks in filesystem
   , fssBlocksFree  :: Integer -- ^ #free blocks in filesystem
-  , fssBlocksAvail :: Integer -- ^ #free blocks avail to non-superuser
-  , fssFileCount   :: Integer -- ^ #num file nodes in filesystem
-  , fssFilesFree   :: Integer -- ^ #free file nodes in filesystem
+  , fssBlocksAvail :: Integer -- ^ #free blocks avail to non-root
+  , fssFileCount   :: Integer -- ^ #num inodes in filesystem
+  , fssFilesFree   :: Integer -- ^ #free inodes in filesystem
+  , fssFilesAvail  :: Integer -- ^ #free inodes avail to non-root
   }
   deriving (Show)
 
@@ -472,9 +473,10 @@ fsstat fs = do
     { fssBlockSize   = fromIntegral $ bdBlockSize $ hsBlockDev fs
     , fssBlockCount  = fromIntegral $ bdNumBlocks $ hsBlockDev fs
     , fssBlocksFree  = freeCnt
-    , fssBlocksAvail = freeCnt -- TODO/XXX: avail to non-superuser?
+    , fssBlocksAvail = freeCnt -- TODO: blocks avail to non-root
     , fssFileCount   = fileCnt
-    , fssFilesFree   = freeCnt -- TODO/XXX: free file nodes ?==? free blocks
+    , fssFilesFree   = 0       -- TODO: need to supply free inode count
+    , fssFilesAvail  = 0       -- TODO inodes avail to non-root
     }
   where
     bm = hsBlockMap fs

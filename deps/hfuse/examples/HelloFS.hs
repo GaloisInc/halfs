@@ -103,11 +103,12 @@ helloRead path _ byteCount offset
 helloGetFileSystemStats :: String -> IO (Either Errno FileSystemStats)
 helloGetFileSystemStats str =
   return $ Right $ FileSystemStats
-    { fsStatBlockSize       = 512
-    , fsStatBlockCount      = 16
-    , fsStatBlocksFree      = 8
-    , fsStatBlocksAvailable = 8
-    , fsStatFileCount       = 1
-    , fsStatFilesFree       = 3
-    , fsStatMaxNameLength   = 255
+    { fsStatBlockSize     = 512
+    , fsStatBlockCount    = 16
+    , fsStatBlocksFree    = 8
+    , fsStatBlocksAvail   = 8
+    , fsStatFileCount     = 1
+    , fsStatFilesFree     = 3
+    , fsStatFilesAvail    = 3
+    , fsStatMaxNameLength = 255
     }

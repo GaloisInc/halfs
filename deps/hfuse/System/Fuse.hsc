@@ -76,11 +76,7 @@ import qualified System.IO.Error as IO(catch,ioeGetErrorString)
 
 #define FUSE_USE_VERSION 26
 
-#ifdef MACFUSE
 #include <sys/statvfs.h>
-#else
-#include <sys/statfs.h>
-#endif
 
 #include <dirent.h>
 #include <fuse.h>
@@ -220,20 +216,23 @@ fileModeToEntryType mode
     creation of all non directory, non symlink nodes.
 -}
 
--- | Type used by the 'fuseGetFileSystemStats'.
+-- | Type used by the 'fuseGetFileSystemStats'.  Not all fields are applicable
+-- to all platforms.
 data FileSystemStats = FileSystemStats
     { fsStatBlockSize :: Integer
-      -- ^ Optimal transfer block size. FUSE default is 512.
+      -- ^ Fundamental filesystem block size. FUSE default is 512.
     , fsStatBlockCount :: Integer
       -- ^ Total data blocks in file system.
     , fsStatBlocksFree :: Integer
       -- ^ Free blocks in file system.
-    , fsStatBlocksAvailable :: Integer
-      -- ^ Free blocks available to non-superusers.
+    , fsStatBlocksAvail :: Integer
+      -- ^ Free blocks available to non-root.
     , fsStatFileCount :: Integer
-      -- ^ Total file nodes in file system.
+      -- ^ Total file nodes in file system (used inode count).
     , fsStatFilesFree :: Integer
-      -- ^ Free file nodes in file system.
+      -- ^ Free file nodes in file system (free inode count).
+    , fsStatFilesAvail :: Integer
+      -- ^ Free file nodes available to non-root.
     , fsStatMaxNameLength :: Integer
       -- ^ Maximum length of filenames. FUSE default is 255.
     }
@@ -630,22 +629,30 @@ withStructFuse pFuseChan pArgs ops handler f =
                case eitherStatFS of
                  Left (Errno errno) -> return (- errno)
                  Right stat         ->
-                   do (#poke struct statvfs, f_bsize) pStatFS
-                          (fromIntegral (fsStatBlockSize stat) :: (#type long))
-                      (#poke struct statvfs, f_blocks) pStatFS
-                          (fromIntegral (fsStatBlockCount stat) :: (#type long))
-                      (#poke struct statvfs, f_bfree) pStatFS
-                          (fromIntegral (fsStatBlocksFree stat) :: (#type long))
-                      (#poke struct statvfs, f_bavail) pStatFS
-                          (fromIntegral (fsStatBlocksAvailable
-                                             stat) :: (#type long))
-                      (#poke struct statvfs, f_files) pStatFS
-                           (fromIntegral (fsStatFileCount stat) :: (#type long))
-                      (#poke struct statvfs, f_ffree) pStatFS
-                          (fromIntegral (fsStatFilesFree stat) :: (#type long))
-                      (#poke struct statvfs, f_namemax) pStatFS
-                          (fromIntegral (fsStatMaxNameLength stat) :: (#type long))
-                      return 0
+                   do
+#ifdef MACFUSE
+                   -- NB: f_frsize is used instead of f_bsize for block sizes on
+                   -- OS X 10.5+.
+                   (#poke struct statvfs, f_frsize)  pStatFS
+                     (fromIntegral (fsStatBlockSize stat)     :: (#type unsigned long))
+                   (#poke struct statvfs, f_blocks)  pStatFS
+                     (fromIntegral (fsStatBlockCount stat)    :: (#type fsblkcnt_t))
+                   (#poke struct statvfs, f_bfree)   pStatFS
+                     (fromIntegral (fsStatBlocksFree stat)    :: (#type fsblkcnt_t))
+                   (#poke struct statvfs, f_bavail)  pStatFS
+                     (fromIntegral (fsStatBlocksAvail stat)   :: (#type fsblkcnt_t))
+                   (#poke struct statvfs, f_files)   pStatFS
+                     (fromIntegral (fsStatFileCount stat)     :: (#type fsfilcnt_t))
+                   (#poke struct statvfs, f_ffree)   pStatFS
+                     (fromIntegral (fsStatFilesFree stat)     :: (#type fsfilcnt_t))
+                   (#poke struct statvfs, f_favail)  pStatFS
+                     (fromIntegral (fsStatFilesAvail stat)    :: (#type fsfilcnt_t))
+                   (#poke struct statvfs, f_namemax) pStatFS
+                     (fromIntegral (fsStatMaxNameLength stat) :: (#type unsigned long))
+#else
+               TODO
+#endif
+                   return 0
 
           wrapFlush :: CFlush
           wrapFlush pFilePath pFuseFileInfo = handle fuseHandler $
