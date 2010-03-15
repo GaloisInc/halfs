@@ -131,6 +131,8 @@ openDirectory fs inr = do
   -- are informed when their handle is dangling (which can occur, e.g., if
   -- another process removes a directory).
 
+  -- TODO FIXME permissions checks!
+
   mdh <- withLockedRscRef (hsDHMap fs) (lookupRM inr)
   case mdh of
     Just dh -> return dh

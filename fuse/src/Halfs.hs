@@ -367,24 +367,31 @@ halfsOpenDirectory :: HalfsCapable b t r l m =>
                       HalfsSpecific b r l m
                    -> FilePath
                    -> m Errno
-halfsOpenDirectory (_log, _fs) _fp = do
-  error "halfsOpenDirectory: Not Yet Implemented." -- TODO
-  return eNOSYS
-
+halfsOpenDirectory (log, fs) fp = do
+--  error "halfsOpenDirectory: Not Yet Implemented." -- TODO
+--  return eNOSYS
+  log $ "halfsOpenDirectory: fp = " ++ show fp
+  -- HERE: Must store dh in intermediate map for use by readDir? The
+  -- sequence of calls for listing directory contents is:
+  -- halfsOpenDirectory fp ==> halfsReadDirectory fp ==> halfsReleaseDirectory fp...
+  either id id `fmap` execOrErrno eINVAL (const eOK) (openDir fs fp)
+  
 halfsReadDirectory :: HalfsCapable b t r l m =>  
                       HalfsSpecific b r l m
                    -> FilePath
                    -> m (Either Errno [(FilePath, FileStat)])
-halfsReadDirectory (_log, _fs) _fp = do
-  error "halfsReadDirectory: Not Yet Implemented." -- TODO
+halfsReadDirectory (log, fs) fp = do
+  log $ "halfsReadDirectory: fp = " ++ show fp
+  --error "halfsReadDirectory: Not Yet Implemented." -- TODO
   return (Left eNOSYS)
 
 halfsReleaseDirectory :: HalfsCapable b t r l m =>
                          HalfsSpecific b r l m
                       -> FilePath
                       -> m Errno
-halfsReleaseDirectory (_log, _fs) _fp = do
-  error "halfsReleaseDirectory: Not Yet Implemented." -- TODO
+halfsReleaseDirectory (log, fs) fp = do
+  log $ "halfsReleaseDirectory: fp = " ++ show fp
+  --error "halfsReleaseDirectory: Not Yet Implemented." -- TODO
   return eNOSYS
          
 halfsSynchronizeDirectory :: HalfsCapable b t r l m =>
