@@ -7,8 +7,9 @@ module Main
 where
 
 import Control.Applicative
--- import Control.Exception     (assert)
+import Control.Exception     (assert)
 import Data.Array.IO         (IOUArray)
+import Data.Bits             (.|.)
 import Data.IORef            (IORef)
 import Data.Word             
 import System.Console.GetOpt 
@@ -37,12 +38,14 @@ import System.Device.Memory
 import Tests.Utils
 
 import qualified Data.ByteString as BS
+import qualified Halfs.Types     as H
 import Prelude hiding (log, catch)  
 
 -- Halfs-specific stuff we carry around in our FUSE functions; note that the
 -- FUSE library does this via opaque ptr to user data, but since hFUSE
--- reimplements fuse_main and doesn't seem to provide a way to hang onto private
--- data, we just carry the data ourselves.
+-- reimplements fuse_main and doesn't seem to provide a way to hang onto
+-- private data, we just carry the data ourselves.
+
 type Logger m              = String -> m ()
 type HalfsSpecific b r l m = (Logger m, HalfsState b r l m)
 
@@ -76,6 +79,7 @@ main = do
                  else withFileStore False fp sz n (`newFileBlockDevice` sz)
                         <* putStrLn "Created filedev from new file."  
 
+
   when (not exists) $ exec $ newfs dev >> return ()
   fs <- exec $ mount dev
 
@@ -91,14 +95,14 @@ main = do
 
 ops :: HalfsSpecific (IOUArray Word64 Bool) IORef IOLock IO
     -> FuseOperations FileHandle
+{-
 ops hsp@(_log,_fs) = defaultFuseOps
   { fuseGetFileStat        = halfsGetFileStat        hsp
   , fuseGetFileSystemStats = halfsGetFileSystemStats hsp
   , fuseInit               = halfsInit               hsp
   , fuseDestroy            = halfsDestroy            hsp
   }
-
-{-
+-}
 ops hsp@(_log, _) = FuseOperations
   { fuseGetFileStat          = halfsGetFileStat          hsp
   , fuseReadSymbolicLink     = halfsReadSymbolicLink     hsp
@@ -128,16 +132,12 @@ ops hsp@(_log, _) = FuseOperations
   , fuseInit                 = halfsInit                 hsp
   , fuseDestroy              = halfsDestroy              hsp
   }
--}
 
 halfsGetFileStat :: HalfsCapable b t r l m =>
                     HalfsSpecific b r l m
                  -> FilePath
                  -> m (Either Errno FileStat)
-halfsGetFileStat (_log, _fs) _fp = do
-  error "halfsGetFileStat: Not Yet Implemented." -- TODO
-{-
-  log $ replicate 80 '-'
+halfsGetFileStat (log, fs) fp = do
   log $ "halfsGetFileStat entry: fp = " ++ show fp
   eestat <- execOrErrno eINVAL id (fstat fs fp)
   case eestat of
@@ -145,10 +145,12 @@ halfsGetFileStat (_log, _fs) _fp = do
       log $ "halfsGetFileStat: fstat failed."
       return $ f2f undefined undefined `fmap` eestat
     Right stat -> do
-      log $ "halfsGetFileStat: Halfs.Types.FileStat = " ++ show stat
+--       log $ "halfsGetFileStat: Halfs.Types.FileStat = " ++ show stat
       atm <- toCTime $ H.fsAccessTime stat
       mtm <- toCTime $ H.fsModTime stat
-      return $ Right $ f2f atm mtm stat
+      let rslt = f2f atm mtm stat
+      log $ "halfsGetFileStat: Fuse.FileStat = " ++ show rslt
+      return $ Right rslt
   where
     chkb16 x = assert (x' <= fromIntegral (maxBound :: Word16)) x'
                where x' = fromIntegral x
@@ -165,6 +167,7 @@ halfsGetFileStat (_log, _fs) _fp = do
       in FileStat
         { statEntryType        = entryType
         , statFileMode         = entryTypeToFileMode entryType
+                                 .|. emode (H.fsMode stat)
         , statLinkCount        = chkb16 $ H.fsNumLinks stat
         , statFileOwner        = chkb32 $ H.fsUID stat
         , statFileGroup        = chkb32 $ H.fsGID stat
@@ -174,10 +177,14 @@ halfsGetFileStat (_log, _fs) _fp = do
         , statBlocks           = fromIntegral $ H.fsNumBlocks stat
         , statAccessTime       = atm
         , statModificationTime = mtm
-        , statStatusChangeTime = 0 -- FIXME: We need to track this
-                                   -- error "Status change time not yet computed"
+        , statStatusChangeTime = 0 -- TODO FIXME : We need to track this
         }
--}
+    --
+    emode (H.FileMode o g u) = cvt o * 0o100 + cvt g * 0o10 + cvt u where
+      cvt = foldr (\p acc -> acc + case p of H.Read    -> 0o4
+                                             H.Write   -> 0o2
+                                             H.Execute -> 0o1
+                  ) 0
 
 halfsReadSymbolicLink :: HalfsCapable b t r l m =>
                          HalfsSpecific b r l m

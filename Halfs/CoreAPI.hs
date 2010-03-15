@@ -56,8 +56,12 @@ data FileSystemStats = FSS
 -- small files and directories.
 
 newfs :: (HalfsCapable b t r l m) =>
-         BlockDevice m -> HalfsM m SuperBlock
-newfs dev = do
+         BlockDevice m
+      -> UserID
+      -> GroupID
+      -> FileMode
+      -> HalfsM m SuperBlock
+newfs dev uid gid rdirPerms = do
   when (superBlockSize > bdBlockSize dev) $
     fail "The device's block size is insufficiently large!"
 
@@ -75,12 +79,11 @@ newfs dev = do
     buildEmptyInodeEnc 
       dev
       Directory
-      rootDirPerms
-      -- ^ TODO: Should we have the caller provide root dir perms?
+      rdirPerms
       rdirInode
       nilInodeRef
-      rootUser
-      rootGroup
+      uid
+      gid
   assert (BS.length dirInode == fromIntegral (bdBlockSize dev)) $ do
   lift $ bdWriteBlock dev rdirAddr dirInode
 
