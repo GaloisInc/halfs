@@ -401,8 +401,8 @@ halfsAccess :: HalfsCapable b t r l m =>
             -> m Errno
 halfsAccess (log, fs) fp n = do
   log $ "halfsAccess: fp = " ++ show fp ++ ", n = " ++ show n
-  error "halfsAccess: Not Yet Implemented." -- TODO
-  return eNOSYS
+--  error "halfsAccess: Not Yet Implemented." -- TODO
+  return eOK -- TODO FIXME currently says everything has access
          
 halfsInit :: HalfsCapable b t r l m =>
              HalfsSpecific b r l m
