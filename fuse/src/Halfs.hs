@@ -9,7 +9,7 @@ where
 import Control.Applicative
 import Control.Exception     (assert)
 import Data.Array.IO         (IOUArray)
-import Data.Bits             (.|.)
+import Data.Bits
 import Data.IORef            (IORef)
 import Data.Word             
 import System.Console.GetOpt 
@@ -24,7 +24,7 @@ import System.Posix.Types    ( ByteCount
                              , GroupID
                              , UserID
                              )
-
+import System.Posix.User     (getRealUserID, getRealGroupID)
 import System.Fuse     
 
 import Halfs.Classes
@@ -37,8 +37,9 @@ import System.Device.File
 import System.Device.Memory
 import Tests.Utils
 
-import qualified Data.ByteString as BS
-import qualified Halfs.Types     as H
+import qualified Data.ByteString  as BS
+import qualified Halfs.Protection as HP
+import qualified Halfs.Types      as H
 import Prelude hiding (log, catch)  
 
 -- Halfs-specific stuff we carry around in our FUSE functions; note that the
@@ -79,8 +80,16 @@ main = do
                  else withFileStore False fp sz n (`newFileBlockDevice` sz)
                         <* putStrLn "Created filedev from new file."  
 
+  uid <- (HP.UID . fromIntegral) `fmap` getRealUserID
+  gid <- (HP.GID . fromIntegral) `fmap` getRealGroupID
 
-  when (not exists) $ exec $ newfs dev >> return ()
+  when (not exists) $ do
+    exec $ newfs dev uid gid $ H.FileMode
+           [H.Read, H.Write, H.Execute]
+           [H.Read,          H.Execute]
+           [                          ]
+    return ()
+
   fs <- exec $ mount dev
 
   let log s = hPutStrLn stderr s
@@ -311,11 +320,13 @@ halfsGetFileSystemStats :: HalfsCapable b t r l m =>
                         -> FilePath
                         -> m (Either Errno System.Fuse.FileSystemStats)
 halfsGetFileSystemStats (log, fs) fp = do
+{-
   log $ "halfsGetFileSystemStats: fp = " ++ show fp
   x <- execOrErrno eINVAL id (fsstat fs)
   log $ "Halfs.Types.FileSystemStats: " ++ show x
   return (fss2fss `fmap` x)
-  -- execOrErrno eINVAL fss2fss (fsstat fs)
+-}
+  execOrErrno eINVAL fss2fss (fsstat fs)
   where
     fss2fss (FSS bs bc bf ba fc ff fa) = System.Fuse.FileSystemStats
       { fsStatBlockSize     = bs
@@ -388,7 +399,8 @@ halfsAccess :: HalfsCapable b t r l m =>
                HalfsSpecific b r l m
             -> FilePath -> Int
             -> m Errno
-halfsAccess (_log, _fs) _fp _n = do
+halfsAccess (log, fs) fp n = do
+  log $ "halfsAccess: fp = " ++ show fp ++ ", n = " ++ show n
   error "halfsAccess: Not Yet Implemented." -- TODO
   return eNOSYS
          
@@ -396,7 +408,6 @@ halfsInit :: HalfsCapable b t r l m =>
              HalfsSpecific b r l m
           -> m ()
 halfsInit (log, _fs) = do
---  error "halfsInit: Not Yet Implemented." -- TODO
   log $ "halfsInit: Invoked."
   return ()
 

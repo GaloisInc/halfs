@@ -68,7 +68,7 @@ qcProps quick =
 
 propM_initAndMountOK :: HalfsProp
 propM_initAndMountOK _g dev = do
-  esb <- runH (newfs dev)
+  esb <- runH (mkNewFS dev)
   case esb of
     Left _   -> fail "Filesystem creation failed"
     Right sb -> do 
@@ -103,7 +103,7 @@ propM_initAndMountOK _g dev = do
 
 propM_mountUnmountOK :: HalfsProp
 propM_mountUnmountOK _g dev = do
-  fs <- runH (newfs dev) >> mountOK dev
+  fs <- runH (mkNewFS dev) >> mountOK dev
   let readSBRef = sreadRef $ hsSuperBlock fs
 
   assert =<< (not . unmountClean) `fmap` readSBRef
@@ -138,7 +138,7 @@ propM_unmountMutexOK :: BDGeom
                      -> BlockDevice IO
                      -> PropertyM IO ()
 propM_unmountMutexOK _g dev = do
-  fs <- runH (newfs dev) >> mountOK dev
+  fs <- runH (mkNewFS dev) >> mountOK dev
   ch <- run newChan
   run $ forkIO $ threadTest fs ch
   run $ threadTest fs ch
@@ -154,7 +154,7 @@ propM_unmountMutexOK _g dev = do
 -- and that dirs and subdirs can be created and opened.
 propM_dirConstructionOK :: HalfsProp
 propM_dirConstructionOK _g dev = do
-  fs <- runH (newfs dev) >> mountOK dev
+  fs <- runH (mkNewFS dev) >> mountOK dev
 
   -- Check that the root directory is present and empty
   exec "openDir /" (openDir fs rootPath) >>= \dh -> do
@@ -186,7 +186,7 @@ propM_dirConstructionOK _g dev = do
 -- directories permits creation of a file.
 propM_fileCreationOK :: HalfsProp
 propM_fileCreationOK _g dev = do
-  fs <- runH (newfs dev) >> mountOK dev
+  fs <- runH (mkNewFS dev) >> mountOK dev
   
   let fooPath = rootPath </> "foo"
       fp      = fooPath </> "f1"
@@ -212,7 +212,7 @@ propM_fileCreationOK _g dev = do
 -- filesystem
 propM_fileWR :: FilePath -> HalfsProp
 propM_fileWR pathFromRoot _g dev = do
-  fs <- runH (newfs dev) >> mountOK dev
+  fs <- runH (mkNewFS dev) >> mountOK dev
 
   assert (isRelative pathFromRoot)
   mapM_ (exec "making parent directory" . mkdir fs defaultDirPerms) mkdirs
@@ -265,7 +265,7 @@ propM_dirMutexOK :: BDGeom
                  -> BlockDevice IO
                  -> PropertyM IO ()
 propM_dirMutexOK _g dev = do
-  fs <- runH (newfs dev) >> mountOK dev
+  fs <- runH (mkNewFS dev) >> mountOK dev
 
   forAllM (DirMutexOk `fmap` choose (2, maxThreads)) $ \(DirMutexOk n) -> do
   forAllM (mapM genNm [1..n])                        $ \nmss           -> do
@@ -309,7 +309,7 @@ propM_hardlinksOK _g dev = do
   --     bar (directory)
   --       source (1 byte file)
   
-  fs <- runH (newfs dev) >> mountOK dev
+  fs <- runH (mkNewFS dev) >> mountOK dev
   exec "mkdir /foo"                  $ mkdir fs defaultDirPerms d0
   exec "mkdir /foo/bar"              $ mkdir fs defaultDirPerms d1
   fh <- exec "creat /foo/bar/source" $ openFile fs src True

@@ -33,3 +33,4 @@ instance Serialize GroupID where
 
 rootGroup :: GroupID
 rootGroup = GID 0
+

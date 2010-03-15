@@ -29,7 +29,8 @@ library
                     fingertree < 0.2,
                     cereal < 1.0,
                     mtl > 1.0 && < 1.2,
-                    time > 1.0 && < 1.2
+                    time > 1.0 && < 1.2, 
+                    unix >= 2.3.2.0
 
   Exposed-Modules:  Halfs.CoreAPI,
                     System.Device.BlockDevice,

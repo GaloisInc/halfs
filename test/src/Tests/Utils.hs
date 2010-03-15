@@ -16,7 +16,7 @@ import qualified Data.ByteString as BS
 import qualified Data.Map as M
 
 import Halfs.Classes
-import Halfs.CoreAPI (mount, unmount)
+import Halfs.CoreAPI (mount, newfs, rootDirPerms, unmount)
 import Halfs.Directory
 import Halfs.Errors
 import Halfs.HalfsState
@@ -114,6 +114,10 @@ mkMemDevExec quick pfx =
       numTests n $ label (pfx ++ ": " ++ s) $ monadicIO $
         forAllM arbBDGeom $ \g ->
           run (memDev g) >>= doProp (pr g)
+
+mkNewFS :: HalfsCapable b t r l m =>
+           BlockDevice m -> HalfsM m SuperBlock
+mkNewFS dev = newfs dev rootUser rootGroup rootDirPerms
 
 mountOK :: HalfsCapable b t r l m =>
            BlockDevice m

@@ -237,7 +237,7 @@ propM_inodeMutexOK :: BDGeom
                    -> BlockDevice IO
                    -> PropertyM IO ()
 propM_inodeMutexOK _g dev = do
-  fs <- runH (newfs dev) >> mountOK dev
+  fs <- runH (newfs dev rootUser rootGroup rootDirPerms) >> mountOK dev
   rdirIR <- rootDir `fmap` sreadRef (hsSuperBlock fs)
 
   -- 1) Choose a random number n s.t. 8 <= n <= 32
@@ -306,7 +306,7 @@ withFSData :: HalfsCapable b t r l m =>
            -> (HalfsState b r l m -> InodeRef -> Int -> ByteString -> PropertyM m ())
            -> PropertyM m ()
 withFSData dev f = do
-  fs <- runH (newfs dev) >> mountOK dev
+  fs <- runH (newfs dev rootUser rootGroup rootDirPerms) >> mountOK dev
   rdirIR <- rootDir `fmap` sreadRef (hsSuperBlock fs)
   withData dev $ f fs rdirIR 
 
