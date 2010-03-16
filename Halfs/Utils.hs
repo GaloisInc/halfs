@@ -8,6 +8,9 @@ import Halfs.Monad
 fmapFst :: (a -> b) -> (a, c) -> (b, c)
 fmapFst f (x,y) = (f x, y)
 
+fmapSnd :: (b -> c) -> (a, b) -> (a, c)
+fmapSnd f (x,y) = (x, f y)
+
 divCeil :: Integral a => a -> a -> a
 divCeil a b = (a + (b - 1)) `div` b
 

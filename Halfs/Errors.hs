@@ -11,22 +11,23 @@ import Data.Word
 import Halfs.Types
 
 data HalfsError =
-    HE_FileNotFound
-  | HE_UnexpectedFileType FileType FilePath
-  | HE_ObjectExists FilePath
-  | HE_PathComponentNotFound String
-  | HE_AbsolutePathExpected
-  | HE_MountFailed RsnHalfsMountFail
-  | HE_UnmountFailed 
+    HE_AbsolutePathExpected
   | HE_AllocFailed
-  | HE_InvalidStreamIndex Word64
+  | HE_DecodeFail_BlockCarrier String
+  | HE_DecodeFail_Cont String
   | HE_DecodeFail_Directory String
   | HE_DecodeFail_Inode String
-  | HE_DecodeFail_Cont String
-  | HE_DecodeFail_BlockCarrier String
-  | HE_TestFailed String
-  | HE_InternalError String
+  | HE_DirectoryHandleNotFound
   | HE_ErrnoAnnotated HalfsError Errno
+  | HE_FileNotFound
+  | HE_InternalError String
+  | HE_InvalidStreamIndex Word64
+  | HE_MountFailed RsnHalfsMountFail
+  | HE_ObjectExists FilePath
+  | HE_PathComponentNotFound String
+  | HE_TestFailed String
+  | HE_UnexpectedFileType FileType FilePath
+  | HE_UnmountFailed 
   deriving (Eq, Show)
 
 data RsnHalfsMountFail = 

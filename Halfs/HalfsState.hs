@@ -27,6 +27,6 @@ data HalfsState b r l m = HalfsState {
     -- (refcounting?) expiry mechanism so that the size of the map is
     -- bounded.  TODO.
   , hsInodeLockMap     :: LockedRscRef l r (M.Map InodeRef (l, Word64))
-    -- ^ Tracks inode locks. For now, these are single reader/writer
+    -- ^ Tracks refcnt'd inode locks. For now, these are single reader/writer
     -- locks.
   }
