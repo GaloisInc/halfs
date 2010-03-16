@@ -114,16 +114,33 @@ main = do
 
 ops :: HalfsSpecific (IOUArray Word64 Bool) IORef IOLock IO
     -> FuseOperations FileHandle
+
+-- ops hsp = defaultFuseOps 
+--  { fuseGetFileStat        = halfsGetFileStat        hsp
+--  , fuseGetFileSystemStats = halfsGetFileSystemStats hsp
+--  , fuseInit               = halfsInit               hsp
+--  , fuseDestroy            = halfsDestroy            hsp
+--  }
+
 {-
-ops hsp@(_log,_fs) = defaultFuseOps
-  { fuseGetFileStat        = halfsGetFileStat        hsp
-  , fuseGetFileSystemStats = halfsGetFileSystemStats hsp
-  , fuseInit               = halfsInit               hsp
-  , fuseDestroy            = halfsDestroy            hsp
+ops hsp = defaultFuseOps 
+  { 
+--    fuseGetFileStat        = fuseGetFileStat defaultFuseOps
+--    fuseGetFileStat        = halfsGetFileStat        hsp
+--  , 
+  fuseGetFileSystemStats = halfsGetFileSystemStats hsp
+  , 
+  fuseInit               = halfsInit               hsp
+  , 
+  fuseDestroy            = halfsDestroy            hsp
   }
 -}
+
 ops hsp = FuseOperations
-  { fuseGetFileStat          = halfsGetFileStat          hsp
+  { 
+    fuseGetFileStat          = halfsGetFileStat          hsp
+--    fuseGetFileStat          = fuseGetFileStat defaultFuseOps 
+
   , fuseReadSymbolicLink     = halfsReadSymbolicLink     hsp
   , fuseCreateDevice         = halfsCreateDevice         hsp
   , fuseCreateDirectory      = halfsCreateDirectory      hsp
@@ -156,19 +173,10 @@ halfsGetFileStat :: HalfsCapable b t r l m =>
                     HalfsSpecific b r l m
                  -> FilePath
                  -> m (Either Errno FileStat)
-halfsGetFileStat (HS log fs _fpdhMap) fp = do
-  log $ "halfsGetFileStat entry: fp = " ++ show fp
-  eestat <- execOrErrno eINVAL id (fstat fs fp)
-  case eestat of
-    Left e     -> do
-      log $ "halfsGetFileStat: fstat failed."
-      return $ Left e
-    Right stat -> do
---       log $ "halfsGetFileStat: Halfs.Types.FileStat = " ++ show stat
-      rslt <- fstat2fstat stat
-      log $ "halfsGetFileStat: Fuse.FileStat = " ++ show rslt
-      return $ Right rslt
-             
+halfsGetFileStat (HS _log fs _fpdhMap) fp = 
+  execOrErrno eINVAL id (fstat fs fp) >>=
+    either (return . Left) (liftM Right . fstat2fstat) 
+
 halfsReadSymbolicLink :: HalfsCapable b t r l m =>
                          HalfsSpecific b r l m
                       -> FilePath
@@ -342,25 +350,25 @@ halfsOpenDirectory :: HalfsCapable b t r l m =>
                    -> FilePath
                    -> m Errno
 halfsOpenDirectory (HS log fs fpdhMap) fp = do
-  error "halfsOpenDirectory: Not Yet Implemented." -- TODO
-  return eNOSYS
-{-
+--  log $ "halfsOpenDirectory: Not Yet Implemented." -- TODO
+--  return eNOSYS
+
   log $ "halfsOpenDirectory: fp = " ++ show fp
   execToErrno eINVAL (const eOK) $ withLockedRscRef fpdhMap $ \ref -> do
     mdh <- lookupRM fp ref
     case mdh of
-      Nothing -> openDir fs fp >>= modifyRef ref . M.insert fp 
-      _       -> return ()
--}
+      Nothing -> do
+        lift $ log $ "halfsOpenDirectory: No map entry for fp"
+        openDir fs fp >>= modifyRef ref . M.insert fp 
+      _       -> do 
+        lift $ log $ "halfsOpenDirectory: Map entry found for fp"
+        return ()
 
 halfsReadDirectory :: HalfsCapable b t r l m =>  
                       HalfsSpecific b r l m
                    -> FilePath
                    -> m (Either Errno [(FilePath, FileStat)])
 halfsReadDirectory (HS log fs fpdhMap) fp = do
-  error "halfsReadDirectory: Not Yet Implemented." -- TODO
-  return $ Left eNOSYS
-{-
   log $ "halfsReadDirectory: fp = " ++ show fp
   rslt <- execOrErrno eINVAL id $ withLockedRscRef fpdhMap $ \ref -> do
     mdh <- lookupRM fp ref
@@ -369,23 +377,18 @@ halfsReadDirectory (HS log fs fpdhMap) fp = do
       Just dh -> readDir fs dh >>= mapM (\(p, s) -> (,) p `fmap` fstat2fstat s)
   log $ "halfsReadDirectory: rslt = " ++ show rslt
   return rslt
--}
 
 halfsReleaseDirectory :: HalfsCapable b t r l m =>
                          HalfsSpecific b r l m
                       -> FilePath
                       -> m Errno
 halfsReleaseDirectory (HS log fs fpdhMap) fp = do
-  error "halfsReleaseDirectory: Not Yet Implemented." -- TODO
-  return eNOSYS
-{-
   log $ "halfsReleaseDirectory: fp = " ++ show fp
   execToErrno eINVAL (const eOK) $ withLockedRscRef fpdhMap $ \ref -> do
     mdh <- lookupRM fp ref
     case mdh of
       Nothing -> throwError HE_DirectoryHandleNotFound
       Just dh -> closeDir fs dh >> modifyRef ref (M.delete fp)        
--}
          
 halfsSynchronizeDirectory :: HalfsCapable b t r l m =>
                              HalfsSpecific b r l m
@@ -401,8 +404,7 @@ halfsAccess :: HalfsCapable b t r l m =>
             -> m Errno
 halfsAccess (HS log _fs _fpdhMap) fp n = do
   log $ "halfsAccess: fp = " ++ show fp ++ ", n = " ++ show n
---  error "halfsAccess: Not Yet Implemented." -- TODO
-  return eOK -- TODO FIXME currently says everything has access
+  return eOK -- TODO FIXME currently grants all acces!
          
 halfsInit :: HalfsCapable b t r l m =>
              HalfsSpecific b r l m
