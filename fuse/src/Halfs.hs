@@ -55,7 +55,12 @@ data HalfsSpecific b r l m = HS {
     hspLogger  :: Logger m
   , hspState   :: HalfsState b r l m
   , hspFpdhMap :: H.LockedRscRef l r (M.Map FilePath (H.DirHandle r l))
-    -- ^ Tracks DirHandles across halfs{Open,Read,Release}Directory invocations
+    -- ^ Tracks DirHandles across halfs{Open,Read,Release}Directory
+    --   invocations; we should be able to do this via HFuse and the 
+    --   fuse_file_info* out parameter for the 'open' fuse operation, 
+    -- but the binding doesn't support this yet.  We'd probably still need
+    -- something persistent here, though, to map the handle from the
+    -- fuse_file_info to a DirHandle.
   }
 
 -- This isn't a halfs limit, but we have to pick something for FUSE.
@@ -114,33 +119,8 @@ main = do
 
 ops :: HalfsSpecific (IOUArray Word64 Bool) IORef IOLock IO
     -> FuseOperations FileHandle
-
--- ops hsp = defaultFuseOps 
---  { fuseGetFileStat        = halfsGetFileStat        hsp
---  , fuseGetFileSystemStats = halfsGetFileSystemStats hsp
---  , fuseInit               = halfsInit               hsp
---  , fuseDestroy            = halfsDestroy            hsp
---  }
-
-{-
-ops hsp = defaultFuseOps 
-  { 
---    fuseGetFileStat        = fuseGetFileStat defaultFuseOps
---    fuseGetFileStat        = halfsGetFileStat        hsp
---  , 
-  fuseGetFileSystemStats = halfsGetFileSystemStats hsp
-  , 
-  fuseInit               = halfsInit               hsp
-  , 
-  fuseDestroy            = halfsDestroy            hsp
-  }
--}
-
 ops hsp = FuseOperations
-  { 
-    fuseGetFileStat          = halfsGetFileStat          hsp
---    fuseGetFileStat          = fuseGetFileStat defaultFuseOps 
-
+  { fuseGetFileStat          = halfsGetFileStat          hsp
   , fuseReadSymbolicLink     = halfsReadSymbolicLink     hsp
   , fuseCreateDevice         = halfsCreateDevice         hsp
   , fuseCreateDirectory      = halfsCreateDirectory      hsp
@@ -176,6 +156,25 @@ halfsGetFileStat :: HalfsCapable b t r l m =>
 halfsGetFileStat (HS _log fs _fpdhMap) fp = 
   execOrErrno eINVAL id (fstat fs fp) >>=
     either (return . Left) (liftM Right . fstat2fstat) 
+
+{-
+halfsGetFileStat :: HalfsCapable b t r l m =>
+                    HalfsSpecific b r l m
+                 -> FilePath
+                 -> m (Either Errno FileStat)
+halfsGetFileStat (HS log fs _fpdhMap) fp = do
+  log $ "halfsGetFileStat entry: fp = " ++ show fp
+  eestat <- execOrErrno eINVAL id (fstat fs fp)
+  case eestat of
+    Left e     -> do
+      log $ "halfsGetFileStat: fstat failed."
+      return $ Left e
+    Right stat -> do
+--       log $ "halfsGetFileStat: Halfs.Types.FileStat = " ++ show stat
+      rslt <- fstat2fstat stat
+      log $ "halfsGetFileStat: Fuse.FileStat = " ++ show rslt
+      return $ Right rslt
+-}
 
 halfsReadSymbolicLink :: HalfsCapable b t r l m =>
                          HalfsSpecific b r l m
@@ -350,9 +349,6 @@ halfsOpenDirectory :: HalfsCapable b t r l m =>
                    -> FilePath
                    -> m Errno
 halfsOpenDirectory (HS log fs fpdhMap) fp = do
---  log $ "halfsOpenDirectory: Not Yet Implemented." -- TODO
---  return eNOSYS
-
   log $ "halfsOpenDirectory: fp = " ++ show fp
   execToErrno eINVAL (const eOK) $ withLockedRscRef fpdhMap $ \ref -> do
     mdh <- lookupRM fp ref
@@ -536,4 +532,5 @@ instance Show OpenFileFlags where
     "                exclusive = " ++ show exclusive' ++ 
     "                noctty    = " ++ show noctty'    ++    
     "                nonBlock  = " ++ show nonBlock'  ++  
-    "                trunc     = " ++ show trunc'
+    "                trunc     = " ++ show trunc'     ++
+    "              }"
