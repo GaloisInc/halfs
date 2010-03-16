@@ -54,13 +54,14 @@ type Logger m              = String -> m ()
 data HalfsSpecific b r l m = HS {
     hspLogger  :: Logger m
   , hspState   :: HalfsState b r l m
+    -- ^ The filesystem state, as provided by CoreAPI.mount.
   , hspFpdhMap :: H.LockedRscRef l r (M.Map FilePath (H.DirHandle r l))
-    -- ^ Tracks DirHandles across halfs{Open,Read,Release}Directory
-    --   invocations; we should be able to do this via HFuse and the 
-    --   fuse_file_info* out parameter for the 'open' fuse operation, 
-    -- but the binding doesn't support this yet.  We'd probably still need
-    -- something persistent here, though, to map the handle from the
-    -- fuse_file_info to a DirHandle.
+    -- ^ Tracks DirHandles across halfs{Open,Read,Release}Directory invocations;
+    -- we should be able to do this via HFuse and the fuse_file_info* out
+    -- parameter for the 'open' fuse operation, but the binding doesn't support
+    -- this.  However, we'd probably still need something persistent here to go
+    -- from the opaque handle we stored in the fuse_file_info struct to one of
+    -- our DirHandles.
   }
 
 -- This isn't a halfs limit, but we have to pick something for FUSE.
@@ -105,6 +106,8 @@ main = do
 
   fs <- exec $ mount dev
 
+  -- TODO: log to file, see if it sidesteps the on-setup race conditions with
+  -- first output.
   let log s = hPutStrLn stderr s >> hFlush stderr
 
   dhMap <- newLockedRscRef M.empty
@@ -154,15 +157,7 @@ halfsGetFileStat :: HalfsCapable b t r l m =>
                  -> FilePath
                  -> m (Either Errno FileStat)
 halfsGetFileStat (HS _log fs _fpdhMap) fp = 
-  execOrErrno eINVAL id (fstat fs fp) >>=
-    either (return . Left) (liftM Right . fstat2fstat) 
-
-{-
-halfsGetFileStat :: HalfsCapable b t r l m =>
-                    HalfsSpecific b r l m
-                 -> FilePath
-                 -> m (Either Errno FileStat)
-halfsGetFileStat (HS log fs _fpdhMap) fp = do
+  -- HERE: 
   log $ "halfsGetFileStat entry: fp = " ++ show fp
   eestat <- execOrErrno eINVAL id (fstat fs fp)
   case eestat of
@@ -170,11 +165,11 @@ halfsGetFileStat (HS log fs _fpdhMap) fp = do
       log $ "halfsGetFileStat: fstat failed."
       return $ Left e
     Right stat -> do
---       log $ "halfsGetFileStat: Halfs.Types.FileStat = " ++ show stat
       rslt <- fstat2fstat stat
       log $ "halfsGetFileStat: Fuse.FileStat = " ++ show rslt
       return $ Right rslt
--}
+--   execOrErrno eINVAL id (fstat fs fp) >>=
+--     either (return . Left) (liftM Right . fstat2fstat) 
 
 halfsReadSymbolicLink :: HalfsCapable b t r l m =>
                          HalfsSpecific b r l m
