@@ -369,13 +369,11 @@ halfsReleaseDirectory :: HalfsCapable b t r l m =>
                       -> m Errno
 halfsReleaseDirectory (HS log fs fpdhMap) fp = do
   log $ "halfsReleaseDirectory: fp = " ++ show fp
-  rslt <- execToErrno eINVAL (const eOK) $ withLockedRscRef fpdhMap $ \ref -> do
+  execToErrno eINVAL (const eOK) $ withLockedRscRef fpdhMap $ \ref -> do
     mdh <- lookupRM fp ref
     case mdh of
       Nothing -> throwError HE_DirectoryHandleNotFound
       Just dh -> closeDir fs dh >> modifyRef ref (M.delete fp)        
-  log $ "halfsReleaseDirectory: rslt = " ++ show rslt
-  return rslt
          
 halfsSynchronizeDirectory :: HalfsCapable b t r l m =>
                              HalfsSpecific b r l m
