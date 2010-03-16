@@ -100,7 +100,7 @@ main = do
 
   fs <- exec $ mount dev
 
-  let log s = hPutStrLn stderr s
+  let log s = hPutStrLn stderr s >> hFlush stderr
 
   dhMap <- newLockedRscRef M.empty
   withArgs argv1 $ fuseMain (ops (HS log fs dhMap)) $ \e -> do
@@ -342,18 +342,25 @@ halfsOpenDirectory :: HalfsCapable b t r l m =>
                    -> FilePath
                    -> m Errno
 halfsOpenDirectory (HS log fs fpdhMap) fp = do
+  error "halfsOpenDirectory: Not Yet Implemented." -- TODO
+  return eNOSYS
+{-
   log $ "halfsOpenDirectory: fp = " ++ show fp
   execToErrno eINVAL (const eOK) $ withLockedRscRef fpdhMap $ \ref -> do
     mdh <- lookupRM fp ref
     case mdh of
       Nothing -> openDir fs fp >>= modifyRef ref . M.insert fp 
       _       -> return ()
+-}
 
 halfsReadDirectory :: HalfsCapable b t r l m =>  
                       HalfsSpecific b r l m
                    -> FilePath
                    -> m (Either Errno [(FilePath, FileStat)])
 halfsReadDirectory (HS log fs fpdhMap) fp = do
+  error "halfsReadDirectory: Not Yet Implemented." -- TODO
+  return $ Left eNOSYS
+{-
   log $ "halfsReadDirectory: fp = " ++ show fp
   rslt <- execOrErrno eINVAL id $ withLockedRscRef fpdhMap $ \ref -> do
     mdh <- lookupRM fp ref
@@ -362,18 +369,23 @@ halfsReadDirectory (HS log fs fpdhMap) fp = do
       Just dh -> readDir fs dh >>= mapM (\(p, s) -> (,) p `fmap` fstat2fstat s)
   log $ "halfsReadDirectory: rslt = " ++ show rslt
   return rslt
+-}
 
 halfsReleaseDirectory :: HalfsCapable b t r l m =>
                          HalfsSpecific b r l m
                       -> FilePath
                       -> m Errno
 halfsReleaseDirectory (HS log fs fpdhMap) fp = do
+  error "halfsReleaseDirectory: Not Yet Implemented." -- TODO
+  return eNOSYS
+{-
   log $ "halfsReleaseDirectory: fp = " ++ show fp
   execToErrno eINVAL (const eOK) $ withLockedRscRef fpdhMap $ \ref -> do
     mdh <- lookupRM fp ref
     case mdh of
       Nothing -> throwError HE_DirectoryHandleNotFound
       Just dh -> closeDir fs dh >> modifyRef ref (M.delete fp)        
+-}
          
 halfsSynchronizeDirectory :: HalfsCapable b t r l m =>
                              HalfsSpecific b r l m
