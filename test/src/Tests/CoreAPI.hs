@@ -48,7 +48,8 @@ type HalfsProp =
 
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
-  [ exec 10 "Init and mount"         propM_initAndMountOK
+  [
+    exec 10 "Init and mount"         propM_initAndMountOK
   ,
     exec 10 "Mount/unmount"          propM_mountUnmountOK
   ,

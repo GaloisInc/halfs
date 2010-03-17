@@ -202,13 +202,13 @@ addDirEnt_lckd dh name ir u g mode ftype = do
   modifyRef (dhContents dh) (M.insert name $ DirEnt name ir u g mode ftype)
   modifyRef (dhState dh) dirStTransAdd
 
-addDot :: HalfsCapable b t r l m =>
+_addDot :: HalfsCapable b t r l m =>
           DirHandle r l
-       -> UserID
-       -> GroupID
-       -> FileMode
-       -> HalfsM m ()
-addDot dh u g mode = addDirEnt dh "." (dhInode dh) u g mode Directory
+        -> UserID
+        -> GroupID
+        -> FileMode
+        -> HalfsM m ()
+_addDot dh u g mode = addDirEnt dh "." (dhInode dh) u g mode Directory
 
 -- | Finds a directory, file, or symlink given a starting inode
 -- reference (i.e., the directory inode at which to begin the search)

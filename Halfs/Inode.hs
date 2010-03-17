@@ -409,8 +409,7 @@ writeStream :: HalfsCapable b t r l m =>
             -> Bool               -- ^ Truncating write?
             -> ByteString         -- ^ Data to write
             -> HalfsM m ()
---writeStream _ _ _ False bytes | 0 == BS.length bytes = return ()
-writeStream _ _ _ _ bytes | 0 == BS.length bytes = return ()
+writeStream _ _ _ False bytes | 0 == BS.length bytes = return ()
 writeStream fs startIR start trunc bytes             =
   withLockedInode fs startIR $
     writeStream_lckd (hsBlockDev fs) (hsBlockMap fs) startIR start trunc bytes
@@ -423,8 +422,7 @@ writeStream_lckd :: HalfsCapable b t r l m =>
                  -> Bool               -- ^ Truncating write?
                  -> ByteString         -- ^ Data to write
                  -> HalfsM m ()
---writeStream_lckd _ _ _ _ False bytes | 0 == BS.length bytes = return ()
-writeStream_lckd _ _ _ _ _ bytes | 0 == BS.length bytes = return ()
+writeStream_lckd _ _ _ _ False bytes | 0 == BS.length bytes = return ()
 writeStream_lckd dev bm startIR start trunc bytes           = do
   -- ====================== Begin inode critical section ======================
 
@@ -751,33 +749,38 @@ truncUnalloc ::
   -> HalfsM m ([Cont], [Cont], Word64) -- ^ truncated chain, dirty conts, number
                                        -- of blocks freed
 truncUnalloc dev bm start len conts = do
-  eIdx@(eContIdx, eBlkOff, _) <- decompStreamOffset (bdBlockSize dev) (start + len - 1)
+  let truncToZero = start + len == 0
+  eIdx@(eContIdx, eBlkOff, _) <- decompStreamOffset (bdBlockSize dev) 
+                                   (if truncToZero then 0 else start + len - 1)
   let 
     (retain, toFree) = genericSplitAt (eContIdx + 1) conts
-    -- 
-    trm         = last retain 
-    retain'     = init retain ++ dirtyConts
-    allFreeBlks = genericDrop (eBlkOff + 1) (blockAddrs trm)
-                  -- ^ The remaining blocks in the terminator
-                  ++ concatMap blockAddrs toFree
-                  -- ^ The remaining blocks in rest of chain
-                  ++ map (unCR . address) toFree
-                  -- ^ Block addrs for the cont blocks themselves
-    numFreed    = genericLength allFreeBlks
+    trm              = last retain 
+    retain'          = init retain ++ dirtyConts
+    keepBlkCnt       = if truncToZero then 0 else eBlkOff + 1
+    allFreeBlks      = genericDrop keepBlkCnt (blockAddrs trm)
+                       -- ^ The remaining blocks in the terminator
+                       ++ concatMap blockAddrs toFree
+                       -- ^ The remaining blocks in rest of chain
+                       ++ map (unCR . address) toFree
+                       -- ^ Block addrs for the cont blocks themselves
+    numFreed         = genericLength allFreeBlks
 
-    -- Currently, only the last Cont in the chain is dirty; we do not do
-    -- any writes to any of the Conts that are detached from the chain &
+    -- Currently, only the last Cont in the chain is considered dirty; we do not
+    -- do any writes to any of the Conts that are detached from the chain &
     -- freed; this may have implications for fsck!
     dirtyConts =
       [
         -- The new terminator Cont, adjusted to discard the freed blocks
         -- and clear the continuation field
-        trm { blockCount   = eBlkOff + 1
-            , blockAddrs   = genericTake (eBlkOff + 1) (blockAddrs trm)
+        trm { blockCount   = keepBlkCnt
+            , blockAddrs   = genericTake keepBlkCnt (blockAddrs trm)
             , continuation = nilContRef
             }
       ]
 
+  dbug ("truncUnalloc: keepBlkCnt = " ++ show keepBlkCnt)  $ return ()
+  dbug ("truncUnalloc: retain      = " ++ show retain)      $ return ()
+  dbug ("truncUnalloc: toFree      = " ++ show toFree)      $ return ()
   dbug ("truncUnalloc: eIdx        = " ++ show eIdx)        $ return ()
   dbug ("truncUnalloc: retain'     = " ++ show retain')     $ return ()
   dbug ("truncUnalloc: freeNodes   = " ++ show toFree)      $ return ()
