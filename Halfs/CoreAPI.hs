@@ -8,7 +8,7 @@ import qualified Data.Map         as M
 import Data.Serialize
 import qualified Data.Traversable as T
 import Data.Word
-import Foreign.C.Error
+import Foreign.C.Error hiding (throwErrno)
 import System.FilePath
 
 import Halfs.BlockMap
@@ -506,7 +506,7 @@ absPathIR fs fp ftype = do
      rdirIR <- rootDir `fmap` readRef (hsSuperBlock fs)
      mir    <- find fs rdirIR ftype (drop 1 $ splitDirectories fp)
      case mir of
-       DF_NotFound         -> throwError $ HE_PathComponentNotFound fp
+       DF_NotFound         -> throwErrno eNOENT (HE_PathComponentNotFound fp)
        DF_WrongFileType ft -> throwError $ HE_UnexpectedFileType ft fp
        DF_Found ir         -> return ir
    else

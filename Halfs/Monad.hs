@@ -8,6 +8,7 @@ module Halfs.Monad
   , atomicModifyLockedRscRef
   , hbracket
   , newLockedRscRef
+  , throwErrno
   , withLock
   , withLockM
   , withLockedRscRef
@@ -15,6 +16,7 @@ module Halfs.Monad
   where
 
 import Control.Monad.Error
+import Foreign.C.Error (Errno)
 
 import Halfs.Classes
 import Halfs.Errors
@@ -96,6 +98,9 @@ withLockM l act = do
   release l
   return res
          
+throwErrno :: Monad m => Errno -> HalfsError -> HalfsM m a
+throwErrno en = throwError . (`HE_ErrnoAnnotated` en)
+
 --------------------------------------------------------------------------------
 -- Locked resource reference utility functions
 

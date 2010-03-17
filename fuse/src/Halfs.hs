@@ -159,13 +159,11 @@ halfsGetFileStat (HS log fs _fpdhMap) fp = do
   log $ "halfsGetFileStat: fp = " ++ show fp
   eestat <- execOrErrno eINVAL id (fstat fs fp)
   case eestat of
-    Left e     -> do
-      log $ "  (fstat failed)"
-      return $ Left e
-    Right stat -> do
-      rslt <- fstat2fstat stat
-      log $ "  (fstat ok)"
-      return $ Right rslt
+    Left en -> do
+      log $ "  (fstat failed w/ " ++ show en ++ ")"
+      return $ Left en
+    Right stat -> 
+      Right `fmap` fstat2fstat stat
 
 halfsReadSymbolicLink :: HalfsCapable b t r l m =>
                          HalfsSpecific b r l m
@@ -292,12 +290,6 @@ halfsGetFileSystemStats :: HalfsCapable b t r l m =>
                         -> FilePath
                         -> m (Either Errno System.Fuse.FileSystemStats)
 halfsGetFileSystemStats (HS _log fs _fpdhMap) _fp = do
-{-
-  log $ "halfsGetFileSystemStats: fp = " ++ show fp
-  x <- execOrErrno eINVAL id (fsstat fs)
-  log $ "Halfs.Types.FileSystemStats: " ++ show x
-  return (fss2fss `fmap` x)
--}
   execOrErrno eINVAL fss2fss (fsstat fs)
   where
     fss2fss (FSS bs bc bf ba fc ff fa) = System.Fuse.FileSystemStats
@@ -458,14 +450,19 @@ exec act =
     Left e  -> fail $ show e
     Right x -> return x
 
+-- | Returns the result of the given action on success, otherwise yields an
+-- Errno for the failed operation.  The Errno comes from either a HalfsM
+-- exception signifying it holds an Errno, or the default provided as the first
+-- argument.
 execOrErrno :: Monad m => Errno -> (a -> b) -> HalfsT m a -> m (Either Errno b)
-execOrErrno en f act = do
+execOrErrno defaultEn f act = do
  runHalfs act >>= \ea -> case ea of
-   Left _e -> return $ Left en
-   Right x -> return $ Right (f x)
+   Left (HE_ErrnoAnnotated _ en) -> return $ Left en
+   Left _                        -> return $ Left defaultEn
+   Right x                       -> return $ Right (f x)
 
 execToErrno :: Monad m => Errno -> (a -> Errno) -> HalfsT m a -> m Errno
-execToErrno en f = liftM (either id id) . execOrErrno en f
+execToErrno defaultEn f = liftM (either id id) . execOrErrno defaultEn f
 
 --------------------------------------------------------------------------------
 -- Command line stuff
