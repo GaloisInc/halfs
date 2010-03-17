@@ -106,10 +106,9 @@ main = do
 
   fs <- exec $ mount dev
 
-  -- TODO: log to file, see if it sidesteps the on-setup race conditions with
-  -- first output.
-  let log s = hPutStrLn stderr s >> hFlush stderr
+  withFile "halfs.log" WriteMode $ \h -> do
 
+  let log s = hPutStrLn h s >> hFlush h
   dhMap <- newLockedRscRef M.empty
   withArgs argv1 $ fuseMain (ops (HS log fs dhMap)) $ \e -> do
     log $ "*** Exception: " ++ show e
@@ -156,20 +155,17 @@ halfsGetFileStat :: HalfsCapable b t r l m =>
                     HalfsSpecific b r l m
                  -> FilePath
                  -> m (Either Errno FileStat)
-halfsGetFileStat (HS _log fs _fpdhMap) fp = 
-  -- HERE: 
-  log $ "halfsGetFileStat entry: fp = " ++ show fp
+halfsGetFileStat (HS log fs _fpdhMap) fp = do
+  log $ "halfsGetFileStat: fp = " ++ show fp
   eestat <- execOrErrno eINVAL id (fstat fs fp)
   case eestat of
     Left e     -> do
-      log $ "halfsGetFileStat: fstat failed."
+      log $ "  (fstat failed)"
       return $ Left e
     Right stat -> do
       rslt <- fstat2fstat stat
-      log $ "halfsGetFileStat: Fuse.FileStat = " ++ show rslt
+      log $ "  (fstat ok)"
       return $ Right rslt
---   execOrErrno eINVAL id (fstat fs fp) >>=
---     either (return . Left) (liftM Right . fstat2fstat) 
 
 halfsReadSymbolicLink :: HalfsCapable b t r l m =>
                          HalfsSpecific b r l m
@@ -345,28 +341,26 @@ halfsOpenDirectory :: HalfsCapable b t r l m =>
                    -> m Errno
 halfsOpenDirectory (HS log fs fpdhMap) fp = do
   log $ "halfsOpenDirectory: fp = " ++ show fp
-  execToErrno eINVAL (const eOK) $ withLockedRscRef fpdhMap $ \ref -> do
-    mdh <- lookupRM fp ref
-    case mdh of
-      Nothing -> do
-        lift $ log $ "halfsOpenDirectory: No map entry for fp"
-        openDir fs fp >>= modifyRef ref . M.insert fp 
-      _       -> do 
-        lift $ log $ "halfsOpenDirectory: Map entry found for fp"
-        return ()
-
+  execToErrno eINVAL (const eOK) $ 
+    withLockedRscRef fpdhMap $ \ref -> do
+      mdh <- lookupRM fp ref
+      case mdh of
+        Nothing -> openDir fs fp >>= modifyRef ref . M.insert fp 
+        _       -> return ()
+  
 halfsReadDirectory :: HalfsCapable b t r l m =>  
                       HalfsSpecific b r l m
                    -> FilePath
                    -> m (Either Errno [(FilePath, FileStat)])
 halfsReadDirectory (HS log fs fpdhMap) fp = do
   log $ "halfsReadDirectory: fp = " ++ show fp
-  rslt <- execOrErrno eINVAL id $ withLockedRscRef fpdhMap $ \ref -> do
-    mdh <- lookupRM fp ref
-    case mdh of
-      Nothing -> throwError HE_DirectoryHandleNotFound
-      Just dh -> readDir fs dh >>= mapM (\(p, s) -> (,) p `fmap` fstat2fstat s)
-  log $ "halfsReadDirectory: rslt = " ++ show rslt
+  rslt <- execOrErrno eINVAL id $ 
+    withLockedRscRef fpdhMap $ \ref -> do
+      mdh <- lookupRM fp ref
+      case mdh of
+        Nothing -> throwError HE_DirectoryHandleNotFound
+        Just dh -> readDir fs dh >>= mapM (\(p, s) -> (,) p `fmap` fstat2fstat s)
+  log $ "  rslt = " ++ show rslt
   return rslt
 
 halfsReleaseDirectory :: HalfsCapable b t r l m =>
@@ -375,11 +369,12 @@ halfsReleaseDirectory :: HalfsCapable b t r l m =>
                       -> m Errno
 halfsReleaseDirectory (HS log fs fpdhMap) fp = do
   log $ "halfsReleaseDirectory: fp = " ++ show fp
-  execToErrno eINVAL (const eOK) $ withLockedRscRef fpdhMap $ \ref -> do
-    mdh <- lookupRM fp ref
-    case mdh of
-      Nothing -> throwError HE_DirectoryHandleNotFound
-      Just dh -> closeDir fs dh >> modifyRef ref (M.delete fp)        
+  execToErrno eINVAL (const eOK) $
+    withLockedRscRef fpdhMap $ \ref -> do
+      mdh <- lookupRM fp ref
+      case mdh of
+        Nothing -> throwError HE_DirectoryHandleNotFound
+        Just dh -> closeDir fs dh >> modifyRef ref (M.delete fp)
          
 halfsSynchronizeDirectory :: HalfsCapable b t r l m =>
                              HalfsSpecific b r l m
@@ -395,7 +390,7 @@ halfsAccess :: HalfsCapable b t r l m =>
             -> m Errno
 halfsAccess (HS log _fs _fpdhMap) fp n = do
   log $ "halfsAccess: fp = " ++ show fp ++ ", n = " ++ show n
-  return eOK -- TODO FIXME currently grants all acces!
+  return eOK -- TODO FIXME currently grants all access!
          
 halfsInit :: HalfsCapable b t r l m =>
              HalfsSpecific b r l m
