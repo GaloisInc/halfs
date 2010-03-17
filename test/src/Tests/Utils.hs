@@ -219,9 +219,9 @@ dumpfs fs = do
       contents <- withDirectory fs inr $ \dh -> do
                     withLock (dhLock dh) $ readRef $ dhContents dh
       foldM (\dumpAcc (path, dirEnt) -> do
-               sub <- if deType dirEnt == Directory
-                      then dumpfs' (i+2) "" (deInode dirEnt)
-                      else return ""
+               sub <- if deType dirEnt == Directory && path /= "." && path /= ".."
+                        then dumpfs' (i+2) "" (deInode dirEnt)
+                        else return ""
                return $ dumpAcc
                      ++ replicate i ' '
                      ++ path

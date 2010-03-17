@@ -48,16 +48,23 @@ type HalfsProp =
 
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
-  [
-    exec 10 "Init and mount"         propM_initAndMountOK
-  , exec 10 "Mount/unmount"          propM_mountUnmountOK
-  , exec 10 "Unmount mutex"          propM_unmountMutexOK
-  , exec 10 "Directory construction" propM_dirConstructionOK
-  , exec 10 "Simple file creation"   propM_fileCreationOK
-  , exec  5 "File WR 1" $            propM_fileWR "myfile"
-  , exec  5 "File WR 2" $            propM_fileWR "foo/bar/baz"
-  , exec 50 "Directory mutex"        propM_dirMutexOK
-  , exec 10 "Hardlink creation"      propM_hardlinksOK
+  [ exec 10 "Init and mount"         propM_initAndMountOK
+  ,
+    exec 10 "Mount/unmount"          propM_mountUnmountOK
+  ,
+    exec 10 "Unmount mutex"          propM_unmountMutexOK
+  ,
+    exec 10 "Directory construction" propM_dirConstructionOK
+  ,
+    exec 10 "Simple file creation"   propM_fileCreationOK
+  ,
+    exec  5 "File WR 1" $            propM_fileWR "myfile"
+  ,
+    exec  5 "File WR 2" $            propM_fileWR "foo/bar/baz"
+  ,
+    exec 50 "Directory mutex"        propM_dirMutexOK
+  ,
+    exec 10 "Hardlink creation"      propM_hardlinksOK
   ]
   where
     exec = mkMemDevExec quick "CoreAPI"
@@ -156,10 +163,12 @@ propM_dirConstructionOK :: HalfsProp
 propM_dirConstructionOK _g dev = do
   fs <- runH (mkNewFS dev) >> mountOK dev
 
-  -- Check that the root directory is present and empty
+  -- Check that the root directory is present and contains only the initial
+  -- directory entries.
   exec "openDir /" (openDir fs rootPath) >>= \dh -> do
     assert =<< (== Clean) `fmap` sreadRef (dhState dh)
-    assert =<< M.null     `fmap` sreadRef (dhContents dh)
+    assert =<< ((== initDirEntNames) . L.sort . map deName . M.elems)
+               `fmap` sreadRef (dhContents dh)
     
   -- TODO: replace this with a random valid hierarchy
   let p0 = rootPath </> "foo"
@@ -173,14 +182,14 @@ propM_dirConstructionOK _g dev = do
   quickRemountCheck fs
 
   where
+    exec = execH "propM_dirConstructionOK"
+    --
     test fs p = do
       exec ("mkdir " ++ p) (mkdir fs perms p)
       isEmpty fs =<< exec ("openDir " ++ p) (openDir fs p)
     -- 
     isEmpty fs dh = do
       assert =<< null `fmap` exec ("readDir") (readDir fs dh)
-    -- 
-    exec     = execH "propM_dirConstructionOK"
 
 -- | Ensure that a new filesystem populated with a handful of
 -- directories permits creation of a file.
@@ -280,7 +289,7 @@ propM_dirMutexOK _g dev = do
   (dnames, dstats) <- exec "readDir /" $ unzip `fmap` readDir fs dh
 
   assertMsg "propM_dirMutexOK" "Directory contents are coherent" $
-    L.sort dnames == L.sort (concat nmss)
+    L.sort dnames == L.sort (concat nmss ++ initDirEntNames)
 
   -- Misc extra check; convenient to do it here
   assertMsg "propM_dirMutexOK" "FileStats report Directory type" $
@@ -362,6 +371,9 @@ propM_hardlinksOK _g dev = do
 
 --------------------------------------------------------------------------------
 -- Misc
+
+initDirEntNames :: [FilePath]
+initDirEntNames = [dotPath, dotdotPath]
 
 ok :: Monad m => PropertyM m ()
 ok = return () 

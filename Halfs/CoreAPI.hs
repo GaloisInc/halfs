@@ -66,43 +66,47 @@ newfs dev uid gid rdirPerms = do
     fail "The device's block size is insufficiently large!"
 
   blockMap <- lift $ newBlockMap dev
-  numFree  <- readRef (bmNumFree blockMap)
+  initFree <- readRef (bmNumFree blockMap)
   rdirAddr <- lift (alloc1 blockMap) >>=
               maybe (fail "Unable to allocate block for rdir inode") return
 
-  -- Build the root directory inode and persist it; note that we do not use
+  -- Build the root directory inode and persist it; note that we can't use
   -- Directory.makeDirectory here because this is a special case where we have
-  -- no parent directory.
-
-  let rdirInode = blockAddrToInodeRef rdirAddr
+  -- no parent directory (and, furthermore, no filesystem state).
+  let rdirIR = blockAddrToInodeRef rdirAddr
   dirInode <- lift $
     buildEmptyInodeEnc 
       dev
       Directory
       rdirPerms
-      rdirInode
+      rdirIR
       nilInodeRef
       uid
       gid
   assert (BS.length dirInode == fromIntegral (bdBlockSize dev)) $ do
   lift $ bdWriteBlock dev rdirAddr dirInode
 
+  -- Write the root directory entries: we can safely use the locked writeStream
+  -- variant here, as no locks yet exist.
+  writeStream_lckd dev blockMap rdirIR 0 True $
+    encode [ DirEnt dotPath    rdirIR uid gid rdirPerms Directory
+           , DirEnt dotdotPath rdirIR uid gid rdirPerms Directory
+           ]
+
+  finalFree <- readRef (bmNumFree blockMap)
   -- Persist the remaining data structures
   lift $ writeBlockMap dev blockMap
-  lift $ writeSB       dev $ superBlock rdirInode (numFree - rdirBlks) rdirBlks
- where
-   rdirBlks                = 1
-   superBlock rdirIR nf nu = SuperBlock {
-     version        = 1
-   , devBlockSize   = bdBlockSize dev
-   , devBlockCount  = bdNumBlocks dev
-   , unmountClean   = True
-   , freeBlocks     = nf 
-   , usedBlocks     = nu
-   , fileCount      = 0
-   , rootDir        = rdirIR
-   , blockMapStart  = blockAddrToInodeRef 1
-   }
+  lift $ writeSB dev $ SuperBlock
+    { version        = 1
+    , devBlockSize   = bdBlockSize dev
+    , devBlockCount  = bdNumBlocks dev
+    , unmountClean   = True
+    , freeBlocks     = finalFree
+    , usedBlocks     = initFree - finalFree
+    , fileCount      = 0
+    , rootDir        = rdirIR
+    , blockMapStart  = blockAddrToInodeRef 1
+    }
 
 -- | Mounts a filesystem from a given block device.  After this operation
 -- completes, the superblock will have its unmountClean flag set to False.

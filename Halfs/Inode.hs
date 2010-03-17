@@ -12,6 +12,8 @@ module Halfs.Inode
   , nilInodeRef
   , readStream
   , writeStream
+  -- * for internal use only
+  , writeStream_lckd
   -- * for testing: ought not be used by actual clients of this module!
   , Inode(..)
   , Cont(..)
@@ -407,9 +409,23 @@ writeStream :: HalfsCapable b t r l m =>
             -> Bool               -- ^ Truncating write?
             -> ByteString         -- ^ Data to write
             -> HalfsM m ()
+--writeStream _ _ _ False bytes | 0 == BS.length bytes = return ()
 writeStream _ _ _ _ bytes | 0 == BS.length bytes = return ()
-writeStream fs startIR start trunc bytes         =
-  withLockedInode fs startIR $ do
+writeStream fs startIR start trunc bytes             =
+  withLockedInode fs startIR $
+    writeStream_lckd (hsBlockDev fs) (hsBlockMap fs) startIR start trunc bytes
+
+writeStream_lckd :: HalfsCapable b t r l m =>
+                    BlockDevice m
+                 -> BlockMap b r l
+                 -> InodeRef           -- ^ Starting inode ref
+                 -> Word64             -- ^ Starting stream (byte) offset
+                 -> Bool               -- ^ Truncating write?
+                 -> ByteString         -- ^ Data to write
+                 -> HalfsM m ()
+--writeStream_lckd _ _ _ _ False bytes | 0 == BS.length bytes = return ()
+writeStream_lckd _ _ _ _ _ bytes | 0 == BS.length bytes = return ()
+writeStream_lckd dev bm startIR start trunc bytes           = do
   -- ====================== Begin inode critical section ======================
 
   -- NB: The implementation currently 'flattens' Contig/Discontig block groups
@@ -429,8 +445,9 @@ writeStream fs startIR start trunc bytes         =
   (sContIdx, sBlkOff, sByteOff) <- getStreamIdx bs start conts0
 
   dbug ("==== writeStream begin ===") $ do
-  dbug ("sContIdx, blkIdx, byteIdx = " ++ show (sContIdx, sBlkOff, sByteOff)) $ do
-  dbug ("conts0                    = " ++ show conts0)                          $ do
+  dbug ("(sContIdx, sBlkOff, sByteOff) = " ++ show (sContIdx, sBlkOff, sByteOff)) $ do
+  dbug ("conts0                        = " ++ show conts0                       ) $ do
+  dbug ("blockCount stCont0            = " ++ show (blockCount (conts0 !! safeToInt sContIdx))) $ do
 
   -- Determine how much space we need to allocate for the data, if any
   let stCont0       = conts0 !! safeToInt sContIdx
@@ -445,9 +462,9 @@ writeStream fs startIR start trunc bytes         =
       blksToAlloc   = bytesToAlloc `divCeil` bs
       contsToAlloc  = (blksToAlloc - availBlks (last conts0)) `divCeil` apc
       availBlks c   = numAddrs c - blockCount c
-      newFileSz     = if trunc
-                      then start + len
-                      else inoFileSize startInode + bytesToAlloc
+      newFileSz     = if trunc 
+                       then start + len 
+                       else max (start + len) (inoFileSize startInode)
 
   dbug ("trunc         = " ++ show trunc)         $ do
   dbug ("alreadyAllocd = " ++ show alreadyAllocd) $ do
@@ -509,6 +526,8 @@ writeStream fs startIR start trunc bytes         =
   forM_ dirtyConts $ \c -> when (not $ isEmbedded c) $ lift $ writeCont dev c
 
   -- Metadata stuff
+  dbug ("writeStream: inoAllocBlocks dirtyInode = " ++ show (inoAllocBlocks dirtyInode) ++ ", blksToAlloc = " ++ show blksToAlloc ++ ", contsToAlloc = " ++ show contsToAlloc ++ ", numBlksFreed = " ++ show numBlksFreed) $ do
+
   assert (blksToAlloc + contsToAlloc == 0 || numBlksFreed == 0) $ return ()
   let newBlockCount = inoAllocBlocks dirtyInode
                       + blksToAlloc + contsToAlloc - numBlksFreed
@@ -524,8 +543,6 @@ writeStream fs startIR start trunc bytes         =
   dbug ("==== writeStream end ===") $ return ()
   -- ======================= End inode critical section =======================
   where
-    dev         = hsBlockDev fs
-    bm          = hsBlockMap fs
     isEmbedded  = (==) nilContRef . address
     bs          = bdBlockSize dev
     len         = fromIntegral $ BS.length bytes

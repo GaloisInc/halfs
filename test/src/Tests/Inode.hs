@@ -35,15 +35,15 @@ import Tests.Utils
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [ -- Inode module invariants
-   exec 10 "Inode module invariants" propM_inodeModuleInvs
-  , -- Inode stream write/read/(over)write/read property
-   exec 10 "Basic WRWR" propM_basicWRWR
-  , -- Inode stream write/read/(truncating)write/read property
-    exec 10 "Truncating WRWR" propM_truncWRWR
-  , -- Inode length-specific stream write/read
-    exec 10 "Length-specific WR" propM_lengthWR
-  , -- Inode single reader/writer lock testing
-    exec 10 "Inode single reader/write mutex" propM_inodeMutexOK
+--    exec 10 "Inode module invariants" propM_inodeModuleInvs
+--  , -- Inode stream write/read/(over)write/read property
+    exec 10 "Basic WRWR" propM_basicWRWR
+--   , -- Inode stream write/read/(truncating)write/read property
+--     exec 10 "Truncating WRWR" propM_truncWRWR
+--   , -- Inode length-specific stream write/read
+--     exec 10 "Length-specific WR" propM_lengthWR
+--   , -- Inode single reader/writer lock testing
+--     exec 10 "Inode single reader/write mutex" propM_inodeMutexOK
   ]
   where
     exec = mkMemDevExec quick "Inode"
@@ -99,15 +99,27 @@ propM_basicWRWR _g dev = do
   (_, _, api, apc) <- exec "Obtaining sizes" $ getSizes (bdBlockSize dev)
   let expBlks = calcExpBlockCount (bdBlockSize dev) api apc dataSz
 
-  -- Non-truncating write & read-back
+  t0 <- time
+  exec "Stream trunc to 1 byte" $ writeStream fs rdirIR 0 True (BS.singleton 0)
+  checkWriteMD t0 1 2 -- 1 inode block + 1 data block => 2 blocks expected
+
+{-
+  -- TODO: Test truncation to zero size as well
   t1 <- time
+  exec "Stream trunc to 0 bytes" $ writeStream fs rdirIR 0 True BS.empty
+  checkWriteMD t1 0 1 -- expecting 1 inode block only
+  fail "early term"
+-}
+
+  -- Non-truncating write & read-back
+  t2 <- time
   exec "Non-truncating write" $ writeStream fs rdirIR 0 False testData
-  checkWriteMD t1 dataSzI expBlks
+  checkWriteMD t2 dataSzI expBlks
 
   -- Check readback contents
-  t2  <- time
+  t3  <- time
   bs1 <- exec "Readback 1" $ readStream fs rdirIR 0 Nothing
-  checkReadMD t2 dataSz expBlks 
+  checkReadMD t3 dataSz expBlks 
   assert (BS.length bs1 == BS.length testData)
   assert (bs1 == testData)
   -- ^ We leave off the trailing bytes of what we read, since reading until the
@@ -118,15 +130,15 @@ propM_basicWRWR _g dev = do
   forAllM (choose (0, dataSz `div` 2 - 1)) $ \startByte   -> do
   forAllM (printableBytes overwriteSz)     $ \newData     -> do
 
-  t3 <- time
+  t4 <- time
   exec "Non-trunc overwrite" $
     writeStream fs rdirIR (fromIntegral startByte) False newData
-  checkWriteMD t3 dataSzI expBlks
+  checkWriteMD t4 dataSzI expBlks
 
   -- Check readback contents
-  t4  <- time
+  t5  <- time
   bs2 <- exec "Readback 2" $ readStream fs rdirIR 0 Nothing
-  checkReadMD t4 dataSz expBlks
+  checkReadMD t5 dataSz expBlks
   let expected = bsTake startByte testData
                  `BS.append`
                  newData

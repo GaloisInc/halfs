@@ -67,6 +67,11 @@ data LockedRscRef l r rsc = LockedRscRef
 -- are guaranteed to not include null or the System.FilePath.pathSeparator
 -- character.
 
+-- Current directory and parent directory relative path names
+dotPath, dotdotPath :: FilePath
+dotPath    = "."
+dotdotPath = ".."
+
 -- | DF_WrongFileType implies the filesystem element with the search key
 -- was found but was not of the correct type.
 data DirFindRslt a = DF_NotFound | DF_WrongFileType FileType | DF_Found a
