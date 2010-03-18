@@ -96,6 +96,29 @@ data DirHandle r l = DirHandle
 data AccessRight = Read | Write | Execute
   deriving (Show, Eq, Ord)
 
+-- Isomorphic to System.Posix.IO.OpenMode, but present here to avoid explicit
+-- dependency on the Posix module(s).
+data FileOpenMode = ReadOnly | WriteOnly | ReadWrite
+  deriving (Eq, Show)
+
+-- Similar to System.Posix.IO.OpenFileFlags, but present here to avoid explicit
+-- dependency on the Posix module(s).
+
+data FileOpenFlags = FileOpenFlags
+  { append   :: Bool         -- append on each write
+  , nonBlock :: Bool         -- do not block on open or for data to become avail
+
+{- Always False from HFuse 0.2.2!
+  , explicit :: Bool         -- atomically obtain an exclusive lock
+  , truncate :: Bool         -- truncate size to 0
+-}
+
+-- Not yet supported by halfs
+-- , noctty :: Bool
+
+  , openMode :: FileOpenMode -- isomorphic to System.Posix.IO.OpenMode
+  }
+
 data DirectoryState = Clean | OnlyAdded | OnlyDeleted | VeryDirty
   deriving (Show, Eq)
 

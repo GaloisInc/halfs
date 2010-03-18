@@ -15,7 +15,7 @@ import Data.Word
 import System.Console.GetOpt 
 import System.Directory      (doesFileExist)
 import System.Environment
-import System.IO
+import System.IO hiding      (openFile)
 import System.Posix.Types    ( ByteCount
                              , DeviceID
                              , EpochTime
@@ -278,7 +278,19 @@ halfsOpen :: HalfsCapable b t r l m =>
 halfsOpen (HS log fs _fpdhMap) fp omode flags = do
   log $ "halfsOpen: fp = " ++ show fp ++ ", omode = " ++ show omode ++ 
         ", flags = " ++ show flags
-  return (Left eNOSYS)
+  execOrErrno eINVAL id $ openFile fs fp halfsFlags
+  where
+    -- NB: In HFuse 0.2.2, the explicit and truncate are always false,
+    -- so we do not pass them down to halfs.  Similarly, halfs does not
+    -- support noctty, so it's ignored here as well.
+    halfsFlags = H.FileOpenFlags
+      { H.append   = append flags
+      , H.nonBlock = nonBlock flags
+      , H.openMode = case omode of
+          ReadOnly  -> H.ReadOnly
+          WriteOnly -> H.WriteOnly
+          ReadWrite -> H.ReadWrite
+      }
 
 halfsRead :: HalfsCapable b t r l m =>
              HalfsSpecific b r l m

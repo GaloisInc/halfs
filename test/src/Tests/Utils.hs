@@ -32,6 +32,8 @@ import System.Device.ST
 import Tests.Instances
 import Tests.Types
 
+-- import Debug.Trace
+
 type DevCtor = BDGeom -> IO (Maybe (BlockDevice IO))
 
 --------------------------------------------------------------------------------
@@ -151,6 +153,17 @@ execE nm descrip act =
 
 execH :: (Monad m) => String -> String -> HalfsT m b -> PropertyM m b
 execH nm descrip = execE nm descrip . runHalfs
+
+expectErr :: HalfsCapable b t r l m =>
+             (HalfsError -> Bool) -> String -> HalfsM m a -> PropertyM m () 
+expectErr expectedP rsn act =
+  runH act >>= \e -> case e of
+    Left err | expectedP err -> return ()
+    Left err                 -> unexpectedErr err
+    Right _                  -> fail rsn
+
+unexpectedErr :: (Monad m, Show a) => a -> PropertyM m ()
+unexpectedErr = fail . (++) "Expected failure, but not: " . show
 
 checkFileStat :: (HalfsCapable b t r l m, Integral a) =>
                  FileStat t 

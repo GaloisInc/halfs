@@ -1,18 +1,21 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
 module Halfs.Errors
 where
 
-import Foreign.C.Error
-
-import System.FilePath
+import Control.Monad.Error (MonadError, throwError)
 import Data.Word
+import Foreign.C.Error
+import System.FilePath
 
 import Halfs.Types
 
 data HalfsError =
     HE_AbsolutePathExpected
   | HE_AllocFailed
+  | HE_BadFileHandleForRead
+  | HE_BadFileHandleForWrite
   | HE_DecodeFail_BlockCarrier String
   | HE_DecodeFail_Cont String
   | HE_DecodeFail_Directory String
@@ -35,6 +38,9 @@ data RsnHalfsMountFail =
   | DirtyUnmount
   deriving (Eq, Show)
            
+annErrno :: MonadError HalfsError m => HalfsError -> Errno -> m a
+e `annErrno` errno = throwError (e `HE_ErrnoAnnotated` errno)
+
 -- TODO: template haskell to make this a bit cleaner?
 instance Show Errno where
   show en | en == eOK             = "EOK"

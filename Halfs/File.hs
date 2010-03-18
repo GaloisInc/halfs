@@ -1,7 +1,9 @@
 module Halfs.File
-  ( FileHandle
+  ( FileHandle (fhInode, fhReadable, fhWritable)
   , createFile
-  , fhInode
+  , fofReadOnly
+  , fofWriteOnly
+  , fofReadWrite
   , openFilePrim
   )
  where
@@ -21,7 +23,12 @@ import System.Device.BlockDevice
 --------------------------------------------------------------------------------
 -- Types
 
-newtype FileHandle = FH InodeRef
+data FileHandle = FH
+  { fhReadable :: Bool
+  , fhWritable :: Bool 
+  , _fhFlags :: FileOpenFlags
+  , fhInode  :: InodeRef
+  }
 
 --------------------------------------------------------------------------------
 -- File creation and manipulation functions
@@ -53,8 +60,13 @@ createFile fs parentDH fname usr grp mode = do
       atomicModifyLockedRscRef (hsNumFileNodes fs) (+1)
       return $ fileIR
 
-openFilePrim :: Monad m => InodeRef -> HalfsM m FileHandle
-openFilePrim = return . FH
+openFilePrim :: Monad m => FileOpenFlags -> InodeRef -> HalfsM m FileHandle
+openFilePrim oflags@FileOpenFlags{ openMode = omode } inr =
+  return $ FH (omode /= WriteOnly) (omode /= ReadOnly) oflags inr
 
-fhInode :: FileHandle -> InodeRef
-fhInode (FH ir) = ir
+fofReadOnly :: FileOpenFlags
+fofReadOnly = FileOpenFlags False False ReadOnly
+
+fofWriteOnly, fofReadWrite :: Bool -> FileOpenFlags
+fofWriteOnly app = FileOpenFlags app False WriteOnly
+fofReadWrite app = FileOpenFlags app False ReadWrite

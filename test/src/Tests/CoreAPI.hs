@@ -16,11 +16,11 @@ import qualified Data.ByteString as BS
 import qualified Data.List as L
 import qualified Data.Map as M
 
-
 import Halfs.BlockMap
 import Halfs.Classes
 import Halfs.CoreAPI
 import Halfs.Errors
+import Halfs.File hiding (createFile)
 import Halfs.HalfsState
 import qualified Halfs.Inode as IN
 import Halfs.Monad
@@ -57,7 +57,7 @@ qcProps quick =
   ,
     exec 10 "Directory construction" propM_dirConstructionOK
   ,
-    exec 10 "Simple file creation"   propM_fileCreationOK
+    exec 10 "Simple file creation"   propM_fileBasicsOK
   ,
     exec  5 "File WR 1" $            propM_fileWR "myfile"
   ,
@@ -95,19 +95,16 @@ propM_initAndMountOK _g dev = do
           assert $ freeBlocks sb' == freeBlks
     
       -- Mount the filesystem again and ensure "dirty unmount" failure
-      runH (mount dev defaultUser defaultGroup) >>= \efs -> case efs of
-        Left (HE_MountFailed DirtyUnmount) -> ok
-        Left err                           -> unexpectedErr err
-        Right _                            ->
-          fail "Mount of unclean filesystem succeeded"
-    
+      expectErr (== HE_MountFailed DirtyUnmount)
+                "Mount of unclean FS succeeded"
+                (mount dev defaultUser defaultGroup)
+
       -- Corrupt the superblock and ensure "bad superblock" failure
       run $ bdWriteBlock dev 0 $ BS.replicate (fromIntegral $ bdBlockSize dev) 0
-      runH (mount dev defaultUser defaultGroup) >>= \efs -> case efs of
-        Left (HE_MountFailed BadSuperBlock{}) -> ok
-        Left err                              -> unexpectedErr err
-        Right _                               ->
-          fail "Mount of filesystem with corrupt superblock succeeded"
+      expectErr pr "Mount of FS with corrupt SB succeeded"
+                (mount dev defaultUser defaultGroup)
+        where pr (HE_MountFailed BadSuperBlock{}) = True
+              pr _                                = False
 
 propM_mountUnmountOK :: HalfsProp
 propM_mountUnmountOK _g dev = do
@@ -127,11 +124,10 @@ propM_mountUnmountOK _g dev = do
 
   -- Ensure that double unmount results in an error
   mountOK dev >>= \fs' -> do
-    unmountOK fs'                              -- Unmount #1
-    runH (unmount fs') >>= \efs -> case efs of -- Unmount #2
-      Left HE_UnmountFailed -> ok
-      Left err              -> unexpectedErr err
-      Right _               -> fail "Two successive unmounts succeeded"
+    unmountOK fs'           -- Unmount #1
+    expectErr (== HE_UnmountFailed)
+              "Two successive unmounts succeeded"
+              (unmount fs') -- Unmount #2
 
 -- | Sanity check: unmount is mutex'd sensibly
 
@@ -193,27 +189,42 @@ propM_dirConstructionOK _g dev = do
       assert =<< null `fmap` exec ("readDir") (readDir fs dh)
 
 -- | Ensure that a new filesystem populated with a handful of
--- directories permits creation of a file.
-propM_fileCreationOK :: HalfsProp
-propM_fileCreationOK _g dev = do
+-- directories permits creation/open/close of a file; also checks open
+-- modes.
+propM_fileBasicsOK :: HalfsProp
+propM_fileBasicsOK _g dev = do
   fs <- runH (mkNewFS dev) >> mountOK dev
   
   let fooPath = rootPath </> "foo"
       fp      = fooPath </> "f1"
+      fp2     = fooPath </> "f2"
 
   exec "mkdir /foo"          $ mkdir fs fooPath perms
   exec "create /foo/f1"      $ createFile fs fp defaultFilePerms
-  fh0 <- exec "open /foo/f1" $ openFile fs fp 
+  fh0 <- exec "open /foo/f1" $ openFile fs fp fofReadOnly
   exec "close /foo/f1"       $ closeFile fs fh0
 
-  runH (createFile fs fp defaultFilePerms) >>= \e -> 
-    case e of
-      Left HE_ObjectExists{} -> return ()
-      Left err               -> unexpectedErr err
-      Right _                -> fail "createFile on existing file should fail"
+  expectErr (== HE_ObjectExists fp)
+            "createFile on existing file succeeded"
+            (createFile fs fp defaultFilePerms)
+
+  -- Check open mode read/write permissiveness: can't read write-only,
+  -- can't write read-only.
+  exec "create /foo/f2"             $ createFile fs fp2 defaultFilePerms
+  fh1 <- exec "rdonly open /foo/f1" $ openFile fs fp2 fofReadOnly
+  expectErr (== HE_ErrnoAnnotated HE_BadFileHandleForWrite eBADF)
+            "Write to read-only file succeeded"
+            (write fs fh1 0 $ BS.singleton 0)
+  exec "close /foo/f2" $ closeFile fs fh1
+
+  fh2 <- exec "wronly open /foo/f1" $ openFile fs fp2 (fofWriteOnly False)
+  expectErr (== HE_ErrnoAnnotated HE_BadFileHandleForRead eBADF)
+            "Read from write-only file succeeded"
+            (read fs fh2 0 0)
+
   quickRemountCheck fs
   where
-    exec = execH "propM_fileCreationOK"
+    exec = execH "propM_fileBasicsOK"
 
 -- | Ensure that simple write/readback works for a new file in a new
 -- filesystem
@@ -225,7 +236,7 @@ propM_fileWR pathFromRoot _g dev = do
   mapM_ (exec "making parent dir" . flip (mkdir fs) defaultDirPerms) mkdirs
 
   exec "create file"     $ createFile fs thePath defaultFilePerms
-  fh <- exec "open file" $ openFile fs thePath
+  fh <- exec "open file" $ openFile fs thePath (fofReadWrite False)
 
   forAllM (FileWR `fmap` choose (1, maxBytes)) $ \(FileWR fileSz) -> do
   forAllM (printableBytes fileSz)              $ \fileData        -> do 
@@ -253,7 +264,7 @@ propM_fileWR pathFromRoot _g dev = do
   exec "close file" $ closeFile fs fh
 
   -- Reacquire the FH, read and check
-  fh' <- exec "reopen file" $ openFile fs thePath 
+  fh' <- exec "reopen file" $ openFile fs thePath fofReadOnly
   fileData'' <- exec "bytes <- file 2" $ read fs fh' 0 (fromIntegral fileSz)
   checkFileStat' (t2 <) (t2 >)
   assrt "Reopened file readback OK" $ fileData == fileData''
@@ -322,7 +333,7 @@ propM_hardlinksOK _g dev = do
   exec "mkdir /foo"                 $ mkdir fs d0 defaultDirPerms
   exec "mkdir /foo/bar"             $ mkdir fs d1 defaultDirPerms
   exec "creat /foo/bar/source"      $ createFile fs src defaultFilePerms
-  fh <- exec "open /foo/bar/source" $ openFile fs src
+  fh <- exec "open /foo/bar/source" $ openFile fs src (fofWriteOnly True)
   forAllM (choose (1, maxBytes))    $ \fileSz   -> do
   forAllM (printableBytes fileSz)   $ \srcBytes -> do 
   exec "write /foo/bar/source"      $ write fs fh 0 srcBytes
@@ -343,7 +354,7 @@ propM_hardlinksOK _g dev = do
        
   mapM_ (\dst -> exec "mklink" $ mklink fs src dst) dests
 
-  fhs <- mapM (\nm -> exec "open dst" $ openFile fs nm) dests
+  fhs <- mapM (\nm -> exec "open dst" $ openFile fs nm fofReadOnly) dests
   ds  <- mapM (\dh -> exec "read dst" $ read fs dh 0 (fromIntegral fileSz)) fhs
 
   assert $ all (== srcBytes) ds
@@ -374,14 +385,8 @@ propM_hardlinksOK _g dev = do
 initDirEntNames :: [FilePath]
 initDirEntNames = [dotPath, dotdotPath]
 
-ok :: Monad m => PropertyM m ()
-ok = return () 
- 
 perms :: FileMode
 perms = FileMode [Read,Write,Execute] [Read,Execute] [Read,Execute]
-
-unexpectedErr :: (Monad m, Show a) => a -> PropertyM m ()
-unexpectedErr = fail . (++) "Expected failure, but not: " . show
 
 rootPath :: FilePath
 rootPath = [pathSeparator]

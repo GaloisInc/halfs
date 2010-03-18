@@ -23,7 +23,6 @@ import Halfs.Monad
 import Halfs.Protection
 import Halfs.SuperBlock
 import Halfs.Types
-import Halfs.Utils
 
 import System.Device.BlockDevice
 
@@ -251,9 +250,10 @@ createFile fs fp mode = do
 openFile :: (HalfsCapable b t r l m) =>
             HalfsState b r l m  -- ^ The FS
          -> FilePath            -- ^ The absolute path of the file
+         -> FileOpenFlags       -- ^ open flags / open mode (ronly, wonly, wr)
          -> HalfsM m FileHandle 
-openFile fs fp = do
-  -- TODO: permissions
+openFile fs fp oflags = do
+  -- TODO: check perms
   pdh <- openDir fs ppath
   fh  <- findInDir pdh fname RegularFile >>= \rslt ->
            case rslt of
@@ -264,9 +264,7 @@ openFile fs fp = do
   return fh
   where
     (ppath, fname) = splitFileName fp
-    foundFile      = openFilePrim
-    -- TODO/FIXME: mark this FH resulting from openFilePrim as open in FD
-    -- structures, store r/w'able perm, etc.?
+    foundFile      = openFilePrim oflags
                     
 read :: (HalfsCapable b t r l m) =>
         HalfsState b r l m  -- ^ the filesystem
@@ -275,7 +273,8 @@ read :: (HalfsCapable b t r l m) =>
      -> Word64              -- ^ the number of bytes to read
      -> HalfsM m ByteString -- ^ the data read
 read fs fh byteOff len = do
-  -- TODO: check fh modes & perms (e.g., write only etc)
+  -- TODO: Check perms
+  unless (fhReadable fh) $ HE_BadFileHandleForRead `annErrno` eBADF
   readStream fs (fhInode fh) byteOff (Just len)
 
 write :: (HalfsCapable b t r l m) =>
@@ -284,8 +283,9 @@ write :: (HalfsCapable b t r l m) =>
       -> Word64             -- ^ the byte offset into the file
       -> ByteString         -- ^ the data to write
       -> HalfsM m ()
-write fs fh byteOff bytes = 
-  -- TODO: check fh modes & perms (e.g., read only, not owner, etc)
+write fs fh byteOff bytes = do
+  -- TODO: Check perms
+  unless (fhWritable fh) $ HE_BadFileHandleForWrite `annErrno` eBADF
   writeStream fs (fhInode fh) byteOff False bytes
 
 flush :: (HalfsCapable b t r l m) =>
@@ -386,7 +386,7 @@ mklink fs path1 {-src-} path2 {-dst-} = do
   -}
 
   -- Try to open path1 (the source file)
-  p1h <- openFile fs path1 
+  p1h <- openFile fs path1 fofReadOnly
            `catchError` \e ->
              case e of
                -- [EPERM]: The file named by path1 is a directory
@@ -446,8 +446,6 @@ mklink fs path1 {-src-} path2 {-dst-} = do
         _                -> throwError e
           
   closeDir fs p2pfxdh
-  where
-    e `annErrno` errno = throwError (e `HE_ErrnoAnnotated` errno)
 
 rmlink :: (HalfsCapable b t r l m) =>
           HalfsState b r l m -> FilePath -> HalfsM m ()
@@ -488,7 +486,7 @@ fsstat fs = do
 
 
 --------------------------------------------------------------------------------
--- Utility functions
+-- Utility functions & consts
 
 -- | Find the InodeRef corresponding to the given path.  On error, raises
 -- exceptions HE_PathComponentNotFound, HE_AbsolutePathExpected, or
