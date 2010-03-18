@@ -29,4 +29,5 @@ data HalfsState b r l m = HalfsState {
   , hsInodeLockMap     :: LockedRscRef l r (M.Map InodeRef (l, Word64))
     -- ^ Tracks refcnt'd inode locks. For now, these are single reader/writer
     -- locks.
+  , hsLogger           :: Maybe (String -> m ())
   }

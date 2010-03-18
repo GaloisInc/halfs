@@ -183,7 +183,10 @@ halfsCreateDevice (HS log fs _fpdhMap) fp etype mode _devID = do
   case etype of
     RegularFile -> do
       log $ "halfsCreateDevice: Regular file w/ " ++ show hmode
-      execToErrno eINVAL (const eOK) $ createFile fs fp hmode
+      rslt <- execToErrno eINVAL (const eOK) $ 
+        createFile (withLogger log fs) fp hmode
+      log $ "halfsCreateDevice: rslt = " ++ show rslt
+      return rslt			
     _ -> do
       log $ "halfsCreateDevice: Unsupported EntryType encountered."
       return eINVAL
@@ -480,6 +483,9 @@ execOrErrno defaultEn f act = do
 
 execToErrno :: Monad m => Errno -> (a -> Errno) -> HalfsT m a -> m Errno
 execToErrno defaultEn f = liftM (either id id) . execOrErrno defaultEn f
+
+withLogger :: HalfsCapable b t r l m => Logger m -> HalfsState b r l m -> HalfsState b r l m 
+withLogger log fs = fs {hsLogger = Just log}
 
 --------------------------------------------------------------------------------
 -- Command line stuff

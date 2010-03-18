@@ -23,6 +23,7 @@ import Halfs.Monad
 import Halfs.Protection
 import Halfs.SuperBlock
 import Halfs.Types
+import Halfs.Utils
 
 import System.Device.BlockDevice
 
@@ -129,6 +130,7 @@ mount dev = do
            `ap`   newLockedRscRef 0       -- Locked file node count
            `ap`   newLockedRscRef M.empty -- Locked map: InodeRef -> DirHandle
            `ap`   newLockedRscRef M.empty -- Locked map: InodeRef -> (l, refcnt)
+           `ap`   return Nothing          -- Logger: externally supplied
        else throwError $ HE_MountFailed DirtyUnmount
 
 -- | Unmounts the given filesystem.  After this operation completes, the
@@ -225,7 +227,11 @@ createFile :: (HalfsCapable b t r l m ) =>
            -> HalfsM m ()
 createFile fs fp mode = do
   withDir fs ppath $ \pdh -> do
-  F.createFile fs pdh fname `fmap` getUser `ap` getGroup `ap` return mode
+  logMsg (hsLogger fs) $ "CoreAPI.createFile: entry, ppath = " ++ show ppath
+  usr <- getUser  -- TODO/FIXME
+  grp <- getGroup -- TODO/FIXME
+  logMsg (hsLogger fs) $ "CoreAPI.createFile: usr = " ++ show usr ++ ", grp = " ++ show grp
+  _   <- F.createFile fs pdh fname usr grp mode
   return ()
   where
     (ppath, fname) = splitFileName fp
@@ -262,6 +268,7 @@ openFile fs fp creat = do
   where
     (ppath, fname) = splitFileName fp
     -- 
+    -- TODO: purge file creation and update unittests
     noFile parentDH =
       if creat
        then do
