@@ -178,9 +178,21 @@ halfsCreateDevice :: HalfsCapable b t r l m =>
                   -> FilePath -> EntryType -> FileMode -> DeviceID
                   -> m Errno
 halfsCreateDevice (HS log _fs _fpdhMap) fp etype mode _devID = do
-  log $ "halfsCreateDevice: fp = " ++ show fp ++ ", etype = " ++ show etype 
-     ++ ", mode = " ++ show mode
-  return eNOSYS
+  log $ "halfsCreateDevice: fp = " ++ show fp ++ ", etype = " ++ show etype ++
+        ", mode = " ++ show mode
+  case etype of
+    RegularFile -> do
+      let ownerPerms = mode .&. 0o700
+          groupPerms = mode .&. 0o070
+          otherPerms = mode .&. 0o070
+      log $ "halfsCreateDevice: ownerPerms = " ++ show ownerPerms ++
+            ", groupPerms = " ++ show groupPerms ++ ", otherPerms = " ++
+            show otherPerms
+      return eNOSYS
+    _ -> do
+      log ("halfsCreateDevice: Unsupported EntryType encountered.")
+      return eINVAL
+
 
 halfsCreateDirectory :: HalfsCapable b t r l m =>
                         HalfsSpecific b r l m
