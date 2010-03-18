@@ -186,7 +186,7 @@ propM_dirConstructionOK _g dev = do
     exec = execH "propM_dirConstructionOK"
     --
     test fs p = do
-      exec ("mkdir " ++ p) (mkdir fs perms p)
+      exec ("mkdir " ++ p) (mkdir fs p perms)
       isEmpty fs =<< exec ("openDir " ++ p) (openDir fs p)
     -- 
     isEmpty fs dh = do
@@ -201,19 +201,16 @@ propM_fileCreationOK _g dev = do
   let fooPath = rootPath </> "foo"
       fp      = fooPath </> "f1"
 
-  exec "mkdir /foo"            $ mkdir fs perms fooPath
-  fh0 <- exec "create /foo/f1" $ openFile fs fp True
-  exec "close /foo/f1 (1)"     $ closeFile fs fh0
-  fh1 <- exec "reopen /foo/f1" $ openFile fs fp False
-  exec "close /foo/f1 (2)"     $ closeFile fs fh1
+  exec "mkdir /foo"          $ mkdir fs fooPath perms
+  exec "create /foo/f1"      $ createFile fs fp defaultFilePerms
+  fh0 <- exec "open /foo/f1" $ openFile fs fp 
+  exec "close /foo/f1"       $ closeFile fs fh0
 
-  e <- runH $ openFile fs fp True
-  case e of
-    Left HE_ObjectExists{} -> return ()
-    Left err               -> unexpectedErr err
-    Right _                ->
-      fail "Open w/ creat of existing file should fail"
-
+  runH (createFile fs fp defaultFilePerms) >>= \e -> 
+    case e of
+      Left HE_ObjectExists{} -> return ()
+      Left err               -> unexpectedErr err
+      Right _                -> fail "createFile on existing file should fail"
   quickRemountCheck fs
   where
     exec = execH "propM_fileCreationOK"
@@ -225,9 +222,10 @@ propM_fileWR pathFromRoot _g dev = do
   fs <- runH (mkNewFS dev) >> mountOK dev
 
   assert (isRelative pathFromRoot)
-  mapM_ (exec "making parent directory" . mkdir fs defaultDirPerms) mkdirs
+  mapM_ (exec "making parent dir" . flip (mkdir fs) defaultDirPerms) mkdirs
 
-  fh <- exec "create file" $ openFile fs thePath True
+  exec "create file"     $ createFile fs thePath defaultFilePerms
+  fh <- exec "open file" $ openFile fs thePath
 
   forAllM (FileWR `fmap` choose (1, maxBytes)) $ \(FileWR fileSz) -> do
   forAllM (printableBytes fileSz)              $ \fileData        -> do 
@@ -255,7 +253,7 @@ propM_fileWR pathFromRoot _g dev = do
   exec "close file" $ closeFile fs fh
 
   -- Reacquire the FH, read and check
-  fh' <- exec "reopen file" $ openFile fs thePath False
+  fh' <- exec "reopen file" $ openFile fs thePath 
   fileData'' <- exec "bytes <- file 2" $ read fs fh' 0 (fromIntegral fileSz)
   checkFileStat' (t2 <) (t2 >)
   assrt "Reopened file readback OK" $ fileData == fileData''
@@ -309,7 +307,7 @@ propM_dirMutexOK _g dev = do
     genNm n = map ((++) ("f" ++ show n ++ "_")) `fmap` ng filename
     -- 
     threadTest fs ch nms _n = do
-      runHalfs $ mapM_ (mkdir fs perms . (</>) rootPath) nms
+      runHalfs $ mapM_ (flip (mkdir fs) perms . (</>) rootPath) nms
       writeChan ch ()
 
 propM_hardlinksOK :: HalfsProp
@@ -321,15 +319,14 @@ propM_hardlinksOK _g dev = do
   --       source (1 byte file)
   
   fs <- runH (mkNewFS dev) >> mountOK dev
-  exec "mkdir /foo"                  $ mkdir fs defaultDirPerms d0
-  exec "mkdir /foo/bar"              $ mkdir fs defaultDirPerms d1
-  fh <- exec "creat /foo/bar/source" $ openFile fs src True
-
-  forAllM (choose (1, maxBytes))  $ \fileSz   -> do
-  forAllM (printableBytes fileSz) $ \srcBytes -> do 
-
-  exec "write /foo/bar/source"       $ write fs fh 0 srcBytes
-  exec "close /foo/bar/source"       $ closeFile fs fh
+  exec "mkdir /foo"                 $ mkdir fs d0 defaultDirPerms
+  exec "mkdir /foo/bar"             $ mkdir fs d1 defaultDirPerms
+  exec "creat /foo/bar/source"      $ createFile fs src defaultFilePerms
+  fh <- exec "open /foo/bar/source" $ openFile fs src
+  forAllM (choose (1, maxBytes))    $ \fileSz   -> do
+  forAllM (printableBytes fileSz)   $ \srcBytes -> do 
+  exec "write /foo/bar/source"      $ write fs fh 0 srcBytes
+  exec "close /foo/bar/source"      $ closeFile fs fh
 
   -- Expected error: File named by path1 is a directory
   expectErrno ePERM   =<< runH (mklink fs d1 dst1)
@@ -346,7 +343,7 @@ propM_hardlinksOK _g dev = do
        
   mapM_ (\dst -> exec "mklink" $ mklink fs src dst) dests
 
-  fhs <- mapM (\nm -> exec "open dst" $ openFile fs nm False) dests
+  fhs <- mapM (\nm -> exec "open dst" $ openFile fs nm) dests
   ds  <- mapM (\dh -> exec "read dst" $ read fs dh 0 (fromIntegral fileSz)) fhs
 
   assert $ all (== srcBytes) ds

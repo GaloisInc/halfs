@@ -98,15 +98,16 @@ main = do
   gid <- (HP.GID . fromIntegral) `fmap` getRealGroupID
 
   when (not exists) $ do
-    exec $ newfs dev uid gid $ H.FileMode
-           [H.Read, H.Write, H.Execute]
-           [H.Read,          H.Execute]
-           [                          ]
+    exec $ newfs dev uid gid $
+      H.FileMode
+        [H.Read, H.Write, H.Execute]
+        [H.Read,          H.Execute]
+        [                          ]
     return ()
 
-  fs <- exec $ mount dev
+  fs <- exec $ mount dev uid gid
 
-  withFile "halfs.log" WriteMode $ \h -> do
+  withFile (optLogFile opts) WriteMode $ \h -> do
 
   let log s = hPutStrLn h s >> hFlush h
   dhMap <- newLockedRscRef M.empty
@@ -484,7 +485,8 @@ execOrErrno defaultEn f act = do
 execToErrno :: Monad m => Errno -> (a -> Errno) -> HalfsT m a -> m Errno
 execToErrno defaultEn f = liftM (either id id) . execOrErrno defaultEn f
 
-withLogger :: HalfsCapable b t r l m => Logger m -> HalfsState b r l m -> HalfsState b r l m 
+withLogger :: HalfsCapable b t r l m =>
+              Logger m -> HalfsState b r l m -> HalfsState b r l m 
 withLogger log fs = fs {hsLogger = Just log}
 
 --------------------------------------------------------------------------------
@@ -495,6 +497,7 @@ data Options = Options
   , optMemDev  :: Bool
   , optNumSecs :: Word64
   , optSecSize :: Word64
+  , optLogFile :: FilePath
   }
   deriving (Show)
 
@@ -504,6 +507,7 @@ defOpts = Options
   , optMemDev  = True
   , optNumSecs = 512
   , optSecSize = 512
+  , optLogFile = "halfs.log"
   } 
 
 options :: [OptDescr (Options -> Options)]
@@ -526,6 +530,11 @@ options =
               "SIZE"
       )
       "sector size in bytes (ignored for existing filedevs; default 512)"
+  , Option ['l'] ["logfile"]
+      (ReqArg (\s opts -> opts{ optLogFile = s })
+              "PATH"
+      )
+      "filename for halfs logging (default ./halfs.log)"
   ]
 
 --------------------------------------------------------------------------------

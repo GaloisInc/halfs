@@ -12,15 +12,15 @@ import qualified Tests.Serdes      as SD
 
 qcProps :: [(Args, Property)]
 qcProps =
-   BD.qcProps True -- run in "quick" mode for Block Devices
-   ++
-   BM.qcProps True -- run in "quick" mode for Block Map
-   ++
-   SD.qcProps True -- run in "quick" mode for Serdes
-   ++
-   IN.qcProps True -- run in "quick" mode for Inode
-   ++
-   CA.qcProps True -- run in "quick" mode for CoreAPI
+  BD.qcProps True -- run in "quick" mode for Block Devices
+  ++
+  BM.qcProps True -- run in "quick" mode for Block Map
+  ++
+  SD.qcProps True -- run in "quick" mode for Serdes
+  ++
+  IN.qcProps True -- run in "quick" mode for Inode
+  ++
+  CA.qcProps True -- run in "quick" mode for CoreAPI
 
 main :: IO ()
 main = do

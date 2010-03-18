@@ -179,10 +179,10 @@ fsck = undefined
 --
 mkdir :: (HalfsCapable b t r l m) =>
          HalfsState b r l m
-      -> FileMode
       -> FilePath
+      -> FileMode
       -> HalfsM m ()
-mkdir fs fm fp = do
+mkdir fs fp fm = do
   parentIR <- absPathIR fs path Directory 
   usr <- getUser fs
   grp <- getGroup fs
@@ -220,16 +220,21 @@ syncDir = undefined
 --------------------------------------------------------------------------------
 -- File manipulation
 
--- | Creates a file given an absolute path.  Assumes that the file does
--- not already exist.
+-- | Creates a file given an absolute path. Raises HE_ObjectExists if the file
+-- already exists.
 createFile :: (HalfsCapable b t r l m ) =>
               HalfsState b r l m
            -> FilePath
            -> FileMode
            -> HalfsM m ()
 createFile fs fp mode = do
+  -- TODO: permissions
   withDir fs ppath $ \pdh -> do
-  logMsg (hsLogger fs) $ "CoreAPI.createFile: entry, ppath = " ++ show ppath
+  findInDir pdh fname RegularFile >>= \rslt ->
+    case rslt of
+      DF_Found _          -> throwError $ HE_ObjectExists fp
+      DF_WrongFileType ft -> throwError $ HE_UnexpectedFileType ft fp
+      _                   -> return ()  
   usr <- getUser fs
   grp <- getGroup fs
   logMsg (hsLogger fs) $ "CoreAPI.createFile: usr = " ++ show usr ++ ", grp = " ++ show grp
@@ -238,67 +243,31 @@ createFile fs fp mode = do
   where
     (ppath, fname) = splitFileName fp
            
--- | Opens a file given an absolute path.
---
--- * Yields HalfsPathComponentNotFound if any path component on the way down to
--- the file does not exist.
---
--- * Yields HalfsAbsolutePathExpected if an absolute path is not provided
---
--- * Yields HalfsObjectNotFound if the request file does not exist and create is
--- false
---
--- * Otherwise, provides a FileHandle to the requested file
+-- | Opens a file given an absolute path. Raises HE_FileNotFound if the named
+-- file does not exist.  Raises HE_UnexpectedFileType if the given path is not a
+-- file. Otherwise, provides a FileHandle to the requested file
 
 -- TODO: modes and flags for open: append, r/w, ronly, truncate, etc., and
 -- enforcement of the same
 openFile :: (HalfsCapable b t r l m) =>
-            HalfsState b r l m              -- ^ The FS
-         -> FilePath                        -- ^ The absolute path of the file
-         -> Bool                            -- ^ Should we create the file if it is not
-                                            --   found?
+            HalfsState b r l m  -- ^ The FS
+         -> FilePath            -- ^ The absolute path of the file
          -> HalfsM m FileHandle 
-openFile fs fp creat = do
+openFile fs fp = do
+  -- TODO: permissions
   pdh <- openDir fs ppath
   fh  <- findInDir pdh fname RegularFile >>= \rslt ->
            case rslt of
-             DF_NotFound         -> noFile pdh
+             DF_NotFound         -> throwError $ HE_FileNotFound
              DF_WrongFileType ft -> throwError $ HE_UnexpectedFileType ft fp
              DF_Found fir        -> foundFile fir
   closeDir fs pdh
   return fh
   where
     (ppath, fname) = splitFileName fp
-    -- 
-    -- TODO: purge file creation and update unittests
-    noFile parentDH =
-      if creat
-       then do
-         usr <- getUser fs
-         grp <- getGroup fs
-         fir <- F.createFile
-                  fs
-                  parentDH
-                  fname
-                  usr
-                  grp
-                  (error "invalid default filePerms, this should be dead code")
-         fh <- openFilePrim fir
-         -- TODO/FIXME: mark this FH as open in FD structures &
-         -- r/w'able perms etc.?
-         return fh
-       else do
-          throwError $ HE_FileNotFound
-    --
-    foundFile fir = do
-      if creat
-       then do
-         throwError $ HE_ObjectExists fp
-       else do
-         fh <- openFilePrim fir
-         -- TODO/FIXME: mark this FH as open in FD structures, store
-         -- r/w'able perms etc.?
-         return fh
+    foundFile      = openFilePrim
+    -- TODO/FIXME: mark this FH resulting from openFilePrim as open in FD
+    -- structures, store r/w'able perm, etc.?
                     
 read :: (HalfsCapable b t r l m) =>
         HalfsState b r l m  -- ^ the filesystem
@@ -418,7 +387,7 @@ mklink fs path1 {-src-} path2 {-dst-} = do
   -}
 
   -- Try to open path1 (the source file)
-  p1h <- openFile fs path1 False
+  p1h <- openFile fs path1 
            `catchError` \e ->
              case e of
                -- [EPERM]: The file named by path1 is a directory
@@ -460,15 +429,17 @@ mklink fs path1 {-src-} path2 {-dst-} = do
         HE_ObjectExists{} -> e `annErrno` eEXIST
         _                 -> throwError e
 
-  -- TODO: If the syncDirectory belows fails, we'll need to remove the new
-  -- DirEnt from the map.  This kind of rollback-on-exception will be common,
-  -- and must maintain thread safety properties, so we probably want to think of
-  -- a clean way to handle it.
-
   syncDirectory fs p2pfxdh
     `catchError` \e -> do
       cleanup
       case e of
+        -- TODO: The syncDirectory failed, so we'll need to remove the
+        -- newly-inserted DirEnt from the map.  This kind of
+        -- rollback-on-exception will be common, and must maintain thread safety
+        -- properties, so we probably want to think of a clean way to handle it.
+        -- At minimum, I think, we need to acquire the lock on p2pfxdh and hold
+        -- it over the syncDirectory duration.
+      
         -- [ENOSPC]: The directory in which the entry for the new link is being
         -- placed cannot be extended because there is no space left on the file
         -- system containing the directory.
