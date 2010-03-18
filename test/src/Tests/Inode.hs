@@ -239,8 +239,8 @@ propM_lengthWR _g dev = do
   -- into the next inode to push on boundary conditions & spill arithmetic.
   forAllM (arbitrary :: Gen Bool) $ \b -> do
   blksPerCarrier <- run $ if b
-                          then computeNumInodeAddrsM blkSz
-                          else computeNumContAddrsM  blkSz
+                           then computeNumInodeAddrsM blkSz
+                           else computeNumContAddrsM  blkSz
   let minReadLen = min dataSz (fromIntegral $ blksPerCarrier * blkSz + 1)
 
   forAllM (choose (minReadLen, dataSz))  $ \readLen  -> do

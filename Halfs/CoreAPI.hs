@@ -114,8 +114,11 @@ newfs dev uid gid rdirPerms = do
 -- | Mounts a filesystem from a given block device.  After this operation
 -- completes, the superblock will have its unmountClean flag set to False.
 mount :: (HalfsCapable b t r l m) =>
-         BlockDevice m -> HalfsM m (HalfsState b r l m)
-mount dev = do
+         BlockDevice m
+      -> UserID
+      -> GroupID
+      -> HalfsM m (HalfsState b r l m)
+mount dev usr grp = do
   esb <- decode `fmap` lift (bdReadBlock dev 0)
   case esb of
     Left msg -> throwError $ HE_MountFailed $ BadSuperBlock msg
@@ -123,14 +126,13 @@ mount dev = do
       if unmountClean sb
        then do
          sb' <- lift $ writeSB dev sb{ unmountClean = False }
-         HalfsState dev
+         HalfsState dev usr grp Nothing   -- No logger, supplied on demand
            `fmap` lift (readBlockMap dev) -- blockmap
            `ap`   newRef sb'              -- superblock 
            `ap`   newLock                 -- filesystem lock
            `ap`   newLockedRscRef 0       -- Locked file node count
            `ap`   newLockedRscRef M.empty -- Locked map: InodeRef -> DirHandle
            `ap`   newLockedRscRef M.empty -- Locked map: InodeRef -> (l, refcnt)
-           `ap`   return Nothing          -- Logger: externally supplied
        else throwError $ HE_MountFailed DirtyUnmount
 
 -- | Unmounts the given filesystem.  After this operation completes, the
@@ -182,9 +184,9 @@ mkdir :: (HalfsCapable b t r l m) =>
       -> HalfsM m ()
 mkdir fs fm fp = do
   parentIR <- absPathIR fs path Directory 
-  u <- getUser
-  g <- getGroup
-  makeDirectory fs parentIR dirName u g fm
+  usr <- getUser fs
+  grp <- getGroup fs
+  makeDirectory fs parentIR dirName usr grp fm
   return ()
   where
     (path, dirName) = splitFileName fp
@@ -228,8 +230,8 @@ createFile :: (HalfsCapable b t r l m ) =>
 createFile fs fp mode = do
   withDir fs ppath $ \pdh -> do
   logMsg (hsLogger fs) $ "CoreAPI.createFile: entry, ppath = " ++ show ppath
-  usr <- getUser  -- TODO/FIXME
-  grp <- getGroup -- TODO/FIXME
+  usr <- getUser fs
+  grp <- getGroup fs
   logMsg (hsLogger fs) $ "CoreAPI.createFile: usr = " ++ show usr ++ ", grp = " ++ show grp
   _   <- F.createFile fs pdh fname usr grp mode
   return ()
@@ -272,15 +274,15 @@ openFile fs fp creat = do
     noFile parentDH =
       if creat
        then do
-         usr <- getUser
-         grp <- getGroup
+         usr <- getUser fs
+         grp <- getGroup fs
          fir <- F.createFile
                   fs
                   parentDH
                   fname
                   usr
                   grp
-                  defaultFilePerms -- FIXME
+                  (error "invalid default filePerms, this should be dead code")
          fh <- openFilePrim fir
          -- TODO/FIXME: mark this FH as open in FD structures &
          -- r/w'able perms etc.?
@@ -440,14 +442,17 @@ mklink fs path1 {-src-} path2 {-dst-} = do
                    HE_PathComponentNotFound{} -> e `annErrno` eNOENT
                    _                       -> throwError e
   
-  usr <- getUser
-  grp <- getGroup
+  usr <- getUser fs
+  grp <- getGroup fs
   let srcINR  = fhInode p1h
       cleanup = decLinkCount fs srcINR
 
   incLinkCount fs srcINR
 
-  addDirEnt p2pfxdh p2fname srcINR usr grp defaultFilePerms RegularFile
+  -- TODO: Obtain the proper permissions for the link
+  let defaultLinkPerms = FileMode [Read,Write] [Read] [Read]
+               
+  addDirEnt p2pfxdh p2fname srcINR usr grp defaultLinkPerms RegularFile
     `catchError` \e -> do
       cleanup
       case e of
@@ -562,23 +567,9 @@ writeSB dev sb = do
   bdFlush dev
   return sb
 
--- TODO: Placeholder
-getUser :: Monad m => m UserID
-getUser = return rootUser
+getUser :: HalfsCapable b t r l m => HalfsState b r l m -> HalfsM m UserID
+getUser = return . hsUserID
 
--- TODO: Placeholder
-getGroup :: Monad m => m GroupID
-getGroup = return rootGroup
-
--- TODO: Placeholder, these need to come from the execution environment
-rootDirPerms :: FileMode
-rootDirPerms = FileMode [Read,Write,Execute] [] []
-
--- TODO: Placeholder, these need to come from the execution environment
-defaultDirPerms :: FileMode
-defaultDirPerms = FileMode [Read,Write,Execute] [Read, Execute] [Read, Execute]
-
--- TODO: Placeholder, these need to come from the execution environment
-defaultFilePerms :: FileMode
-defaultFilePerms = FileMode [Read,Write] [Read] [Read]
+getGroup :: HalfsCapable b t r l m => HalfsState b r l m -> HalfsM m GroupID
+getGroup = return . hsGroupID
 

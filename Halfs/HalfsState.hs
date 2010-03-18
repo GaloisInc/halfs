@@ -11,6 +11,7 @@ import Data.Map as M
 import Data.Word
 
 import Halfs.BlockMap            (BlockMap)
+import Halfs.Protection          (UserID, GroupID)
 import Halfs.SuperBlock          (SuperBlock) 
 import Halfs.Types               (DirHandle, InodeRef, LockedRscRef)
 
@@ -18,6 +19,9 @@ import System.Device.BlockDevice (BlockDevice)
 
 data HalfsState b r l m = HalfsState {
     hsBlockDev         :: BlockDevice m
+  , hsUserID           :: UserID
+  , hsGroupID          :: GroupID
+  , hsLogger           :: Maybe (String -> m ())
   , hsBlockMap         :: BlockMap b r l
   , hsSuperBlock       :: r SuperBlock
   , hsLock             :: l
@@ -29,5 +33,4 @@ data HalfsState b r l m = HalfsState {
   , hsInodeLockMap     :: LockedRscRef l r (M.Map InodeRef (l, Word64))
     -- ^ Tracks refcnt'd inode locks. For now, these are single reader/writer
     -- locks.
-  , hsLogger           :: Maybe (String -> m ())
   }

@@ -16,7 +16,7 @@ import qualified Data.ByteString as BS
 import qualified Data.Map as M
 
 import Halfs.Classes
-import Halfs.CoreAPI (mount, newfs, rootDirPerms, unmount)
+import Halfs.CoreAPI (mount, newfs, unmount)
 import Halfs.Directory
 import Halfs.Errors
 import Halfs.HalfsState
@@ -123,7 +123,7 @@ mountOK :: HalfsCapable b t r l m =>
            BlockDevice m
         -> PropertyM m (HalfsState b r l m)
 mountOK dev =
-  runH (mount dev) >>=
+  runH (mount dev defaultUser defaultGroup) >>=
     either (fail . (++) "Unexpected mount failure: " . show) return
 
 unmountOK :: HalfsCapable b t r l m =>
@@ -202,6 +202,17 @@ calcExpBlockCount bs api apc dataSz = fromIntegral $
     dsz = fromIntegral dataSz
     bpi = api * bs
     bpc = apc * bs
+
+defaultUser :: UserID
+defaultUser = rootUser
+
+defaultGroup :: GroupID
+defaultGroup = rootGroup
+
+rootDirPerms, defaultDirPerms, defaultFilePerms :: FileMode
+rootDirPerms     = FileMode [Read,Write,Execute] [] []
+defaultDirPerms  = FileMode [Read,Write,Execute] [Read, Execute] [Read, Execute]
+defaultFilePerms = FileMode [Read,Write] [Read] [Read]
 
 
 --------------------------------------------------------------------------------

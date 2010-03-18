@@ -85,7 +85,7 @@ propM_initAndMountOK _g dev = do
       assert $ IN.nilInodeRef /= rootDir sb
     
       -- Mount the filesystem & ensure integrity with newfs contents
-      runH (mount dev) >>= \efs -> case efs of 
+      runH (mount dev defaultUser defaultGroup) >>= \efs -> case efs of 
         Left  err -> fail $ "Mount failed: " ++ show err
         Right fs  -> do
           sb'      <- sreadRef (hsSuperBlock fs)
@@ -95,7 +95,7 @@ propM_initAndMountOK _g dev = do
           assert $ freeBlocks sb' == freeBlks
     
       -- Mount the filesystem again and ensure "dirty unmount" failure
-      runH (mount dev) >>= \efs -> case efs of
+      runH (mount dev defaultUser defaultGroup) >>= \efs -> case efs of
         Left (HE_MountFailed DirtyUnmount) -> ok
         Left err                           -> unexpectedErr err
         Right _                            ->
@@ -103,7 +103,7 @@ propM_initAndMountOK _g dev = do
     
       -- Corrupt the superblock and ensure "bad superblock" failure
       run $ bdWriteBlock dev 0 $ BS.replicate (fromIntegral $ bdBlockSize dev) 0
-      runH (mount dev) >>= \efs -> case efs of
+      runH (mount dev defaultUser defaultGroup) >>= \efs -> case efs of
         Left (HE_MountFailed BadSuperBlock{}) -> ok
         Left err                              -> unexpectedErr err
         Right _                               ->
@@ -236,8 +236,9 @@ propM_fileWR pathFromRoot _g dev = do
   let expBlks = calcExpBlockCount (bdBlockSize dev) api apc fileSz
 
   let checkFileStat' atp mtp = do
-        (usr, grp) <- (,) `fmap` getUser `ap` getGroup
-        st         <- exec "fstat file" $ fstat fs thePath
+        usr <- exec "get grp"    $ getUser fs
+        grp <- exec "get usr"    $ getGroup fs
+        st  <- exec "fstat file" $ fstat fs thePath
         checkFileStat st fileSz RegularFile defaultFilePerms
                       usr grp expBlks atp mtp
 

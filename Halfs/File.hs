@@ -15,7 +15,6 @@ import Halfs.Inode
 import Halfs.Monad
 import Halfs.Protection
 import Halfs.Types
-import Halfs.Utils
 
 import System.Device.BlockDevice
 
