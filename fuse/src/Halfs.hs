@@ -177,8 +177,9 @@ halfsCreateDevice :: HalfsCapable b t r l m =>
                      HalfsSpecific b r l m
                   -> FilePath -> EntryType -> FileMode -> DeviceID
                   -> m Errno
-halfsCreateDevice (HS _log _fs _fpdhMap) _fp _etype _mode _devID = do
-  error "halfsCreateDevice: Not Yet Implemented." -- TODO
+halfsCreateDevice (HS log _fs _fpdhMap) fp etype mode _devID = do
+  log $ "halfsCreateDevice: fp = " ++ show fp ++ ", etype = " ++ show etype 
+     ++ ", mode = " ++ show mode
   return eNOSYS
 
 halfsCreateDirectory :: HalfsCapable b t r l m =>
