@@ -16,6 +16,7 @@ import Halfs.Classes
 import Halfs.Directory
 import Halfs.Errors
 import Halfs.File
+import qualified Halfs.File as F
 import Halfs.HalfsState
 import Halfs.Inode
 import Halfs.Monad
@@ -24,6 +25,7 @@ import Halfs.SuperBlock
 import Halfs.Types
 
 import System.Device.BlockDevice
+
 
 -- import Debug.Trace
 
@@ -214,6 +216,20 @@ syncDir = undefined
 --------------------------------------------------------------------------------
 -- File manipulation
 
+-- | Creates a file given an absolute path.  Assumes that the file does
+-- not already exist.
+createFile :: (HalfsCapable b t r l m ) =>
+              HalfsState b r l m
+           -> FilePath
+           -> FileMode
+           -> HalfsM m ()
+createFile fs fp mode = do
+  withDir fs ppath $ \pdh -> do
+  F.createFile fs pdh fname `fmap` getUser `ap` getGroup `ap` return mode
+  return ()
+  where
+    (ppath, fname) = splitFileName fp
+           
 -- | Opens a file given an absolute path.
 --
 -- * Yields HalfsPathComponentNotFound if any path component on the way down to
@@ -235,7 +251,7 @@ openFile :: (HalfsCapable b t r l m) =>
                                             --   found?
          -> HalfsM m FileHandle 
 openFile fs fp creat = do
-  pdh <- openDir fs path
+  pdh <- openDir fs ppath
   fh  <- findInDir pdh fname RegularFile >>= \rslt ->
            case rslt of
              DF_NotFound         -> noFile pdh
@@ -244,14 +260,14 @@ openFile fs fp creat = do
   closeDir fs pdh
   return fh
   where
-    (path, fname) = splitFileName fp
+    (ppath, fname) = splitFileName fp
     -- 
     noFile parentDH =
       if creat
        then do
          usr <- getUser
          grp <- getGroup
-         fir <- createFile
+         fir <- F.createFile
                   fs
                   parentDH
                   fname

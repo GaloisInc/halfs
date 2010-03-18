@@ -163,7 +163,7 @@ halfsGetFileStat (HS log fs _fpdhMap) fp = do
       log $ "  (fstat failed w/ " ++ show en ++ ")"
       return $ Left en
     Right stat -> 
-      Right `fmap` fstat2fstat stat
+      Right `fmap` hfstat2fstat stat
 
 halfsReadSymbolicLink :: HalfsCapable b t r l m =>
                          HalfsSpecific b r l m
@@ -177,22 +177,17 @@ halfsCreateDevice :: HalfsCapable b t r l m =>
                      HalfsSpecific b r l m
                   -> FilePath -> EntryType -> FileMode -> DeviceID
                   -> m Errno
-halfsCreateDevice (HS log _fs _fpdhMap) fp etype mode _devID = do
+halfsCreateDevice (HS log fs _fpdhMap) fp etype mode _devID = do
   log $ "halfsCreateDevice: fp = " ++ show fp ++ ", etype = " ++ show etype ++
         ", mode = " ++ show mode
   case etype of
     RegularFile -> do
-      let ownerPerms = mode .&. 0o700
-          groupPerms = mode .&. 0o070
-          otherPerms = mode .&. 0o070
-      log $ "halfsCreateDevice: ownerPerms = " ++ show ownerPerms ++
-            ", groupPerms = " ++ show groupPerms ++ ", otherPerms = " ++
-            show otherPerms
-      return eNOSYS
+      log $ "halfsCreateDevice: Regular file w/ " ++ show hmode
+      execToErrno eINVAL (const eOK) $ createFile fs fp hmode
     _ -> do
-      log ("halfsCreateDevice: Unsupported EntryType encountered.")
+      log $ "halfsCreateDevice: Unsupported EntryType encountered."
       return eINVAL
-
+  where hmode = mode2hmode mode
 
 halfsCreateDirectory :: HalfsCapable b t r l m =>
                         HalfsSpecific b r l m
@@ -364,7 +359,8 @@ halfsReadDirectory (HS log fs fpdhMap) fp = do
       mdh <- lookupRM fp ref
       case mdh of
         Nothing -> throwError HE_DirectoryHandleNotFound
-        Just dh -> readDir fs dh >>= mapM (\(p, s) -> (,) p `fmap` fstat2fstat s)
+        Just dh -> readDir fs dh
+                     >>= mapM (\(p, s) -> (,) p `fmap` hfstat2fstat s)
   log $ "  rslt = " ++ show rslt
   return rslt
 
@@ -418,8 +414,8 @@ halfsDestroy (HS log fs _fpdhMap) = do
 --------------------------------------------------------------------------------
 -- Converters
 
-fstat2fstat :: (Show t, Timed t m) => H.FileStat t -> m FileStat 
-fstat2fstat stat = do
+hfstat2fstat :: (Show t, Timed t m) => H.FileStat t -> m FileStat 
+hfstat2fstat stat = do
   atm <- toCTime $ H.fsAccessTime stat
   mtm <- toCTime $ H.fsModTime stat
   let entryType = case H.fsType stat of
@@ -453,6 +449,14 @@ fstat2fstat stat = do
                                              H.Write   -> 0o2
                                              H.Execute -> 0o1
                   ) 0
+
+-- NB: Something like this should probably be done by HFuse. TODO: Migrate?
+mode2hmode :: FileMode -> H.FileMode
+mode2hmode mode = H.FileMode (perms 6) (perms 3) (perms 0)
+  where
+    msk b   = case b of H.Read -> 4; H.Write -> 2; H.Execute -> 1
+    perms k = chk H.Read ++ chk H.Write ++ chk H.Execute 
+      where chk b = if mode .&. msk b `shiftL` k /= 0 then [b] else []
 
 --------------------------------------------------------------------------------
 -- Misc
