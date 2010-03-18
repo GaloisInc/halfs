@@ -235,10 +235,9 @@ createFile fs fp mode = do
       DF_Found _          -> throwError $ HE_ObjectExists fp
       DF_WrongFileType ft -> throwError $ HE_UnexpectedFileType ft fp
       _                   -> return ()  
-  usr <- getUser fs
-  grp <- getGroup fs
-  logMsg (hsLogger fs) $ "CoreAPI.createFile: usr = " ++ show usr ++ ", grp = " ++ show grp
-  _   <- F.createFile fs pdh fname usr grp mode
+  usr  <- getUser fs
+  grp  <- getGroup fs
+  _inr <- F.createFile fs pdh fname usr grp mode
   return ()
   where
     (ppath, fname) = splitFileName fp

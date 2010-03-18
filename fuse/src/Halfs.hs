@@ -184,12 +184,10 @@ halfsCreateDevice (HS log fs _fpdhMap) fp etype mode _devID = do
   case etype of
     RegularFile -> do
       log $ "halfsCreateDevice: Regular file w/ " ++ show hmode
-      rslt <- execToErrno eINVAL (const eOK) $ 
+      execToErrno eINVAL (const eOK) $ 
         createFile (withLogger log fs) fp hmode
-      log $ "halfsCreateDevice: rslt = " ++ show rslt
-      return rslt			
     _ -> do
-      log $ "halfsCreateDevice: Unsupported EntryType encountered."
+      log $ "halfsCreateDevice: Error: Unsupported EntryType encountered."
       return eINVAL
   where hmode = mode2hmode mode
 
@@ -277,8 +275,9 @@ halfsOpen :: HalfsCapable b t r l m =>
              HalfsSpecific b r l m             
           -> FilePath -> OpenMode -> OpenFileFlags
           -> m (Either Errno FileHandle)
-halfsOpen (HS _log _fs _fpdhMap) _fp _mode _flags = do
-  error $ "halfsOpen: Not Yet Implemented." -- TODO
+halfsOpen (HS log fs _fpdhMap) fp omode flags = do
+  log $ "halfsOpen: fp = " ++ show fp ++ ", omode = " ++ show omode ++ 
+        ", flags = " ++ show flags
   return (Left eNOSYS)
 
 halfsRead :: HalfsCapable b t r l m =>
@@ -547,9 +546,10 @@ instance Show OpenMode where
 
 instance Show OpenFileFlags where
   show (OpenFileFlags append' exclusive' noctty' nonBlock' trunc') =
-    "OpenFileFlags { append    = " ++ show append'    ++    
-    "                exclusive = " ++ show exclusive' ++ 
-    "                noctty    = " ++ show noctty'    ++    
-    "                nonBlock  = " ++ show nonBlock'  ++  
-    "                trunc     = " ++ show trunc'     ++
-    "              }"
+    "OpenFileFlags " ++
+    "{ append = "    ++ show append'    ++
+    ", exclusive = " ++ show exclusive' ++
+    ", noctty = "    ++ show noctty'    ++
+    ", nonBlock = "  ++ show nonBlock'  ++
+    ", trunc = "     ++ show trunc'     ++
+    "}"
