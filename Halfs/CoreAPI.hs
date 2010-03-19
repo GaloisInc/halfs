@@ -265,7 +265,7 @@ openFile fs fp oflags = do
              DF_Found fir        -> foundFile fir
   logMsg (hsLogger fs) $ "CoreAPI.openFile: findInDir on parent complete"
   closeDir fs pdh
-  logMsg (hsLogger fs) $ "CoreAPI.openFile: closeDir complete, returning"
+  logMsg (hsLogger fs) $ "CoreAPI.openFile: closeDir complete, returning fh = " ++ show fh
   return fh
   where
     (ppath, fname) = splitFileName fp

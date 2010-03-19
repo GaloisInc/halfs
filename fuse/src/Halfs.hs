@@ -267,8 +267,8 @@ halfsSetFileTimes :: HalfsCapable b t r l m =>
                      HalfsSpecific b r l m
                   -> FilePath -> EpochTime -> EpochTime
                   -> m Errno
-halfsSetFileTimes (HS _log _fs _fpdhMap) _fp _tm0 _tm1 = do
-  error $ "halfsSetFileTimes: Not Yet Implemented." -- TODO
+halfsSetFileTimes (HS _log _fs _fpdhMap) fp _tm0 _tm1 = do
+  error $ "halfsSetFileTimes: Not Yet Implemented (fp = " ++ show fp ++ ")" -- TODO
   return eNOSYS
          
 halfsOpen :: HalfsCapable b t r l m =>
@@ -332,16 +332,16 @@ halfsFlush :: HalfsCapable b t r l m =>
               HalfsSpecific b r l m
            -> FilePath -> FileHandle
            -> m Errno
-halfsFlush (HS _log _fs _fpdhMap) _fp _fh = do
-  error "halfsFlush: Not Yet Implemented." -- TODO
+halfsFlush (HS _log _fs _fpdhMap) _fp fh = do
+  error $ "halfsFlush: Not Yet Implemented (fh = " ++ show fh ++ ")" -- TODO
   return eNOSYS
          
 halfsRelease :: HalfsCapable b t r l m =>
                 HalfsSpecific b r l m
              -> FilePath -> FileHandle
              -> m ()
-halfsRelease (HS _log _fs _fpdhMap) _fp _fh = do
-  error "halfsRelease: Not Yet Implemented." -- TODO
+halfsRelease (HS _log _fs _fpdhMap) _fp fh = do
+  error $ "halfsRelease: Not Yet Implemented (fh = " ++ show fh ++ ")" -- TODO
   return ()
          
 halfsSynchronizeFile :: HalfsCapable b t r l m =>

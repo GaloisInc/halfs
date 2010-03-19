@@ -446,7 +446,7 @@ withFuseArgs f =
                        finally (f fuseArgs)
                                (fuse_opt_free_args fuseArgs))))
 
-withStructFuse :: Ptr CFuseChan -> Ptr CFuseArgs -> FuseOperations fh -> (Exception -> IO Errno) -> (Ptr CStructFuse -> IO b) -> IO b
+withStructFuse :: Show fh => Ptr CFuseChan -> Ptr CFuseArgs -> FuseOperations fh -> (Exception -> IO Errno) -> (Ptr CStructFuse -> IO b) -> IO b
 withStructFuse pFuseChan pArgs ops handler f =
     allocaBytes (#size struct fuse_operations) $ \ pOps -> do
       bzero pOps (#size struct fuse_operations)
@@ -595,9 +595,11 @@ withStructFuse pFuseChan pArgs ops handler f =
                                                    , trunc = False
                                                    }
                  result <- (fuseOpen ops) filePath how openFileFlags
+                 appendFile "/tmp/fuse.log" $ "returned from fuseOpen, got \n" 
                  case result of
-                    Left (Errno errno) -> return (- errno)
+                    Left (Errno errno) -> appendFile "/tmp/fuse.log" "  errno" >>  return (- errno)
                     Right cval         -> do
+                        appendFile "/tmp/fuse.log" $ "  fh = " ++ show cval 
                         sptr <- newStablePtr cval
                         (#poke struct fuse_file_info, fh) pFuseFileInfo $ castStablePtrToPtr sptr
                         return okErrno
@@ -617,6 +619,8 @@ withStructFuse pFuseChan pArgs ops handler f =
           wrapWrite pFilePath pBuf bufSiz off pFuseFileInfo = handle fuseHandler $
               do filePath <- peekCString pFilePath
                  cVal <- getFH pFuseFileInfo
+                 appendFile "/tmp/hfuse.log" $ "In wrapWrite, cVal = " ++ show cVal
+
                  buf  <- B.packCStringLen (pBuf, fromIntegral bufSiz)
                  eitherBytes <- (fuseWrite ops) filePath cVal buf off
                  case eitherBytes of
@@ -838,7 +842,7 @@ fuseMainReal foreground ops handler pArgs mountPt =
 --   * registers the operations ;
 --
 --   * calls FUSE event loop.
-fuseMain :: FuseOperations fh -> (Exception -> IO Errno) -> IO ()
+fuseMain :: Show fh => FuseOperations fh -> (Exception -> IO Errno) -> IO ()
 fuseMain ops handler =
     -- this used to be implemented using libfuse's fuse_main. Doing this will fork()
     -- from C behind the GHC runtime's back, which deadlocks in GHC 6.8.
