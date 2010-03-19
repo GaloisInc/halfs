@@ -278,7 +278,9 @@ halfsOpen :: HalfsCapable b t r l m =>
 halfsOpen (HS log fs _fpdhMap) fp omode flags = do
   log $ "halfsOpen: fp = " ++ show fp ++ ", omode = " ++ show omode ++ 
         ", flags = " ++ show flags
-  execOrErrno eINVAL id $ openFile fs fp halfsFlags
+  rslt <- execOrErrno eINVAL id $ openFile fs fp halfsFlags
+  log $ "halfsOpen: CoreAPI.openFile completed: rslt = " ++ show rslt
+  return rslt
   where
     -- NB: In HFuse 0.2.2, the explicit and truncate are always false,
     -- so we do not pass them down to halfs.  Similarly, halfs does not

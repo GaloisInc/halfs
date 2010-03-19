@@ -23,6 +23,7 @@ import Halfs.Monad
 import Halfs.Protection
 import Halfs.SuperBlock
 import Halfs.Types
+import Halfs.Utils
 
 import System.Device.BlockDevice
 
@@ -254,13 +255,17 @@ openFile :: (HalfsCapable b t r l m) =>
          -> HalfsM m FileHandle 
 openFile fs fp oflags = do
   -- TODO: check perms
+  logMsg (hsLogger fs) $ "CoreAPI.openFile entry: fp = " ++ show fp ++ ", oflags = " ++ show oflags
   pdh <- openDir fs ppath
+  logMsg (hsLogger fs) $ "CoreAPI.openFile: openDir on parent complete"
   fh  <- findInDir pdh fname RegularFile >>= \rslt ->
            case rslt of
              DF_NotFound         -> throwError $ HE_FileNotFound
              DF_WrongFileType ft -> throwError $ HE_UnexpectedFileType ft fp
              DF_Found fir        -> foundFile fir
+  logMsg (hsLogger fs) $ "CoreAPI.openFile: findInDir on parent complete"
   closeDir fs pdh
+  logMsg (hsLogger fs) $ "CoreAPI.openFile: closeDir complete, returning"
   return fh
   where
     (ppath, fname) = splitFileName fp

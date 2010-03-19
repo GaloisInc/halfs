@@ -103,7 +103,6 @@ data FileOpenMode = ReadOnly | WriteOnly | ReadWrite
 
 -- Similar to System.Posix.IO.OpenFileFlags, but present here to avoid explicit
 -- dependency on the Posix module(s).
-
 data FileOpenFlags = FileOpenFlags
   { append   :: Bool         -- append on each write
   , nonBlock :: Bool         -- do not block on open or for data to become avail
@@ -118,6 +117,7 @@ data FileOpenFlags = FileOpenFlags
 
   , openMode :: FileOpenMode -- isomorphic to System.Posix.IO.OpenMode
   }
+  deriving (Show)
 
 data DirectoryState = Clean | OnlyAdded | OnlyDeleted | VeryDirty
   deriving (Show, Eq)

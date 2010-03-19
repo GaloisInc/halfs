@@ -29,6 +29,7 @@ data FileHandle = FH
   , _fhFlags :: FileOpenFlags
   , fhInode  :: InodeRef
   }
+  deriving Show
 
 --------------------------------------------------------------------------------
 -- File creation and manipulation functions
