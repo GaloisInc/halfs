@@ -595,11 +595,9 @@ withStructFuse pFuseChan pArgs ops handler f =
                                                    , trunc = False
                                                    }
                  result <- (fuseOpen ops) filePath how openFileFlags
-                 appendFile "/tmp/fuse.log" $ "returned from fuseOpen, got \n" 
                  case result of
-                    Left (Errno errno) -> appendFile "/tmp/fuse.log" "  errno" >>  return (- errno)
+                    Left (Errno errno) -> return (- errno)
                     Right cval         -> do
-                        appendFile "/tmp/fuse.log" $ "  fh = " ++ show cval 
                         sptr <- newStablePtr cval
                         (#poke struct fuse_file_info, fh) pFuseFileInfo $ castStablePtrToPtr sptr
                         return okErrno
@@ -619,8 +617,6 @@ withStructFuse pFuseChan pArgs ops handler f =
           wrapWrite pFilePath pBuf bufSiz off pFuseFileInfo = handle fuseHandler $
               do filePath <- peekCString pFilePath
                  cVal <- getFH pFuseFileInfo
-                 appendFile "/tmp/hfuse.log" $ "In wrapWrite, cVal = " ++ show cVal
-
                  buf  <- B.packCStringLen (pBuf, fromIntegral bufSiz)
                  eitherBytes <- (fuseWrite ops) filePath cVal buf off
                  case eitherBytes of
