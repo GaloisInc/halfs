@@ -26,8 +26,8 @@ import System.Device.BlockDevice
 data FileHandle = FH
   { fhReadable :: Bool
   , fhWritable :: Bool 
-  , _fhFlags :: FileOpenFlags
-  , fhInode  :: InodeRef
+  , _fhFlags   :: FileOpenFlags
+  , fhInode    :: InodeRef
   }
   deriving Show
 
@@ -62,7 +62,8 @@ createFile fs parentDH fname usr grp mode = do
       return $ fileIR
 
 openFilePrim :: Monad m => FileOpenFlags -> InodeRef -> HalfsM m FileHandle
-openFilePrim oflags@FileOpenFlags{ openMode = omode } inr =
+openFilePrim oflags@FileOpenFlags{ openMode = omode } inr = 
+  -- TODO: lock for writing / mutex access for deletion
   return $ FH (omode /= WriteOnly) (omode /= ReadOnly) oflags inr
 
 fofReadOnly :: FileOpenFlags

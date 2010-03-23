@@ -343,9 +343,10 @@ halfsRelease :: HalfsCapable b t r l m =>
                 HalfsSpecific b r l m
              -> FilePath -> FileHandle
              -> m ()
-halfsRelease (HS _log _fs _fpdhMap) _fp fh = do
-  error $ "halfsRelease: Not Yet Implemented (fh = " ++ show fh ++ ")" -- TODO
-  return ()
+halfsRelease (HS log fs _fpdhMap) fp fh = do
+  log $ "halfsRelease: Releasing " ++ show fp
+  _ <- execOrErrno eINVAL (const eOK) $ closeFile fs fh
+  return () 
          
 halfsSynchronizeFile :: HalfsCapable b t r l m =>
                         HalfsSpecific b r l m

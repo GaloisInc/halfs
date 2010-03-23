@@ -308,7 +308,8 @@ closeFile :: (HalfsCapable b t r l m) =>
           -> FileHandle         -- ^ the handle to the open file to close
           -> HalfsM m ()
 closeFile _fs _fh = do
-  -- TODO/FIXME: sync, mark fh closed in FD structures
+  -- TODO/FIXME: sync & synchronously mark fh closed so other ops can't
+  -- continue writing (FHs must track open/closed state first).
   return ()
 
 setFileSize :: (HalfsCapable b t r l m) =>
