@@ -306,9 +306,12 @@ halfsWrite :: HalfsCapable b t r l m =>
               HalfsSpecific b r l m
            -> FilePath -> FileHandle -> BS.ByteString -> FileOffset
            -> m (Either Errno ByteCount)
-halfsWrite (HS _log _fs _fpdhMap) _fp _fh _bytes _offset = do
-  error $ "halfsWrite: Not Yet Implemented." -- TODO
-  return (Left eNOSYS)
+halfsWrite (HS log fs _fpdhMap) fp fh bytes offset = do
+  log $ "halfsWrite: Writing " ++ show (BS.length bytes) ++ " bytes to " ++ 
+        show fp ++ " at offset " ++ show offset
+  execOrErrno eINVAL id $ do
+    write fs fh (fromIntegral offset) bytes
+    return (fromIntegral $ BS.length bytes)
 
 halfsGetFileSystemStats :: HalfsCapable b t r l m =>
                            HalfsSpecific b r l m
@@ -332,9 +335,9 @@ halfsFlush :: HalfsCapable b t r l m =>
               HalfsSpecific b r l m
            -> FilePath -> FileHandle
            -> m Errno
-halfsFlush (HS _log _fs _fpdhMap) _fp fh = do
-  error $ "halfsFlush: Not Yet Implemented (fh = " ++ show fh ++ ")" -- TODO
-  return eNOSYS
+halfsFlush (HS log fs _fpdhMap) fp fh = do
+  log $ "halfsFlush: Flushing " ++ show fp
+  execToErrno eINVAL (const eOK) $ flush fs fh
          
 halfsRelease :: HalfsCapable b t r l m =>
                 HalfsSpecific b r l m

@@ -295,7 +295,9 @@ write fs fh byteOff bytes = do
 
 flush :: (HalfsCapable b t r l m) =>
          HalfsState b r l m -> FileHandle -> HalfsM m ()
-flush = undefined
+flush fs _fh = do
+  -- TODO: handle buffer flush if FH denotes buffering is being used
+  lift $ bdFlush $ hsBlockDev fs
 
 syncFile :: (HalfsCapable b t r l m) =>
             HalfsState b r l m -> FilePath -> SyncType ->HalfsM m ()
