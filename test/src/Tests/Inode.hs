@@ -28,7 +28,7 @@ import Tests.Instances           (printableBytes)
 import Tests.Types
 import Tests.Utils
 
--- import Debug.Trace
+import Debug.Trace
 
 
 --------------------------------------------------------------------------------
@@ -37,15 +37,15 @@ import Tests.Utils
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [ -- Inode module invariants
-    exec 10 "Inode module invariants" propM_inodeModuleInvs
-  , -- Inode stream write/read/(over)write/read property
-    exec 10 "Basic WRWR" propM_basicWRWR
-  , -- Inode stream write/read/(truncating)write/read property
-    exec 10 "Truncating WRWR" propM_truncWRWR
-  , -- Inode length-specific stream write/read
-    exec 10 "Length-specific WR" propM_lengthWR
-  , -- Inode single reader/writer lock testing
-    exec 10 "Inode single reader/write mutex" propM_inodeMutexOK
+--     exec 10 "Inode module invariants" propM_inodeModuleInvs
+--   , -- Inode stream write/read/(over)write/read property
+    exec 1 "Basic WRWR" propM_basicWRWR
+--   , -- Inode stream write/read/(truncating)write/read property
+--     exec 10 "Truncating WRWR" propM_truncWRWR
+--   , -- Inode length-specific stream write/read
+--     exec 10 "Length-specific WR" propM_lengthWR
+--   , -- Inode single reader/writer lock testing
+--     exec 10 "Inode single reader/write mutex" propM_inodeMutexOK
   ]
   where
     exec = mkMemDevExec quick "Inode"
@@ -82,8 +82,15 @@ propM_basicWRWR _g dev = do
       chk          = checkInodeMetadata fs rdirIR Directory rootDirPerms
                                         rootUser rootGroup
 
+  trace "here0" $ do
+
+  -- HERE: need to distinguish empty stream from one-block
+  -- allocation...513 is invalid in this case, but valid when there has
+  -- been a previous allocation < one block size previously.
+
   -- Expected error: attempted write past end of (empty) stream
   e0 <- runH $ writeStream fs rdirIR (bdBlockSize dev) False testData
+  trace ("here0 detail: e0 = " ++ show e0) $ do
   case e0 of
     Left (HE_InvalidStreamIndex idx) -> assert (idx == bdBlockSize dev)
     _                                -> assert False
@@ -101,16 +108,20 @@ propM_basicWRWR _g dev = do
   (_, _, api, apc) <- exec "Obtaining sizes" $ getSizes (bdBlockSize dev)
   let expBlks = calcExpBlockCount (bdBlockSize dev) api apc dataSz
 
+  trace "here1" $ do
+      
   -- Check truncation of initial data (root directory cruft) to a single byte 
   t0 <- time
   exec "Stream trunc to 1 byte" $ writeStream fs rdirIR 0 True dummyByte
   checkWriteMD t0 1 2 -- expecting 1 inode block and 1 data block
  
+  trace "here2" $ do
   -- Check truncation to 0 bytes
   t1 <- time
   exec "Stream trunc to 0 bytes" $ writeStream fs rdirIR 0 True BS.empty
   checkWriteMD t1 0 1 -- expecting 1 inode block only (no data blocks)
  
+  trace "here3" $ do
   -- Non-truncating write & read-back of generated data
   t2 <- time
   exec "Non-truncating write" $ writeStream fs rdirIR 0 False testData
@@ -121,16 +132,19 @@ propM_basicWRWR _g dev = do
   assert (BS.length bs1 == BS.length testData)
   assert (bs1 == testData)
 
+  trace "here4" $ do
   -- Recheck truncation to 0 bytes
   t4 <- time
   exec "Stream trunc to 0 bytes" $ writeStream fs rdirIR 0 True BS.empty
   checkWriteMD t4 0 1 -- expecting 1 inode block only (no data blocks)
    
+  trace "here5" $ do
   -- Non-truncating rewrite of generated data
   t5 <- time
   exec "Non-truncating write" $ writeStream fs rdirIR 0 False testData
   checkWriteMD t5 dataSzI expBlks
 
+  trace "here6" $ do
   -- Non-truncating partial overwrite of new data & read-back
   forAllM (choose (1, dataSz `div` 2))     $ \overwriteSz -> do 
   forAllM (choose (0, dataSz `div` 2 - 1)) $ \startByte   -> do

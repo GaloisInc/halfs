@@ -43,7 +43,8 @@ import qualified Data.ByteString  as BS
 import qualified Data.Map         as M
 import qualified Halfs.Protection as HP
 import qualified Halfs.Types      as H
-import Prelude hiding (log, catch)  
+import qualified Prelude
+import Prelude hiding (catch, log, read)
 
 -- Halfs-specific stuff we carry around in our FUSE functions; note that the
 -- FUSE library does this via opaque ptr to user data, but since hFUSE
@@ -259,9 +260,10 @@ halfsSetFileSize :: HalfsCapable b t r l m =>
                     HalfsSpecific b r l m
                  -> FilePath -> FileOffset
                  -> m Errno
-halfsSetFileSize (HS _log _fs _fpdhMap) _fp _offset = do
-  error $ "halfsSetFileSize: Not Yet Implemented." -- TODO
-  return eNOSYS
+halfsSetFileSize (HS log fs _fpdhMap) fp offset = do
+  log $ "halfsSetFileSize: setting " ++ show fp ++ " to size " ++ show offset
+  execToErrno eINVAL (const eOK) $
+    setFileSize fs fp (fromIntegral offset)
          
 halfsSetFileTimes :: HalfsCapable b t r l m =>
                      HalfsSpecific b r l m
@@ -298,9 +300,11 @@ halfsRead :: HalfsCapable b t r l m =>
              HalfsSpecific b r l m
           -> FilePath -> FileHandle -> ByteCount -> FileOffset
           -> m (Either Errno BS.ByteString)
-halfsRead (HS _log _fs _fpdhMap) _fp _fh _byteCnt _offset = do
-  error $ "halfsRead: Not Yet Implemented." -- TODO
-  return (Left eNOSYS)
+halfsRead (HS log fs _fpdhMap) fp fh byteCnt offset = do
+  log $ "halfsRead: Reading " ++ show byteCnt ++ " bytes from " ++
+        show fp ++ " at offset " ++ show offset
+  execOrErrno eINVAL id $ 
+    read fs fh (fromIntegral offset) (fromIntegral byteCnt)
 
 halfsWrite :: HalfsCapable b t r l m =>
               HalfsSpecific b r l m

@@ -12,7 +12,10 @@ module Halfs.Inode
   , nilInodeRef
   , readStream
   , writeStream
-  -- * for internal use only
+  -- * for internal use only!
+  , bsReplicate
+  , fileStat_lckd
+  , withLockedInode
   , writeStream_lckd
   -- * for testing: ought not be used by actual clients of this module!
   , Inode(..)
@@ -377,9 +380,12 @@ readStream fs startIR start mlen =
                  )
                  (BS.empty, fromIntegral $ BS.length header) rest
 
+             dbug ("show mlen = " ++ show mlen) $ do
+             let takeLen = (maybe (inoFileSize startInode - start) id mlen)
+             dbug ("taking " ++ show takeLen ++ " bytes from data length " ++ show (BS.length $ header `BS.append` fullBlocks)) $
+                  return ()
              dbug ("==== readStream end ===") $ return ()
-             return $ bsTake (maybe (inoFileSize startInode - start) id mlen) $
-               header `BS.append` fullBlocks
+             return $ bsTake takeLen $ header `BS.append` fullBlocks
      
      now <- getTime
      lift $ writeInode dev $ startInode { inoAccessTime = now }
@@ -433,6 +439,8 @@ writeStream_lckd dev bm startIR start trunc bytes           = do
   -- as needed to reduce the number of unallocation actions required, but we'll
   -- leave this as a TODO for now.
 
+  dbug ("==== writeStream begin ===") $ do
+
   startInode     <- drefInode dev startIR
   (_, _, _, apc) <- getSizes bs
 
@@ -442,7 +450,6 @@ writeStream_lckd dev bm startIR start trunc bytes           = do
   conts0                        <- expandConts dev (inoCont startInode)
   (sContIdx, sBlkOff, sByteOff) <- getStreamIdx bs start conts0
 
-  dbug ("==== writeStream begin ===") $ do
   dbug ("(sContIdx, sBlkOff, sByteOff) = " ++ show (sContIdx, sBlkOff, sByteOff)) $ do
   dbug ("conts0                        = " ++ show conts0                       ) $ do
   dbug ("blockCount stCont0            = " ++ show (blockCount (conts0 !! safeToInt sContIdx))) $ do
@@ -450,13 +457,17 @@ writeStream_lckd dev bm startIR start trunc bytes           = do
   -- Determine how much space we need to allocate for the data, if any
   let stCont0       = conts0 !! safeToInt sContIdx
       allocdInBlk   = if sBlkOff < blockCount stCont0 then bs else 0
+      availInBlk    = if allocdInBlk > 0 then allocdInBlk - sByteOff else 0
       allocdInStart = if sBlkOff + 1 < blockCount stCont0
                       then bs * (blockCount stCont0 - sBlkOff - 1) else 0
       allocdInConts = sum $ map ((*bs) . blockCount) $
-                      genericDrop (sContIdx + 1) conts0
+                        genericDrop (sContIdx + 1) conts0
       alreadyAllocd = allocdInBlk + allocdInStart + allocdInConts
       -- ^ already allocated bytes _from the start offset_ to end of stream
-      bytesToAlloc  = if alreadyAllocd > len then 0 else len - alreadyAllocd
+      bytesToAlloc  = if alreadyAllocd > len
+                       then if len > availInBlk then len - availInBlk else 0
+                       else len - availInBlk
+                      -- if alreadyAllocd > len then 0 else len - alreadyAllocd
       blksToAlloc   = bytesToAlloc `divCeil` bs
       contsToAlloc  = (blksToAlloc - availBlks (last conts0)) `divCeil` apc
       availBlks c   = numAddrs c - blockCount c
@@ -464,12 +475,17 @@ writeStream_lckd dev bm startIR start trunc bytes           = do
                        then start + len 
                        else max (start + len) (inoFileSize startInode)
 
-  dbug ("trunc         = " ++ show trunc)         $ do
-  dbug ("alreadyAllocd = " ++ show alreadyAllocd) $ do
-  dbug ("bytesToAlloc  = " ++ show bytesToAlloc)  $ do
-  dbug ("blksToAlloc   = " ++ show blksToAlloc)   $ do
-  dbug ("contsToAlloc  = " ++ show contsToAlloc)  $ do
-  dbug ("newFileSz     = " ++ show newFileSz)     $ do
+  dbug ("len                           = " ++ show len)           $ do
+  dbug ("trunc                         = " ++ show trunc)         $ do
+  dbug ("allocdInBlk                   = " ++ show allocdInBlk)   $ do
+  dbug ("availInBlk                    = " ++ show availInBlk)    $ do
+  dbug ("allocdInStart                 = " ++ show allocdInStart) $ do
+  dbug ("allocdInConts                 = " ++ show allocdInConts) $ do
+  dbug ("alreadyAllocd                 = " ++ show alreadyAllocd) $ do
+  dbug ("bytesToAlloc                  = " ++ show bytesToAlloc)  $ do
+  dbug ("blksToAlloc                   = " ++ show blksToAlloc)   $ do
+  dbug ("contsToAlloc                  = " ++ show contsToAlloc)  $ do
+  dbug ("newFileSz                     = " ++ show newFileSz)     $ do
 
   (conts1, allocDirtyConts) <-
     allocFill dev bm availBlks blksToAlloc contsToAlloc conts0
@@ -509,7 +525,7 @@ writeStream_lckd dev bm startIR start trunc bytes           = do
   -- terminator.
   (conts2, unallocDirtyConts, numBlksFreed) <-
     if trunc && bytesToAlloc == 0
-    then truncUnalloc dev bm start len conts1
+    then dbug ("invoking truncUnalloc") $ truncUnalloc dev bm start len conts1
     else return (conts1, [], 0)
   assert (length conts2 > 0 && length conts2 <= length conts1) $ return ()
 
@@ -579,8 +595,14 @@ fileStat :: HalfsCapable b t r l m =>
             HalfsState b r l m
          -> InodeRef
          -> HalfsM m (FileStat t)
-fileStat fs inr = do
-  inode <- withLockedInode fs inr $ drefInode (hsBlockDev fs) inr
+fileStat fs inr = withLockedInode fs inr $ fileStat_lckd (hsBlockDev fs) inr
+
+fileStat_lckd :: HalfsCapable b t r l m =>
+                 BlockDevice m
+              -> InodeRef
+              -> HalfsM m (FileStat t)
+fileStat_lckd dev inr = do
+  inode <- drefInode dev inr
   return $ FileStat
     { fsInode      = inr
     , fsType       = inoFileType    inode
@@ -778,7 +800,7 @@ truncUnalloc dev bm start len conts = do
             }
       ]
 
-  dbug ("truncUnalloc: keepBlkCnt = " ++ show keepBlkCnt)  $ return ()
+  dbug ("truncUnalloc: keepBlkCnt  = " ++ show keepBlkCnt)  $ return ()
   dbug ("truncUnalloc: retain      = " ++ show retain)      $ return ()
   dbug ("truncUnalloc: toFree      = " ++ show toFree)      $ return ()
   dbug ("truncUnalloc: eIdx        = " ++ show eIdx)        $ return ()
@@ -898,12 +920,14 @@ getStreamIdx blkSz start conts  = do
   return sIdx
   where
     -- Sanity check
-    bad (sContIdx, sBlkOff, _) =
+    bad (sContIdx, sBlkOff, sByteOff) =
       sContIdx >= fromIntegral (length conts)
       ||
       let blkCnt = blockCount (conts !! safeToInt sContIdx)
       in
-        sBlkOff >= blkCnt && not (sBlkOff == 0 && blkCnt == 0)
+        sBlkOff >= blkCnt
+        && not (sBlkOff == 0 && blkCnt == 0)
+        && not (sBlkOff == blkCnt && sByteOff == 0)
 
 -- "Safe" (i.e., emits runtime assertions on overflow) versions of
 -- BS.{take,drop,replicate}.  We want the efficiency of these functions without
@@ -944,7 +968,7 @@ magicStr = "This is a halfs Inode structure!"
 
 magicBytes :: [Word8]
 magicBytes = assert (length magicStr == 32) $
-             map (fromIntegral . ord) magicStr
+               map (fromIntegral . ord) magicStr
 
 magic1, magic2, magic3, magic4 :: ByteString
 magic1 = BS.pack $ take 8 $ drop  0 magicBytes
@@ -957,7 +981,7 @@ magicContStr = "!!erutcurts tnoC sflah a si sihT"
 
 magicContBytes :: [Word8]
 magicContBytes = assert (length magicContStr == 32) $
-                 map (fromIntegral . ord) magicContStr
+                   map (fromIntegral . ord) magicContStr
 
 cmagic1, cmagic2, cmagic3, cmagic4 :: ByteString
 cmagic1 = BS.pack $ take 8 $ drop  0 magicContBytes

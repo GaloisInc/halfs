@@ -27,7 +27,6 @@ import Halfs.Utils
 
 import System.Device.BlockDevice
 
-
 -- import Debug.Trace
 
 data SyncType = Data | Everything
@@ -314,7 +313,19 @@ closeFile _fs _fh = do
 
 setFileSize :: (HalfsCapable b t r l m) =>
                HalfsState b r l m -> FilePath -> Word64 -> HalfsM m ()
-setFileSize = undefined
+setFileSize fs fp len = 
+  withFile fs fp (fofWriteOnly True) $ \fh -> do 
+    let inr = fhInode fh
+        wr  = writeStream_lckd (hsBlockDev fs) (hsBlockMap fs) inr
+    withLockedInode fs inr $ do
+      sz <- fsSize `fmap` fileStat_lckd (hsBlockDev fs) inr
+      if sz > len
+        then do
+          wr len True BS.empty                    -- truncate at len
+        else do
+          let toWrite = bsReplicate (len - sz) 0
+          wr sz False toWrite -- pad up to len
+          -- TODO: check if trunc is True: currently crashes
 
 setFileTimes :: (HalfsCapable b t r l m) =>
                 HalfsState b r l m -> FilePath -> t -> t -> HalfsM m ()
@@ -526,6 +537,15 @@ withDir fs fp f = do
   rslt <- f dh `catchError` \e -> closeDir fs dh >> throwError e
   closeDir fs dh
   return rslt
+
+withFile :: (HalfsCapable b t r l m) =>
+            HalfsState b r l m
+         -> FilePath
+         -> FileOpenFlags
+         -> (FileHandle -> HalfsM m a)
+         -> HalfsM m a
+withFile fs fp oflags = 
+  hbracket (openFile fs fp oflags) (\fh -> {- TODO: sync? -} closeFile fs fh)
 
 fsElemExists :: HalfsCapable b t r l m =>
                 HalfsState b r l m
