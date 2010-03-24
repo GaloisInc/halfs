@@ -108,7 +108,7 @@ main = do
 
   fs <- exec $ mount dev uid gid
 
-  withFile (optLogFile opts) WriteMode $ \h -> do
+  System.IO.withFile (optLogFile opts) WriteMode $ \h -> do
 
   let log s = hPutStrLn h s >> hFlush h
   dhMap <- newLockedRscRef M.empty

@@ -33,7 +33,7 @@ import Tests.Instances (printableBytes, filename)
 import Tests.Types
 import Tests.Utils
 
-import Debug.Trace
+-- import Debug.Trace
 
 
 --------------------------------------------------------------------------------
@@ -48,27 +48,25 @@ type HalfsProp =
 
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
-  [
-
-    exec 10 "Init and mount"         propM_initAndMountOK
+  [ exec 10  "Init and mount"         propM_initAndMountOK
   ,
-    exec 10 "Mount/unmount"          propM_mountUnmountOK
+    exec 10  "Mount/unmount"          propM_mountUnmountOK
   ,
-    exec 10 "Unmount mutex"          propM_unmountMutexOK
+    exec 10  "Unmount mutex"          propM_unmountMutexOK
   ,
-    exec 10 "Directory construction" propM_dirConstructionOK
+    exec 10  "Directory construction" propM_dirConstructionOK
   ,
-    exec 10 "Simple file creation"   propM_fileBasicsOK
+    exec 10  "Simple file creation"   propM_fileBasicsOK
   ,
-    exec 100 "Simple file ops"     propM_simpleFileOpsOK
+    exec 100 "Simple file ops"        propM_simpleFileOpsOK
   ,
-    exec  5 "File WR 1" $            propM_fileWROK "myfile"
+    exec 5   "File WR 1"              (propM_fileWROK "myfile")
   ,
-    exec  5 "File WR 2" $            propM_fileWROK "foo/bar/baz"
+    exec 5   "File WR 2"              (propM_fileWROK "foo/bar/baz")
   ,
-    exec 50 "Directory mutex"        propM_dirMutexOK
+    exec 50  "Directory mutex"        propM_dirMutexOK
   ,
-    exec 10 "Hardlink creation"      propM_hardlinksOK
+    exec 10  "Hardlink creation"      propM_hardlinksOK
   ]
   where
     exec = mkMemDevExec quick "CoreAPI"

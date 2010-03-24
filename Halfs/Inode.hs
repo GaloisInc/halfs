@@ -339,12 +339,13 @@ readStream fs startIR start mlen =
   withLockedInode fs startIR $ do  
   -- ====================== Begin inode critical section ======================
   startInode <- drefInode dev startIR
+  let fileSz  = inoFileSize startInode
   if 0 == blockCount (inoCont startInode)
    then return BS.empty
    else do 
      dbug ("==== readStream begin ===") $ do
      conts                         <- expandConts dev (inoCont startInode)
-     (sContIdx, sBlkOff, sByteOff) <- getStreamIdx bs start conts
+     (sContIdx, sBlkOff, sByteOff) <- getStreamIdx bs fileSz start
      dbug ("start = " ++ show start) $ do
      dbug ("(sContIdx, sBlkOff, sByteOff) = " ++ show (sContIdx, sBlkOff, sByteOff)) $ do
 
@@ -379,16 +380,12 @@ readStream fs startIR start mlen =
                            )
                  )
                  (BS.empty, fromIntegral $ BS.length header) rest
-
-             dbug ("show mlen = " ++ show mlen) $ do
-             let takeLen = (maybe (inoFileSize startInode - start) id mlen)
-             dbug ("taking " ++ show takeLen ++ " bytes from data length " ++ show (BS.length $ header `BS.append` fullBlocks)) $
-                  return ()
-             dbug ("==== readStream end ===") $ return ()
-             return $ bsTake takeLen $ header `BS.append` fullBlocks
+             return $ bsTake (maybe (fileSz - start) id mlen) $
+               header `BS.append` fullBlocks
      
      now <- getTime
      lift $ writeInode dev $ startInode { inoAccessTime = now }
+     dbug ("==== readStream end ===") $ return ()
      return rslt                                         
   -- ======================= End inode critical section =======================
   where
@@ -442,18 +439,29 @@ writeStream_lckd dev bm startIR start trunc bytes           = do
   dbug ("==== writeStream begin ===") $ do
 
   startInode     <- drefInode dev startIR
+  let fileSz      = inoFileSize startInode
   (_, _, _, apc) <- getSizes bs
 
   -- NB: expandConts is probably not viable once cont chains get large, but the
   -- continuation scheme in general may not be viable.  Revisit after stuff is
   -- working.
   conts0                        <- expandConts dev (inoCont startInode)
-  (sContIdx, sBlkOff, sByteOff) <- getStreamIdx bs start conts0
+  (sContIdx, sBlkOff, sByteOff) <- getStreamIdx bs fileSz start
 
   dbug ("(sContIdx, sBlkOff, sByteOff) = " ++ show (sContIdx, sBlkOff, sByteOff)) $ do
   dbug ("conts0                        = " ++ show conts0                       ) $ do
   dbug ("blockCount stCont0            = " ++ show (blockCount (conts0 !! safeToInt sContIdx))) $ do
 
+  let newFileSz    = if trunc then start + len else max (start + len) fileSz
+      fileSzRndBlk = (fileSz `divCeil` bs) * bs
+      bytesToAlloc = if newFileSz > fileSzRndBlk
+                      then newFileSz - fileSzRndBlk
+                      else 0 
+      blksToAlloc  = bytesToAlloc `divCeil` bs
+      contsToAlloc = (blksToAlloc - availBlks (last conts0)) `divCeil` apc
+      availBlks c  = numAddrs c - blockCount c
+
+{-
   -- Determine how much space we need to allocate for the data, if any
   let stCont0       = conts0 !! safeToInt sContIdx
       allocdInBlk   = if sBlkOff < blockCount stCont0 then bs else 0
@@ -475,17 +483,21 @@ writeStream_lckd dev bm startIR start trunc bytes           = do
                        then start + len 
                        else max (start + len) (inoFileSize startInode)
 
+-}
   dbug ("len                           = " ++ show len)           $ do
   dbug ("trunc                         = " ++ show trunc)         $ do
-  dbug ("allocdInBlk                   = " ++ show allocdInBlk)   $ do
-  dbug ("availInBlk                    = " ++ show availInBlk)    $ do
-  dbug ("allocdInStart                 = " ++ show allocdInStart) $ do
-  dbug ("allocdInConts                 = " ++ show allocdInConts) $ do
-  dbug ("alreadyAllocd                 = " ++ show alreadyAllocd) $ do
+  dbug ("fileSz                        = " ++ show fileSz)        $ do
+  dbug ("newFileSz                     = " ++ show newFileSz)     $ do
+  dbug ("fileSzRndBlk                  = " ++ show fileSzRndBlk)  $ do
   dbug ("bytesToAlloc                  = " ++ show bytesToAlloc)  $ do
   dbug ("blksToAlloc                   = " ++ show blksToAlloc)   $ do
   dbug ("contsToAlloc                  = " ++ show contsToAlloc)  $ do
-  dbug ("newFileSz                     = " ++ show newFileSz)     $ do
+
+--  dbug ("allocdInBlk                   = " ++ show allocdInBlk)   $ do
+--  dbug ("availInBlk                    = " ++ show availInBlk)    $ do
+--  dbug ("allocdInStart                 = " ++ show allocdInStart) $ do
+--  dbug ("allocdInConts                 = " ++ show allocdInConts) $ do
+--  dbug ("alreadyAllocd                 = " ++ show alreadyAllocd) $ do
 
   (conts1, allocDirtyConts) <-
     allocFill dev bm availBlks blksToAlloc contsToAlloc conts0
@@ -911,10 +923,13 @@ decompStreamOffset blkSz streamOff = do
 
 getStreamIdx :: HalfsCapable b t r l m =>
                 Word64 -- block size in bytse
+             -> Word64 -- file size in bytes
              -> Word64 -- start byte index
-             -> [Cont] -- data stream
              -> HalfsM m StreamIdx
-getStreamIdx blkSz start conts  = do
+getStreamIdx blkSz fileSz start = do
+  when (start > fileSz) $ throwError $ HE_InvalidStreamIndex start
+  decompStreamOffset blkSz start
+{-
   sIdx <- decompStreamOffset blkSz start
   when (bad sIdx) $ throwError $ HE_InvalidStreamIndex start
   return sIdx
@@ -928,6 +943,7 @@ getStreamIdx blkSz start conts  = do
         sBlkOff >= blkCnt
         && not (sBlkOff == 0 && blkCnt == 0)
         && not (sBlkOff == blkCnt && sByteOff == 0)
+-}
 
 -- "Safe" (i.e., emits runtime assertions on overflow) versions of
 -- BS.{take,drop,replicate}.  We want the efficiency of these functions without
