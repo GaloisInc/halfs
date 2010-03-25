@@ -58,7 +58,7 @@ qcProps quick =
   ,
     exec 10  "Simple file creation"   propM_fileBasicsOK
   ,
-    exec 100 "Simple file ops"        propM_simpleFileOpsOK
+    exec 50  "Simple file ops"        propM_simpleFileOpsOK
   ,
     exec 5   "File WR 1"              (propM_fileWROK "myfile")
   ,
@@ -286,51 +286,34 @@ propM_fileWROK pathFromRoot _g dev = do
 propM_simpleFileOpsOK :: HalfsProp
 propM_simpleFileOpsOK _g dev = do
   fs <- runH (mkNewFS dev) >> mountOK dev
---  let fileSz = 30159
---      resizedSz = 36961 
---   let fileSz    = 1000
---       resizedSz = 1000 + 6802
---   let fileSz    = 512
---       resizedSz = 513
   forAllM (choose (1, maxBytes))        $ \fileSz    -> do
   forAllM (choose (0::Int, 2 * fileSz)) $ \resizedSz -> do 
   forAllM (printableBytes fileSz)       $ \fileData  -> do
                                  
---   trace ("propM_simpleFileOpsOK entry length fileData = " ++ show (BS.length fileData)) $ do
-
   let fp = rootPath </> "foo"
   exec "create /foo"      $ createFile fs fp defaultFilePerms
   fh0 <- exec "open /foo" $ openFile fs fp (fofWriteOnly True)
---   trace ("writing fileData") $ do
   exec "bytes -> file"    $ write fs fh0 0 fileData
---   trace ("wrote fileData") $ do
   exec "close /foo"       $ closeFile fs fh0
---   trace ("calling setFileSize") $ do
   exec "resize /foo"      $ setFileSize fs fp (fromIntegral resizedSz)
---   trace ("returned from setFileSize") $ do
 
   -- Check fstat
   newSz <- exec "fstat /foo"  $ fsSize `fmap` fstat fs fp
   assert (newSz == fromIntegral resizedSz)
---   trace ("newSz = " ++ show newSz) $ do
  
   -- Check contents
   fh1       <- exec "reopen /foo" $ openFile fs fp fofReadOnly
   fileData' <- exec "read /foo" $ read fs fh1 0 newSz
---   trace "here0" $ do
   assert (newSz == fromIntegral (BS.length fileData'))
---   trace "here1" $ do
   if resizedSz < fileSz
    then assert (fileData' == BS.take resizedSz fileData)
    else
---      trace ("length fileData = " ++ show (BS.length fileData) ++ ", length fileData' = " ++ show (BS.length fileData')) $ do
      assert (fileData' == fileData
                          `BS.append`
                          BS.replicate (resizedSz - fileSz) 0
             )
   exec "close /foo" $ closeFile fs fh1
 
---   trace "here2" $ do
   quickRemountCheck fs
   where
     maxBytes = fromIntegral $ bdBlockSize dev * bdNumBlocks dev `div` 8

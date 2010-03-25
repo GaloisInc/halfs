@@ -28,7 +28,7 @@ import Tests.Instances           (printableBytes)
 import Tests.Types
 import Tests.Utils
 
-import Debug.Trace
+-- import Debug.Trace
 
 
 --------------------------------------------------------------------------------
@@ -266,7 +266,7 @@ propM_inodeMutexOK _g dev = do
   -- 2) Create n unique bytestrings that each cover the entire randomly-sized
   --    write region.  Call this set of bytestrings 'bstrings'.
   --
-  -- 3) Spawn n test threads, a unique bytestring for each to write.
+  -- 3) Spawn n test threads, and create a unique bytestring for each to write.
   --    Each thread:
   -- 
   --      * Blindly writes its bytestring 'bs' to the stream

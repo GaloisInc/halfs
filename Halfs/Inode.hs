@@ -461,43 +461,14 @@ writeStream_lckd dev bm startIR start trunc bytes           = do
       contsToAlloc = (blksToAlloc - availBlks (last conts0)) `divCeil` apc
       availBlks c  = numAddrs c - blockCount c
 
-{-
-  -- Determine how much space we need to allocate for the data, if any
-  let stCont0       = conts0 !! safeToInt sContIdx
-      allocdInBlk   = if sBlkOff < blockCount stCont0 then bs else 0
-      availInBlk    = if allocdInBlk > 0 then allocdInBlk - sByteOff else 0
-      allocdInStart = if sBlkOff + 1 < blockCount stCont0
-                      then bs * (blockCount stCont0 - sBlkOff - 1) else 0
-      allocdInConts = sum $ map ((*bs) . blockCount) $
-                        genericDrop (sContIdx + 1) conts0
-      alreadyAllocd = allocdInBlk + allocdInStart + allocdInConts
-      -- ^ already allocated bytes _from the start offset_ to end of stream
-      bytesToAlloc  = if alreadyAllocd > len
-                       then if len > availInBlk then len - availInBlk else 0
-                       else len - availInBlk
-                      -- if alreadyAllocd > len then 0 else len - alreadyAllocd
-      blksToAlloc   = bytesToAlloc `divCeil` bs
-      contsToAlloc  = (blksToAlloc - availBlks (last conts0)) `divCeil` apc
-      availBlks c   = numAddrs c - blockCount c
-      newFileSz     = if trunc 
-                       then start + len 
-                       else max (start + len) (inoFileSize startInode)
-
--}
-  dbug ("len                           = " ++ show len)           $ do
-  dbug ("trunc                         = " ++ show trunc)         $ do
-  dbug ("fileSz                        = " ++ show fileSz)        $ do
-  dbug ("newFileSz                     = " ++ show newFileSz)     $ do
-  dbug ("fileSzRndBlk                  = " ++ show fileSzRndBlk)  $ do
-  dbug ("bytesToAlloc                  = " ++ show bytesToAlloc)  $ do
-  dbug ("blksToAlloc                   = " ++ show blksToAlloc)   $ do
-  dbug ("contsToAlloc                  = " ++ show contsToAlloc)  $ do
-
---  dbug ("allocdInBlk                   = " ++ show allocdInBlk)   $ do
---  dbug ("availInBlk                    = " ++ show availInBlk)    $ do
---  dbug ("allocdInStart                 = " ++ show allocdInStart) $ do
---  dbug ("allocdInConts                 = " ++ show allocdInConts) $ do
---  dbug ("alreadyAllocd                 = " ++ show alreadyAllocd) $ do
+  dbug ("len          = " ++ show len)           $ do
+  dbug ("trunc        = " ++ show trunc)         $ do
+  dbug ("fileSz       = " ++ show fileSz)        $ do
+  dbug ("newFileSz    = " ++ show newFileSz)     $ do
+  dbug ("fileSzRndBlk = " ++ show fileSzRndBlk)  $ do
+  dbug ("bytesToAlloc = " ++ show bytesToAlloc)  $ do
+  dbug ("blksToAlloc  = " ++ show blksToAlloc)   $ do
+  dbug ("contsToAlloc = " ++ show contsToAlloc)  $ do
 
   (conts1, allocDirtyConts) <-
     allocFill dev bm availBlks blksToAlloc contsToAlloc conts0
@@ -552,7 +523,10 @@ writeStream_lckd dev bm startIR start trunc bytes           = do
   forM_ dirtyConts $ \c -> when (not $ isEmbedded c) $ lift $ writeCont dev c
 
   -- Metadata stuff
-  dbug ("writeStream: inoAllocBlocks dirtyInode = " ++ show (inoAllocBlocks dirtyInode) ++ ", blksToAlloc = " ++ show blksToAlloc ++ ", contsToAlloc = " ++ show contsToAlloc ++ ", numBlksFreed = " ++ show numBlksFreed) $ do
+  dbug ("writeStream: inoAllocBlocks dirtyInode = " ++
+    show (inoAllocBlocks dirtyInode) ++ ", blksToAlloc = " ++
+    show blksToAlloc ++ ", contsToAlloc = " ++ show contsToAlloc ++
+    ", numBlksFreed = " ++ show numBlksFreed) $ do
 
   assert (blksToAlloc + contsToAlloc == 0 || numBlksFreed == 0) $ return ()
   let newBlockCount = inoAllocBlocks dirtyInode
@@ -929,21 +903,6 @@ getStreamIdx :: HalfsCapable b t r l m =>
 getStreamIdx blkSz fileSz start = do
   when (start > fileSz) $ throwError $ HE_InvalidStreamIndex start
   decompStreamOffset blkSz start
-{-
-  sIdx <- decompStreamOffset blkSz start
-  when (bad sIdx) $ throwError $ HE_InvalidStreamIndex start
-  return sIdx
-  where
-    -- Sanity check
-    bad (sContIdx, sBlkOff, sByteOff) =
-      sContIdx >= fromIntegral (length conts)
-      ||
-      let blkCnt = blockCount (conts !! safeToInt sContIdx)
-      in
-        sBlkOff >= blkCnt
-        && not (sBlkOff == 0 && blkCnt == 0)
-        && not (sBlkOff == blkCnt && sByteOff == 0)
--}
 
 -- "Safe" (i.e., emits runtime assertions on overflow) versions of
 -- BS.{take,drop,replicate}.  We want the efficiency of these functions without
@@ -1160,4 +1119,3 @@ instance Serialize Cont where
     checkMagic x = do
       magic <- getBytes 8
       unless (magic == x) $ fail "Invalid Cont: magic number mismatch"
-
