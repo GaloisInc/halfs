@@ -27,7 +27,7 @@ import Data.Serialize.Get
 import Data.Serialize.Put
 import Data.STRef
 import Data.Time.Clock
-import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.Time.LocalTime   () -- for Show UTCTime instance
 import Data.Word             
 
@@ -57,8 +57,9 @@ instance HalfsCapable (STUArray s Word64 Bool) Word64  (STRef s) ()     (ST s)
 -- from. One obvious implementation is using the system clock. Another might be
 -- a step counter.
 class (Monad m, Eq t, Ord t) => Timed t m | m -> t where
-  getTime :: m t
-  toCTime :: t -> m CTime
+  getTime   :: m t
+  toCTime   :: t -> m CTime
+  fromCTime :: CTime -> m t
 
 -- |This is a monad transformer for the Timed monad, which will work for 2^64
 -- steps of an arbitrary underlying monad.
@@ -100,18 +101,21 @@ instance Timed UTCTime IO where
     -- have to make assumptions about the underlying rep (e.g., it's not a real,
     -- etc.).  As a keep-it-simple concession, we'll err on the side of caution
     -- and assume that we have a 32 bit signed int representation, and clamp
-    -- values based on that.  This should be okay unilt until early 2038 :).
+    -- values based on that.  This should be okay until early 2038 :).
     let ub = fromIntegral (maxBound :: Int32)
         i :: Integer = round $ utcTimeToPOSIXSeconds t
     in return ((fromIntegral $ if i >= ub then ub else i) :: CTime)
+  fromCTime = return . posixSecondsToUTCTime . realToFrac
 
 instance Timed Word64 (ST s) where
-  getTime = undefined
-  toCTime = undefined
+  getTime   = undefined
+  toCTime   = undefined
+  fromCTime = undefined
 
 instance Monad m => Timed Word64 (TimedT m) where
-  getTime = ttGetTime
-  toCTime = undefined
+  getTime   = ttGetTime
+  toCTime   = undefined
+  fromCTime = undefined
 
 -- ---------------------------------------------------------------------------
 

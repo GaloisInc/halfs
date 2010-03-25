@@ -13,6 +13,7 @@ module Halfs.Inode
   , readStream
   , writeStream
   -- * for internal use only!
+  , atomicModifyInode
   , bsReplicate
   , fileStat_lckd
   , withLockedInode
@@ -602,7 +603,7 @@ fileStat_lckd dev inr = do
     , fsSize       = inoFileSize    inode
     , fsNumBlocks  = inoAllocBlocks inode
     , fsAccessTime = inoAccessTime  inode
-    , fsModTime    = inoModifyTime  inode
+    , fsModifyTime = inoModifyTime  inode
     , fsChangeTime = inoChangeTime  inode
     }
 

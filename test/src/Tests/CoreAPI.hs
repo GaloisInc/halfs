@@ -297,11 +297,12 @@ propM_simpleFileOpsOK _g dev = do
   exec "close /foo"       $ closeFile fs fh0
   exec "resize /foo"      $ setFileSize fs fp (fromIntegral resizedSz)
 
-  -- Check fstat
-  newSz <- exec "fstat /foo"  $ fsSize `fmap` fstat fs fp
+  -- Check that fstat is coherent
+  st <- exec "fstat /foo" $ fstat fs fp
+  let newSz = fsSize st
   assert (newSz == fromIntegral resizedSz)
  
-  -- Check contents
+  -- Check that file contents have truncated/grown as expected
   fh1       <- exec "reopen /foo" $ openFile fs fp fofReadOnly
   fileData' <- exec "read /foo" $ read fs fh1 0 newSz
   assert (newSz == fromIntegral (BS.length fileData'))
@@ -313,6 +314,14 @@ propM_simpleFileOpsOK _g dev = do
                          BS.replicate (resizedSz - fileSz) 0
             )
   exec "close /foo" $ closeFile fs fh1
+
+  -- Check setFileTimes
+  now <- exec "get time" getTime
+  exec "setFileTimes" $ setFileTimes fs fp now now
+  st' <- exec "fstat /foo" $ fstat fs fp
+  assert (fsAccessTime st' == now)
+  assert (fsModifyTime st' == now)
+  assert (fsChangeTime st' > now)
 
   quickRemountCheck fs
   where

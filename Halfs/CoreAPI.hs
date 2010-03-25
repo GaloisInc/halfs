@@ -324,8 +324,19 @@ setFileSize fs fp len =
         else wr sz False $ bsReplicate (len - sz) 0 -- pad up to len
 
 setFileTimes :: (HalfsCapable b t r l m) =>
-                HalfsState b r l m -> FilePath -> t -> t -> HalfsM m ()
-setFileTimes = undefined
+                HalfsState b r l m -- ^ the filesystem
+             -> FilePath            
+             -> t                  -- ^ access time
+             -> t                  -- ^ modification time  
+             -> HalfsM m ()
+setFileTimes fs fp accTm modTm = do
+  withFile fs fp (fofReadWrite True) $ \fh -> do
+    now <- getTime
+    atomicModifyInode fs (fhInode fh) $ \nd ->
+      nd { inoModifyTime = modTm
+         , inoAccessTime = accTm
+         , inoChangeTime = now
+         }
 
 rename :: (HalfsCapable b t r l m) =>
           HalfsState b r l m -> FilePath -> FilePath -> HalfsM m ()

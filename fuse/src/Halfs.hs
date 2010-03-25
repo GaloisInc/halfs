@@ -262,8 +262,7 @@ halfsSetFileSize :: HalfsCapable b t r l m =>
                  -> m Errno
 halfsSetFileSize (HS log fs _fpdhMap) fp offset = do
   log $ "halfsSetFileSize: setting " ++ show fp ++ " to size " ++ show offset
-  execToErrno eINVAL (const eOK) $
-    setFileSize fs fp (fromIntegral offset)
+  execToErrno eINVAL (const eOK) $ setFileSize fs fp (fromIntegral offset)
          
 halfsSetFileTimes :: HalfsCapable b t r l m =>
                      HalfsSpecific b r l m
@@ -273,7 +272,10 @@ halfsSetFileTimes (HS log fs _fpdhMap) fp accTm modTm = do
   -- TODO: Check perms: caller must be file owner w/ write access or
   -- superuser.
   log $ "halfsSetFileTimes: fp = " ++ show fp
-  return eNOSYS
+  accTm' <- fromCTime accTm
+  modTm' <- fromCTime modTm
+  execToErrno eINVAL (const eOK) $
+    setFileTimes fs fp accTm' modTm'     
          
 halfsOpen :: HalfsCapable b t r l m =>
              HalfsSpecific b r l m             
@@ -444,8 +446,8 @@ halfsDestroy (HS log fs _fpdhMap) = do
 hfstat2fstat :: (Show t, Timed t m) => H.FileStat t -> m FileStat 
 hfstat2fstat stat = do
   atm  <- toCTime $ H.fsAccessTime stat
-  mtm  <- toCTime $ H.fsModTime stat
-  chtm <- toCTime $ H.fsChangetime stat
+  mtm  <- toCTime $ H.fsModifyTime stat
+  chtm <- toCTime $ H.fsChangeTime stat
   let entryType = case H.fsType stat of
                     H.RegularFile -> RegularFile
                     H.Directory   -> Directory

@@ -187,7 +187,7 @@ checkFileStat st expFileSz expFileTy expMode
     , fsGID       st == expGrp
     , fsNumBlocks st == fromIntegral expNumBlocks
     , accessp (fsAccessTime st)
-    , modifyp (fsModTime st)
+    , modifyp (fsModifyTime st)
     , changep (fsChangeTime st)
     ]
 
