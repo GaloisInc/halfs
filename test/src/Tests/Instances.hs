@@ -215,6 +215,7 @@ instance (Arbitrary a, Ord a, Serialize a) => Arbitrary (Inode a) where
       <*> return createTm                    -- inoCreateTime
       <*> arbitrary `suchThat` (>= createTm) -- inoModifyTime
       <*> arbitrary `suchThat` (>= createTm) -- inoAccessTime
+      <*> arbitrary `suchThat` (>= createTm) -- inoChangeTime
       <*> UID `fmap` arbitrary               -- inoUser
       <*> GID `fmap` arbitrary               -- inoGroup
       <*> (arbitrary >>= \cont -> do         -- inoCont

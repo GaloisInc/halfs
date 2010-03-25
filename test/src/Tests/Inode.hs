@@ -77,8 +77,8 @@ propM_basicWRWR :: HalfsCapable b t r l m =>
 propM_basicWRWR _g dev = do
   withFSData dev $ \fs rdirIR dataSz testData -> do
   let dataSzI      = fromIntegral dataSz
-      checkWriteMD t = \sz eb -> chk sz eb (t <) (t <)
-      checkReadMD  t = \sz eb -> chk sz eb (t <) (t >)
+      checkWriteMD t = \sz eb -> chk sz eb (t <) (t <) (t <)
+      checkReadMD  t = \sz eb -> chk sz eb (t <) (t >) (t <)
       chk          = checkInodeMetadata fs rdirIR Directory rootDirPerms
                                         rootUser rootGroup
 
@@ -167,8 +167,8 @@ propM_truncWRWR :: HalfsCapable b t r l m =>
 propM_truncWRWR _g dev = do
   withFSData dev $ \fs rdirIR dataSz testData -> do
   let numFree      = sreadRef $ bmNumFree $ hsBlockMap fs
-      checkWriteMD t = \sz eb -> chk sz eb (t <) (t <)
-      checkReadMD  t = \sz eb -> chk sz eb (t <) (t >)
+      checkWriteMD t = \sz eb -> chk sz eb (t <) (t <) (t <)
+      checkReadMD  t = \sz eb -> chk sz eb (t <) (t >) (t <)
       chk          = checkInodeMetadata fs rdirIR Directory rootDirPerms
                                         rootUser rootGroup
 
@@ -217,8 +217,8 @@ propM_lengthWR :: HalfsCapable b t r l m =>
 propM_lengthWR _g dev = do
   withFSData dev $ \fs rdirIR dataSz testData -> do 
   let blkSz          = bdBlockSize dev
-      checkWriteMD t = \sz eb -> chk sz eb (t <) (t <)
-      checkReadMD  t = \sz eb -> chk sz eb (t <) (t >)
+      checkWriteMD t = \sz eb -> chk sz eb (t <) (t <) (t <)
+      checkReadMD  t = \sz eb -> chk sz eb (t <) (t >) (t <)
       chk            = checkInodeMetadata fs rdirIR Directory rootDirPerms
                                           rootUser rootGroup 
 
@@ -364,9 +364,10 @@ checkInodeMetadata :: (HalfsCapable b t r l m, Integral a) =>
                    -> a           -- expected allocated block count 
                    -> (t -> Bool) -- access time predicate
                    -> (t -> Bool) -- modification time predicate
+                   -> (t -> Bool) -- status change time predicate
                    -> PropertyM m ()
 checkInodeMetadata fs inr expFileTy expMode expUsr expGrp
-                   expFileSz expNumBlocks accessp modifyp = do
+                   expFileSz expNumBlocks accessp modifyp changep = do
   st <- execH "checkInodeMetadata" "filestat" $ fileStat fs inr
   checkFileStat st expFileSz expFileTy expMode
-                expUsr expGrp expNumBlocks accessp modifyp
+                expUsr expGrp expNumBlocks accessp modifyp changep

@@ -269,8 +269,10 @@ halfsSetFileTimes :: HalfsCapable b t r l m =>
                      HalfsSpecific b r l m
                   -> FilePath -> EpochTime -> EpochTime
                   -> m Errno
-halfsSetFileTimes (HS _log _fs _fpdhMap) fp _tm0 _tm1 = do
-  error $ "halfsSetFileTimes: Not Yet Implemented (fp = " ++ show fp ++ ")" -- TODO
+halfsSetFileTimes (HS log fs _fpdhMap) fp accTm modTm = do
+  -- TODO: Check perms: caller must be file owner w/ write access or
+  -- superuser.
+  log $ "halfsSetFileTimes: fp = " ++ show fp
   return eNOSYS
          
 halfsOpen :: HalfsCapable b t r l m =>
@@ -441,8 +443,9 @@ halfsDestroy (HS log fs _fpdhMap) = do
 
 hfstat2fstat :: (Show t, Timed t m) => H.FileStat t -> m FileStat 
 hfstat2fstat stat = do
-  atm <- toCTime $ H.fsAccessTime stat
-  mtm <- toCTime $ H.fsModTime stat
+  atm  <- toCTime $ H.fsAccessTime stat
+  mtm  <- toCTime $ H.fsModTime stat
+  chtm <- toCTime $ H.fsChangetime stat
   let entryType = case H.fsType stat of
                     H.RegularFile -> RegularFile
                     H.Directory   -> Directory
@@ -462,7 +465,7 @@ hfstat2fstat stat = do
     , statBlocks           = fromIntegral $ H.fsNumBlocks stat
     , statAccessTime       = atm
     , statModificationTime = mtm
-    , statStatusChangeTime = 0 -- TODO FIXME : We need to track this
+    , statStatusChangeTime = chtm
     }
   where
     chkb16 x = assert (x' <= fromIntegral (maxBound :: Word16)) x'

@@ -175,9 +175,10 @@ checkFileStat :: (HalfsCapable b t r l m, Integral a) =>
               -> a           -- expected allocated block count 
               -> (t -> Bool) -- access time predicate
               -> (t -> Bool) -- modification time predicate
+              -> (t -> Bool) -- status change time predicate
               -> PropertyM m ()
 checkFileStat st expFileSz expFileTy expMode
-              expUsr expGrp expNumBlocks accessp modifyp = do
+              expUsr expGrp expNumBlocks accessp modifyp changep = do
   mapM_ assert
     [ fsSize      st == fromIntegral expFileSz
     , fsType      st == expFileTy
@@ -187,6 +188,7 @@ checkFileStat st expFileSz expFileTy expMode
     , fsNumBlocks st == fromIntegral expNumBlocks
     , accessp (fsAccessTime st)
     , modifyp (fsModTime st)
+    , changep (fsChangeTime st)
     ]
 
 assertMsg :: Monad m => String -> String -> Bool -> PropertyM m ()

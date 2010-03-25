@@ -129,7 +129,7 @@ cPadSize :: Int
 cPadSize = 0
 
 minInodeBlocks :: Word64
-minInodeBlocks = 39
+minInodeBlocks = 37
 
 minContBlocks :: Word64
 minContBlocks = 57
@@ -155,6 +155,7 @@ data (Eq t, Ord t, Serialize t) => Inode t = Inode
   , inoCreateTime    :: t        -- ^ time of creation
   , inoModifyTime    :: t        -- ^ time of last data modification
   , inoAccessTime    :: t        -- ^ time of last data access
+  , inoChangeTime    :: t        -- ^ time of last change to inode data 
   , inoUser          :: UserID   -- ^ userid of inode's owner
   , inoGroup         :: GroupID  -- ^ groupid of inode's owner
   -- end fstat metadata
@@ -187,7 +188,7 @@ data Cont = Cont
 minimalInodeSize :: (Monad m, Ord t, Serialize t) => t -> m Word64
 minimalInodeSize t = do
   return $ fromIntegral $ BS.length $ encode $
-    let e = emptyInode minInodeBlocks t t t RegularFile (FileMode [] [] [])
+    let e = emptyInode minInodeBlocks t RegularFile (FileMode [] [] [])
                        nilInodeRef nilInodeRef rootUser rootGroup
         c = inoCont e
     in e{ inoCont = c{ blockAddrs = replicate (safeToInt minInodeBlocks) 0 } }
@@ -268,13 +269,11 @@ buildEmptyInode bd ftype fmode me mommy usr grp = do
   now     <- getTime
   minSize <- minimalInodeSize =<< return now
   nAddrs  <- computeNumAddrs (bdBlockSize bd) minInodeBlocks minSize
-  return $ emptyInode nAddrs now now now ftype fmode me mommy usr grp
+  return $ emptyInode nAddrs now ftype fmode me mommy usr grp
 
 emptyInode :: (Ord t, Serialize t) => 
               Word64   -- ^ number of block addresses
-           -> t        -- ^ creation time
-           -> t        -- ^ last modify time
-           -> t        -- ^ last access time
+           -> t        -- ^ creation timestamp
            -> FileType -- ^ inode's filetype
            -> FileMode -- ^ inode's access mode
            -> InodeRef -- ^ block addr for this inode
@@ -282,7 +281,7 @@ emptyInode :: (Ord t, Serialize t) =>
            -> UserID  
            -> GroupID
            -> Inode t
-emptyInode nAddrs createTm modTm axsTm ftype fmode me mommy usr grp =
+emptyInode nAddrs now ftype fmode me mommy usr grp =
   Inode
   { inoParent       = mommy
   , inoAddress      = me
@@ -291,9 +290,10 @@ emptyInode nAddrs createTm modTm axsTm ftype fmode me mommy usr grp =
   , inoFileType     = ftype
   , inoMode         = fmode
   , inoNumLinks     = 0
-  , inoCreateTime   = createTm
-  , inoModifyTime   = modTm
-  , inoAccessTime   = axsTm
+  , inoCreateTime   = now
+  , inoModifyTime   = now
+  , inoAccessTime   = now
+  , inoChangeTime   = now
   , inoUser         = usr
   , inoGroup        = grp
   , inoCont         = emptyCont nAddrs nilContRef 
@@ -347,7 +347,8 @@ readStream fs startIR start mlen =
      conts                         <- expandConts dev (inoCont startInode)
      (sContIdx, sBlkOff, sByteOff) <- getStreamIdx bs fileSz start
      dbug ("start = " ++ show start) $ do
-     dbug ("(sContIdx, sBlkOff, sByteOff) = " ++ show (sContIdx, sBlkOff, sByteOff)) $ do
+     dbug ("(sContIdx, sBlkOff, sByteOff) = " ++
+       show (sContIdx, sBlkOff, sByteOff)) $ do
 
      rslt <- case mlen of
        Just len | len == 0 -> return BS.empty
@@ -384,7 +385,8 @@ readStream fs startIR start mlen =
                header `BS.append` fullBlocks
      
      now <- getTime
-     lift $ writeInode dev $ startInode { inoAccessTime = now }
+     lift $ writeInode dev $
+       startInode { inoAccessTime = now, inoChangeTime = now }
      dbug ("==== readStream end ===") $ return ()
      return rslt                                         
   -- ======================= End inode critical section =======================
@@ -539,6 +541,7 @@ writeStream_lckd dev bm startIR start trunc bytes           = do
                , inoAllocBlocks = newBlockCount
                , inoAccessTime  = now
                , inoModifyTime  = now
+               , inoChangeTime  = now
                }
   dbug ("==== writeStream end ===") $ return ()
   -- ======================= End inode critical section =======================
@@ -600,6 +603,7 @@ fileStat_lckd dev inr = do
     , fsNumBlocks  = inoAllocBlocks inode
     , fsAccessTime = inoAccessTime  inode
     , fsModTime    = inoModifyTime  inode
+    , fsChangeTime = inoChangeTime  inode
     }
 
 
@@ -984,6 +988,7 @@ instance (Eq t, Ord t, Serialize t) => Serialize (Inode t) where
     put           $ inoCreateTime n       
     put           $ inoModifyTime n       
     put           $ inoAccessTime n       
+    put           $ inoChangeTime n       
     put           $ inoUser n             
     put           $ inoGroup n            
 
@@ -1014,6 +1019,7 @@ instance (Eq t, Ord t, Serialize t) => Serialize (Inode t) where
     ctm   <- get
     mtm   <- get
     atm   <- get
+    chtm  <- get
     unless (ctm <= mtm && ctm <= atm) $
       fail "Inode: Incoherent modified / creation / access times."
     usr  <- get
@@ -1038,6 +1044,7 @@ instance (Eq t, Ord t, Serialize t) => Serialize (Inode t) where
       , inoCreateTime   = ctm
       , inoModifyTime   = mtm
       , inoAccessTime   = atm
+      , inoChangeTime   = chtm
       , inoUser         = usr
       , inoGroup        = grp
       , inoCont         = c

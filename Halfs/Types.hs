@@ -143,7 +143,7 @@ data Show t => FileStat t = FileStat
   , fsNumBlocks  :: Word64   -- ^ Number of blocks allocated
   , fsAccessTime :: t        -- ^ Time of last access
   , fsModTime    :: t        -- ^ Time of last data modification
---  , fsChangeTime :: t -- Time of last status change
+  , fsChangeTime :: t        -- ^ Time of last status (inode) change
   }
   deriving Show
 

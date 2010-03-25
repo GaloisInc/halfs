@@ -245,21 +245,21 @@ propM_fileWROK pathFromRoot _g dev = do
   (_, _, api, apc) <- exec "Obtaining sizes" $ IN.getSizes (bdBlockSize dev)
   let expBlks = calcExpBlockCount (bdBlockSize dev) api apc fileSz
 
-  let checkFileStat' atp mtp = do
+  let checkFileStat' atp mtp ctp = do
         usr <- exec "get grp"    $ getUser fs
         grp <- exec "get usr"    $ getGroup fs
         st  <- exec "fstat file" $ fstat fs thePath
         checkFileStat st fileSz RegularFile defaultFilePerms
-                      usr grp expBlks atp mtp
+                      usr grp expBlks atp mtp ctp
 
   t1 <- time
   exec "bytes -> file" $ write fs fh 0 fileData
-  checkFileStat' (t1 <) (t1 <)
+  checkFileStat' (t1 <) (t1 <) (t1 <)
 
   -- Readback and check before closing the file
   t2 <- time
   fileData' <- exec "bytes <- file" $ read fs fh 0 (fromIntegral fileSz)
-  checkFileStat' (t2 <) (t2 >)
+  checkFileStat' (t2 <) (t2 >) (t2 <)
   assrt "File readback OK" $ fileData == fileData'
 
   exec "close file" $ closeFile fs fh
@@ -267,7 +267,7 @@ propM_fileWROK pathFromRoot _g dev = do
   -- Reacquire the FH, read and check
   fh' <- exec "reopen file" $ openFile fs thePath fofReadOnly
   fileData'' <- exec "bytes <- file 2" $ read fs fh' 0 (fromIntegral fileSz)
-  checkFileStat' (t2 <) (t2 >)
+  checkFileStat' (t2 <) (t2 >) (t2 <)
   assrt "Reopened file readback OK" $ fileData == fileData''
 
   quickRemountCheck fs
