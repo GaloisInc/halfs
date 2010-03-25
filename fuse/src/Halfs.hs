@@ -185,8 +185,7 @@ halfsCreateDevice (HS log fs _fpdhMap) fp etype mode _devID = do
   case etype of
     RegularFile -> do
       log $ "halfsCreateDevice: Regular file w/ " ++ show hmode
-      execToErrno eINVAL (const eOK) $ 
-        createFile (withLogger log fs) fp hmode
+      execToErrno eINVAL (const eOK) $ createFile (withLogger log fs) fp hmode
     _ -> do
       log $ "halfsCreateDevice: Error: Unsupported EntryType encountered."
       return eINVAL
@@ -196,9 +195,9 @@ halfsCreateDirectory :: HalfsCapable b t r l m =>
                         HalfsSpecific b r l m
                      -> FilePath -> FileMode
                      -> m Errno
-halfsCreateDirectory (HS _log _fs _fpdhMap) _fp _mode = do
-  error "halfsCreateDirectory: Not Yet Implemented." -- TODO
-  return eNOSYS
+halfsCreateDirectory (HS log fs _fpdhMap) fp mode = do
+  log $ "halfsCreateDirectory: fp = " ++ show fp
+  execToErrno eINVAL (const eOK) $ mkdir fs fp (mode2hmode mode)
          
 halfsRemoveLink :: HalfsCapable b t r l m =>
                    HalfsSpecific b r l m
@@ -274,8 +273,7 @@ halfsSetFileTimes (HS log fs _fpdhMap) fp accTm modTm = do
   log $ "halfsSetFileTimes: fp = " ++ show fp
   accTm' <- fromCTime accTm
   modTm' <- fromCTime modTm
-  execToErrno eINVAL (const eOK) $
-    setFileTimes fs fp accTm' modTm'     
+  execToErrno eINVAL (const eOK) $ setFileTimes fs fp accTm' modTm'     
          
 halfsOpen :: HalfsCapable b t r l m =>
              HalfsSpecific b r l m             

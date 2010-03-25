@@ -68,6 +68,8 @@ instance Lockable l m => Lockable l (HalfsT m) where
 instance Timed t m => Timed t (HalfsT m) where
   getTime   = lift getTime
   toCTime   = lift . toCTime
+  fromCTime = lift . fromCTime
+
 --------------------------------------------------------------------------------
 -- Utility functions specific to the Halfs monad
 
