@@ -320,12 +320,8 @@ setFileSize fs fp len =
     withLockedInode fs inr $ do
       sz <- fsSize `fmap` fileStat_lckd (hsBlockDev fs) inr
       if sz > len
-        then do
-          wr len True BS.empty                    -- truncate at len
-        else do
-          let toWrite = bsReplicate (len - sz) 0
-          wr sz False toWrite -- pad up to len
-          -- TODO: check if trunc is True: currently crashes
+        then wr len True BS.empty                   -- truncate at len
+        else wr sz False $ bsReplicate (len - sz) 0 -- pad up to len
 
 setFileTimes :: (HalfsCapable b t r l m) =>
                 HalfsState b r l m -> FilePath -> t -> t -> HalfsM m ()
