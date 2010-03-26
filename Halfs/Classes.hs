@@ -93,7 +93,11 @@ instance Serialize UTCTime where
     <*> (picosecondsToDiffTime . fromIntegral) `fmap` getWord64be
 
 instance Timed UTCTime IO where
-  getTime   = getCurrentTime
+  getTime = getCurrentTime >>= toCTime >>= fromCTime
+    -- Pass the current time through conversion to/fromCTime so that all times
+    -- that originate here have CTime granularity.  We do this so that our
+    -- internally-acquired times have the same granularity as those coming in
+    -- from outside via the hFuse binding (e.g., via the setFileTimes function).
   toCTime t =
     -- We'll be converting UTCTimes to POSIXTimes to CTime values, which have
     -- implementation-specific size.  I don't think it's safe to truncate based
@@ -103,7 +107,7 @@ instance Timed UTCTime IO where
     -- and assume that we have a 32 bit signed int representation, and clamp
     -- values based on that.  This should be okay until early 2038 :).
     let ub = fromIntegral (maxBound :: Int32)
-        i :: Integer = round $ utcTimeToPOSIXSeconds t
+        i :: Integer = truncate $ utcTimeToPOSIXSeconds t
     in return ((fromIntegral $ if i >= ub then ub else i) :: CTime)
   fromCTime = return . posixSecondsToUTCTime . realToFrac
 

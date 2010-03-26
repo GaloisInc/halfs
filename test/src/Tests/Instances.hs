@@ -198,7 +198,7 @@ instance Arbitrary SuperBlock where
 -- Generate an arbitrary inode with mostly coherent fields (filesize/allocated
 -- block relationships are not cogent, however) based on the minimal inode size
 -- computation for an arbitrary device geometry.
-instance (Arbitrary a, Ord a, Serialize a) => Arbitrary (Inode a) where
+instance (Arbitrary a, Ord a, Serialize a, Show a) => Arbitrary (Inode a) where
   arbitrary = do
     BDGeom _ blkSz <- arbitrary
     createTm       <- arbitrary

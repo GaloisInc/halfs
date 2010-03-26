@@ -329,14 +329,14 @@ setFileTimes :: (HalfsCapable b t r l m) =>
              -> t                  -- ^ access time
              -> t                  -- ^ modification time  
              -> HalfsM m ()
-setFileTimes fs fp accTm modTm = do
+setFileTimes fs fp accTm modTm =
   withFile fs fp (fofReadWrite True) $ \fh -> do
     now <- getTime
-    atomicModifyInode fs (fhInode fh) $ \nd ->
-      nd { inoModifyTime = modTm
-         , inoAccessTime = accTm
-         , inoChangeTime = now
-         }
+    atomicModifyInode fs (fhInode fh) $ \nd -> do
+      return $ nd { inoModifyTime = modTm
+                  , inoAccessTime = accTm
+                  , inoChangeTime = now
+                  }
 
 rename :: (HalfsCapable b t r l m) =>
           HalfsState b r l m -> FilePath -> FilePath -> HalfsM m ()
@@ -491,7 +491,11 @@ readSymLink = undefined
 
 fstat :: (HalfsCapable b t r l m) =>
          HalfsState b r l m -> FilePath -> HalfsM m (FileStat t)
-fstat fs fp = absPathIR fs fp AnyFileType >>= fileStat fs
+fstat fs fp = do 
+  logMsg (hsLogger fs) $ "CoreAPI.fstat: entry"
+  ir <- absPathIR fs fp AnyFileType 
+  logMsg (hsLogger fs) $ "CoreAPI.fstat: fstat on ir = " ++ show ir
+  fileStat fs ir
 
 fsstat :: (HalfsCapable b t r l m) =>
           HalfsState b r l m -> HalfsM m FileSystemStats

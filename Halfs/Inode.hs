@@ -63,7 +63,7 @@ import Halfs.Utils
 
 import System.Device.BlockDevice
 
---import Debug.Trace
+import Debug.Trace
 dbug :: String -> a -> a
 dbug _ = id
 --dbug = trace
@@ -186,7 +186,7 @@ data Cont = Cont
 --
 -- You can check this value interactively in ghci by doing, e.g.
 -- minimalInodeSize =<< (getTime :: IO UTCTime)
-minimalInodeSize :: (Monad m, Ord t, Serialize t) => t -> m Word64
+minimalInodeSize :: (Monad m, Ord t, Serialize t, Show t) => t -> m Word64
 minimalInodeSize t = do
   return $ fromIntegral $ BS.length $ encode $
     let e = emptyInode minInodeBlocks t RegularFile (FileMode [] [] [])
@@ -221,7 +221,7 @@ computeNumAddrs blkSz minBlocks minSize = do
     fail "computeNumAddrs: Inexplicably bad block size"
   return $ blkSz' `div` refSize
 
-computeNumInodeAddrsM :: (Serialize t, Timed t m) =>
+computeNumInodeAddrsM :: (Serialize t, Timed t m, Show t) =>
                          Word64 -> m Word64
 computeNumInodeAddrsM blkSz =
   computeNumAddrs blkSz minInodeBlocks =<< minimalInodeSize =<< getTime
@@ -232,7 +232,7 @@ computeNumContAddrsM blkSz = do
   minSize <- minimalContSize
   computeNumAddrs blkSz minContBlocks minSize
 
-getSizes :: (Serialize t, Timed t m) =>
+getSizes :: (Serialize t, Timed t m, Show t) =>
             Word64
          -> m ( Word64 -- #inode bytes
               , Word64 -- #cont bytes
@@ -245,7 +245,7 @@ getSizes blkSz = do
   return (startContAddrs * blkSz, contAddrs * blkSz, startContAddrs, contAddrs)
 
 -- Builds and encodes an empty inode
-buildEmptyInodeEnc :: (Serialize t, Timed t m) =>
+buildEmptyInodeEnc :: (Serialize t, Timed t m, Show t) =>
                       BlockDevice m -- ^ The block device
                    -> FileType      -- ^ This inode's filetype
                    -> FileMode      -- ^ This inode's access mode
@@ -257,7 +257,7 @@ buildEmptyInodeEnc :: (Serialize t, Timed t m) =>
 buildEmptyInodeEnc bd ftype fmode me mommy usr grp =
   liftM encode $ buildEmptyInode bd ftype fmode me mommy usr grp
 
-buildEmptyInode :: (Serialize t, Timed t m) =>
+buildEmptyInode :: (Serialize t, Timed t m, Show t) =>
                    BlockDevice m
                 -> FileType      -- ^ This inode's filetype
                 -> FileMode      -- ^ This inode's access mode
@@ -561,7 +561,7 @@ incLinkCount :: HalfsCapable b t r l m =>
              -> HalfsM m ()
 incLinkCount fs inr =
   atomicModifyInode fs inr $ \nd ->
-    nd{ inoNumLinks = inoNumLinks nd + 1 }
+    return $ nd{ inoNumLinks = inoNumLinks nd + 1 }
 
 decLinkCount :: HalfsCapable b t r l m =>
                 HalfsState b r l m
@@ -569,17 +569,18 @@ decLinkCount :: HalfsCapable b t r l m =>
              -> HalfsM m ()
 decLinkCount fs inr =
   atomicModifyInode fs inr $ \nd ->
-    nd{ inoNumLinks = inoNumLinks nd - 1 }
+    return $ nd{ inoNumLinks = inoNumLinks nd - 1 }
 
 atomicModifyInode :: HalfsCapable b t r l m =>
                      HalfsState b r l m
                   -> InodeRef
-                  -> (Inode t -> Inode t)
+                  -> (Inode t -> HalfsM m (Inode t))
                   -> HalfsM m ()
 atomicModifyInode fs inr f = 
   withLockedInode fs inr $ do 
-    inode <- drefInode (hsBlockDev fs) inr
-    lift $ writeInode (hsBlockDev fs) (f inode)
+    inode  <- drefInode (hsBlockDev fs) inr
+    inode' <- f inode
+    lift $ writeInode (hsBlockDev fs) inode'
 
 fileStat :: HalfsCapable b t r l m =>
             HalfsState b r l m
@@ -670,7 +671,8 @@ decodeInode blkSz bs = do
   numAddrs' <- computeNumInodeAddrsM blkSz
   case decode bs of
     Left s  -> throwError $ HE_DecodeFail_Inode s
-    Right n -> return n{ inoCont = (inoCont n){ numAddrs = numAddrs' } }
+    Right n -> do 
+      return n{ inoCont = (inoCont n){ numAddrs = numAddrs' } }
 
 -- | A wrapper around Data.Serialize.decode that populates transient fields.  We
 -- do this to avoid occupying valuable on-disk Cont space where possible.  Bare
@@ -884,7 +886,7 @@ drefInode dev (IR addr) = do
 -- | Decompose the given absolute byte offset into an inode's data stream into
 -- Cont index (i.e., 0-based index into the cont chain), a block offset within
 -- that Cont, and a byte offset within that block.  
-decompStreamOffset :: (Serialize t, Timed t m, Monad m) => 
+decompStreamOffset :: (Serialize t, Timed t m, Monad m, Show t) => 
                       Word64           -- ^ Block size, in bytes
                    -> Word64           -- ^ Offset into the data stream
                    -> HalfsM m StreamIdx
@@ -972,7 +974,7 @@ cmagic4 = BS.pack $ take 8 $ drop 24 magicContBytes
 --------------------------------------------------------------------------------
 -- Typeclass instances
 
-instance (Eq t, Ord t, Serialize t) => Serialize (Inode t) where
+instance (Show t, Eq t, Ord t, Serialize t) => Serialize (Inode t) where
   put n = do
     putByteString $ magic1
 
@@ -1022,7 +1024,7 @@ instance (Eq t, Ord t, Serialize t) => Serialize (Inode t) where
     atm   <- get
     chtm  <- get
     unless (ctm <= mtm && ctm <= atm) $
-      fail "Inode: Incoherent modified / creation / access times."
+        fail "Inode: Incoherent modified / creation / access times."
     usr  <- get
     grp  <- get
 

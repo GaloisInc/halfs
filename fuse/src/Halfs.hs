@@ -46,6 +46,8 @@ import qualified Halfs.Types      as H
 import qualified Prelude
 import Prelude hiding (catch, log, read)
 
+import Debug.Trace
+
 -- Halfs-specific stuff we carry around in our FUSE functions; note that the
 -- FUSE library does this via opaque ptr to user data, but since hFUSE
 -- reimplements fuse_main and doesn't seem to provide a way to hang onto
@@ -159,7 +161,7 @@ halfsGetFileStat :: HalfsCapable b t r l m =>
                  -> m (Either Errno FileStat)
 halfsGetFileStat (HS log fs _fpdhMap) fp = do
   log $ "halfsGetFileStat: fp = " ++ show fp
-  eestat <- execOrErrno eINVAL id (fstat fs fp)
+  eestat <- execOrErrno log eINVAL id (fstat fs fp)
   case eestat of
     Left en -> do
       log $ "  (fstat failed w/ " ++ show en ++ ")"
@@ -185,7 +187,7 @@ halfsCreateDevice (HS log fs _fpdhMap) fp etype mode _devID = do
   case etype of
     RegularFile -> do
       log $ "halfsCreateDevice: Regular file w/ " ++ show hmode
-      execToErrno eINVAL (const eOK) $ createFile (withLogger log fs) fp hmode
+      execToErrno log eINVAL (const eOK) $ createFile (withLogger log fs) fp hmode
     _ -> do
       log $ "halfsCreateDevice: Error: Unsupported EntryType encountered."
       return eINVAL
@@ -197,7 +199,7 @@ halfsCreateDirectory :: HalfsCapable b t r l m =>
                      -> m Errno
 halfsCreateDirectory (HS log fs _fpdhMap) fp mode = do
   log $ "halfsCreateDirectory: fp = " ++ show fp
-  execToErrno eINVAL (const eOK) $ mkdir fs fp (mode2hmode mode)
+  execToErrno log eINVAL (const eOK) $ mkdir fs fp (mode2hmode mode)
          
 halfsRemoveLink :: HalfsCapable b t r l m =>
                    HalfsSpecific b r l m
@@ -261,7 +263,7 @@ halfsSetFileSize :: HalfsCapable b t r l m =>
                  -> m Errno
 halfsSetFileSize (HS log fs _fpdhMap) fp offset = do
   log $ "halfsSetFileSize: setting " ++ show fp ++ " to size " ++ show offset
-  execToErrno eINVAL (const eOK) $ setFileSize fs fp (fromIntegral offset)
+  execToErrno log eINVAL (const eOK) $ setFileSize fs fp (fromIntegral offset)
          
 halfsSetFileTimes :: HalfsCapable b t r l m =>
                      HalfsSpecific b r l m
@@ -270,10 +272,12 @@ halfsSetFileTimes :: HalfsCapable b t r l m =>
 halfsSetFileTimes (HS log fs _fpdhMap) fp accTm modTm = do
   -- TODO: Check perms: caller must be file owner w/ write access or
   -- superuser.
-  log $ "halfsSetFileTimes: fp = " ++ show fp
   accTm' <- fromCTime accTm
   modTm' <- fromCTime modTm
-  execToErrno eINVAL (const eOK) $ setFileTimes fs fp accTm' modTm'     
+  log $ "halfsSetFileTimes fp = " ++ show fp ++ ", accTm = " ++ show accTm' ++
+        ", modTm = " ++ show modTm'
+  execToErrno log eINVAL (const eOK) $ 
+    setFileTimes fs fp accTm' modTm'     
          
 halfsOpen :: HalfsCapable b t r l m =>
              HalfsSpecific b r l m             
@@ -282,7 +286,7 @@ halfsOpen :: HalfsCapable b t r l m =>
 halfsOpen (HS log fs _fpdhMap) fp omode flags = do
   log $ "halfsOpen: fp = " ++ show fp ++ ", omode = " ++ show omode ++ 
         ", flags = " ++ show flags
-  rslt <- execOrErrno eINVAL id $ openFile fs fp halfsFlags
+  rslt <- execOrErrno log eINVAL id $ openFile fs fp halfsFlags
   log $ "halfsOpen: CoreAPI.openFile completed: rslt = " ++ show rslt
   return rslt
   where
@@ -305,7 +309,7 @@ halfsRead :: HalfsCapable b t r l m =>
 halfsRead (HS log fs _fpdhMap) fp fh byteCnt offset = do
   log $ "halfsRead: Reading " ++ show byteCnt ++ " bytes from " ++
         show fp ++ " at offset " ++ show offset
-  execOrErrno eINVAL id $ 
+  execOrErrno log eINVAL id $ 
     read fs fh (fromIntegral offset) (fromIntegral byteCnt)
 
 halfsWrite :: HalfsCapable b t r l m =>
@@ -315,7 +319,7 @@ halfsWrite :: HalfsCapable b t r l m =>
 halfsWrite (HS log fs _fpdhMap) fp fh bytes offset = do
   log $ "halfsWrite: Writing " ++ show (BS.length bytes) ++ " bytes to " ++ 
         show fp ++ " at offset " ++ show offset
-  execOrErrno eINVAL id $ do
+  execOrErrno log eINVAL id $ do
     write fs fh (fromIntegral offset) bytes
     return (fromIntegral $ BS.length bytes)
 
@@ -323,8 +327,8 @@ halfsGetFileSystemStats :: HalfsCapable b t r l m =>
                            HalfsSpecific b r l m
                         -> FilePath
                         -> m (Either Errno System.Fuse.FileSystemStats)
-halfsGetFileSystemStats (HS _log fs _fpdhMap) _fp = do
-  execOrErrno eINVAL fss2fss (fsstat fs)
+halfsGetFileSystemStats (HS log fs _fpdhMap) _fp = do
+  execOrErrno log eINVAL fss2fss (fsstat fs)
   where
     fss2fss (FSS bs bc bf ba fc ff fa) = System.Fuse.FileSystemStats
       { fsStatBlockSize     = bs
@@ -343,7 +347,7 @@ halfsFlush :: HalfsCapable b t r l m =>
            -> m Errno
 halfsFlush (HS log fs _fpdhMap) fp fh = do
   log $ "halfsFlush: Flushing " ++ show fp
-  execToErrno eINVAL (const eOK) $ flush fs fh
+  execToErrno log eINVAL (const eOK) $ flush fs fh
          
 halfsRelease :: HalfsCapable b t r l m =>
                 HalfsSpecific b r l m
@@ -351,7 +355,7 @@ halfsRelease :: HalfsCapable b t r l m =>
              -> m ()
 halfsRelease (HS log fs _fpdhMap) fp fh = do
   log $ "halfsRelease: Releasing " ++ show fp
-  _ <- execOrErrno eINVAL (const eOK) $ closeFile fs fh
+  _ <- execOrErrno log eINVAL (const eOK) $ closeFile fs fh
   return () 
          
 halfsSynchronizeFile :: HalfsCapable b t r l m =>
@@ -368,7 +372,7 @@ halfsOpenDirectory :: HalfsCapable b t r l m =>
                    -> m Errno
 halfsOpenDirectory (HS log fs fpdhMap) fp = do
   log $ "halfsOpenDirectory: fp = " ++ show fp
-  execToErrno eINVAL (const eOK) $ 
+  execToErrno log eINVAL (const eOK) $ 
     withLockedRscRef fpdhMap $ \ref -> do
       mdh <- lookupRM fp ref
       case mdh of
@@ -381,7 +385,7 @@ halfsReadDirectory :: HalfsCapable b t r l m =>
                    -> m (Either Errno [(FilePath, FileStat)])
 halfsReadDirectory (HS log fs fpdhMap) fp = do
   log $ "halfsReadDirectory: fp = " ++ show fp
-  rslt <- execOrErrno eINVAL id $ 
+  rslt <- execOrErrno log eINVAL id $ 
     withLockedRscRef fpdhMap $ \ref -> do
       mdh <- lookupRM fp ref
       case mdh of
@@ -397,7 +401,7 @@ halfsReleaseDirectory :: HalfsCapable b t r l m =>
                       -> m Errno
 halfsReleaseDirectory (HS log fs fpdhMap) fp = do
   log $ "halfsReleaseDirectory: fp = " ++ show fp
-  execToErrno eINVAL (const eOK) $
+  execToErrno log eINVAL (const eOK) $
     withLockedRscRef fpdhMap $ \ref -> do
       mdh <- lookupRM fp ref
       case mdh of
@@ -499,15 +503,20 @@ exec act =
 -- Errno for the failed operation.  The Errno comes from either a HalfsM
 -- exception signifying it holds an Errno, or the default provided as the first
 -- argument.
-execOrErrno :: Monad m => Errno -> (a -> b) -> HalfsT m a -> m (Either Errno b)
-execOrErrno defaultEn f act = do
+execOrErrno :: (Monad m) => 
+               Logger m -> Errno -> (a -> b) -> HalfsT m a -> m (Either Errno b)
+execOrErrno log defaultEn f act = do
  runHalfs act >>= \ea -> case ea of
-   Left (HE_ErrnoAnnotated _ en) -> return $ Left en
-   Left _                        -> return $ Left defaultEn
+   Left (HE_ErrnoAnnotated e en) -> do
+     log ("execOrErrno: e = " ++ show e)
+     return $ Left en
+   Left e                        -> do
+     log ("execOrErrno: e = " ++ show e)
+     return $ Left defaultEn
    Right x                       -> return $ Right (f x)
 
-execToErrno :: Monad m => Errno -> (a -> Errno) -> HalfsT m a -> m Errno
-execToErrno defaultEn f = liftM (either id id) . execOrErrno defaultEn f
+execToErrno :: (Monad m) => Logger m -> Errno -> (a -> Errno) -> HalfsT m a -> m Errno
+execToErrno log defaultEn f = liftM (either id id) . execOrErrno log defaultEn f
 
 withLogger :: HalfsCapable b t r l m =>
               Logger m -> HalfsState b r l m -> HalfsState b r l m 
