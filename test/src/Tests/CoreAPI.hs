@@ -6,6 +6,7 @@ module Tests.CoreAPI
 where
 
 import Control.Concurrent
+import Data.List
 import Data.Serialize
 import Foreign.C.Error 
 import Prelude hiding (read, exp)
@@ -33,7 +34,7 @@ import Tests.Instances (printableBytes, filename)
 import Tests.Types
 import Tests.Utils
 
--- import Debug.Trace
+import Debug.Trace
 
 
 --------------------------------------------------------------------------------
@@ -187,7 +188,8 @@ propM_dirConstructionOK _g dev = do
       isEmpty fs =<< exec ("openDir " ++ p) (openDir fs p)
     -- 
     isEmpty fs dh = do
-      assert =<< null `fmap` exec ("readDir") (readDir fs dh)
+      assert =<< (null . flip (\\) initDirEntNames . map fst)
+                 `fmap` exec ("readDir") (readDir fs dh)
 
 -- | Ensure that a new filesystem populated with a handful of
 -- directories permits creation/open/close of a file; also checks open
@@ -285,6 +287,7 @@ propM_fileWROK pathFromRoot _g dev = do
 
 propM_simpleFileOpsOK :: HalfsProp
 propM_simpleFileOpsOK _g dev = do
+  trace ("simpleFileOpsOK") $ do
   fs <- runH (mkNewFS dev) >> mountOK dev
   forAllM (choose (1, maxBytes))        $ \fileSz    -> do
   forAllM (choose (0::Int, 2 * fileSz)) $ \resizedSz -> do 
