@@ -27,7 +27,7 @@ import Halfs.Utils
 
 import System.Device.BlockDevice
 
--- import Debug.Trace
+import Debug.Trace
 
 data SyncType = Data | Everything
 
@@ -152,6 +152,7 @@ unmount fs@HalfsState{hsBlockDev = dev, hsSuperBlock = sbRef} =
      -- * Persist all dirty data structures (dirents, files w/ buffered IO, etc.)
 
      -- Sync all directories; clean directory state is a no-op
+     trace "umount syncdirectory invocations" $ do
      mapM_ (syncDirectory fs) =<< M.elems `fmap` readRef dhMapRef
 
      lift $ bdFlush dev
@@ -563,7 +564,7 @@ withFile :: (HalfsCapable b t r l m) =>
          -> (FileHandle -> HalfsM m a)
          -> HalfsM m a
 withFile fs fp oflags = 
-  hbracket (openFile fs fp oflags) (\fh -> {- TODO: sync? -} closeFile fs fh)
+  hbracket (const $ return ()) (openFile fs fp oflags) (\fh -> {- TODO: sync? -} closeFile fs fh)
 
 fsElemExists :: HalfsCapable b t r l m =>
                 HalfsState b r l m

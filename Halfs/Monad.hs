@@ -22,6 +22,8 @@ import Halfs.Classes
 import Halfs.Errors
 import Halfs.Types
 
+import Debug.Trace
+
 newtype HalfsT m a = HalfsT { runHalfs :: m (Either HalfsError a) }
 type HalfsM m a    = HalfsT m a
 
@@ -70,18 +72,30 @@ instance Timed t m => Timed t (HalfsT m) where
   toCTime   = lift . toCTime
   fromCTime = lift . fromCTime
 
+instance Threaded m => Threaded (HalfsT m) where
+  getThreadId = lift getThreadId
+
 --------------------------------------------------------------------------------
 -- Utility functions specific to the Halfs monad
 
 hbracket :: Monad m =>
-            HalfsM m a         -- ^ before (\"acquisition\")
+            (String -> HalfsM m ()) 
+         -> HalfsM m a         -- ^ before (\"acquisition\")
          -> (a -> HalfsM m b)  -- ^ after  (\"release\")
          -> (a -> HalfsM m c)  -- ^ bracketed computation
          -> HalfsM m c         -- ^ result of bracketed computation
-hbracket before after act = do
+hbracket dbug before after act = do
+  dbug ("hbracket: about to run before")
   a <- before
-  r <- act a `catchError` \e -> after a >> throwError e
-  after a
+  dbug ("hbracket: about to run action") 
+  r <- act a `catchError` \e -> (do
+         dbug ("hbracket caught error: " ++ show e ++ ", invoking after action")
+         _ <- after a
+         dbug ("hbracket: returned from after action, throwing error")
+         throwError e
+       )
+  dbug ("hbracket: ran action normally, about to invoke after action")
+  _ <- after a
   return r
 
 withLock :: HalfsCapable b t r l m =>

@@ -9,11 +9,13 @@ module Halfs.Classes
   , TimedT(..)
   , Timed(..)
   , Bitmapped(..)
+  , Threaded(..)
   , IOLock
   )
  where
 
 import Control.Applicative
+import Control.Concurrent (ThreadId, myThreadId)
 import Control.Concurrent.MVar
 import Control.Exception
 import Control.Monad.Reader
@@ -42,6 +44,7 @@ class ( Bitmapped b m
       , Reffable r m
       , Lockable l m
       , Serialize t
+      , Threaded m
       , Functor m
       , Monad m
       , Show t -- For debugging
@@ -141,6 +144,18 @@ instance Reffable IORef IO where
   newRef   = newIORef
   readRef  = ($!) readIORef
   writeRef = ($!) writeIORef
+
+-- ---------------------------------------------------------------------------
+
+-- | A monad implementing Threaded can obtain its thread id
+class Monad m => Threaded m where
+  getThreadId :: m ThreadId
+
+instance Threaded IO where
+  getThreadId = myThreadId
+
+instance Threaded (ST s) where
+  getThreadId = undefined
 
 -- ---------------------------------------------------------------------------
 

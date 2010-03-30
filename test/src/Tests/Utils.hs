@@ -242,7 +242,7 @@ dumpfs fs = do
         ++ "=== fs dump end ===\n"
   where
     dumpfs' i ipfx inr = do 
-      contents <- withDirectory fs inr $ \dh -> do
+      contents <- withDirectory False fs inr $ \dh -> do
                     withLock (dhLock dh) $ readRef $ dhContents dh
       foldM (\dumpAcc (path, dirEnt) -> do
                sub <- if deType dirEnt == Directory && path /= "." && path /= ".."

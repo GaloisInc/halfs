@@ -7,6 +7,7 @@ where
 
 import Control.Concurrent
 import Data.List
+import Data.Maybe
 import Data.Serialize
 import Foreign.C.Error 
 import Prelude hiding (read, exp)
@@ -35,6 +36,7 @@ import Tests.Instances (printableBytes, filename)
 import Tests.Types
 import Tests.Utils
 
+import qualified System.IO
 import Debug.Trace
 
 
@@ -69,7 +71,7 @@ qcProps quick =
 --   ,
 --     exec 50  "File WR 2"              (propM_fileWROK "foo/bar/baz")
 --   ,
-    exec 2000 "Directory mutex"        propM_dirMutexOK
+    exec 1 "Directory mutex"        propM_dirMutexOK
 --   ,
 --     exec 100 "Hardlink creation"      propM_hardlinksOK
   ]
@@ -377,16 +379,22 @@ propM_dirMutexOK :: BDGeom
                  -> BlockDevice IO
                  -> PropertyM IO ()
 propM_dirMutexOK _g dev = do
-  fs <- runH (mkNewFS dev) >> mountOK dev
+  fs0 <- runH (mkNewFS dev) >> mountOK dev
+  outH <- run $ System.IO.openFile "dirmutex.log" System.IO.WriteMode
+  let fs = fs0 { hsLogger = Just $ \s -> System.IO.hPutStrLn outH s >> System.IO.hFlush outH }
 
-  forAllM (DirMutexOk `fmap` choose (2, maxThreads)) $ \(DirMutexOk n) -> do
+  -- FIXME, 2..maxThreads range
+  forAllM (DirMutexOk `fmap` choose (maxThreads, maxThreads)) $ \(DirMutexOk n) -> do
   forAllM (mapM genNm [1..n])                        $ \nmss           -> do
 
   ch <- run newChan
   mapM_ (run . forkIO . uncurry (threadTest fs ch)) (nmss `zip` [1..n])
   -- ^ n threads attempting to create directories simultaneously in /
-  replicateM n (run $ readChan ch)
-  -- ^ barrier
+  exceptions <- catMaybes `fmap` replicateM n (run $ readChan ch)
+  -- ^ barrier with exceptions aggregated from each thread
+  assertMsg "propM_dirMutexOK"
+            ("Caught exception(s) from thread(s): " ++ show exceptions)
+            (null exceptions)
 
   dh               <- exec "openDir /" $ openDir fs "/"
   (dnames, dstats) <- exec "readDir /" $ unzip `fmap` readDir fs dh
@@ -394,8 +402,8 @@ propM_dirMutexOK _g dev = do
   let p = L.sort dnames
       q = L.sort (concat nmss ++ initDirEntNames)
 
---   when (p /= q) $
---     run $ putStrLn ("p/=q: " ++ "\np=" ++ show p ++ "\nq=" ++ show q) 
+  when (p /= q) $
+    run $ putStrLn ("p/=q: " ++ "\np=" ++ show p ++ "\nq=" ++ show q) 
 
   assertMsg "propM_dirMutexOK" "Directory contents are coherent" $
     L.sort dnames == L.sort (concat nmss ++ initDirEntNames)
@@ -406,18 +414,18 @@ propM_dirMutexOK _g dev = do
 
   quickRemountCheck fs 
   where
-    maxDirs    = 50 -- } v -- was 50
-    maxLen     = 40 -- } arbitrary but fit into small devices
-    maxThreads = 8
+    maxDirs    = 100 -- } v was 50
+    maxLen     = 10 -- } -- was 40 arbitrary directory name length, but fit into small devices
+    maxThreads = 1
     exec       = execH "propM_dirMutexOK"
-    ng f       = L.nub `fmap` resize maxDirs (listOf1 $ f maxLen)
+    ng f       = L.nub `fmap` vectorOf maxDirs (f maxLen) -- resize maxDirs (listOf1 $ f maxLen)
     -- 
     genNm :: Int -> Gen [String]
     genNm n = map ((++) ("f" ++ show n ++ "_")) `fmap` ng filename
     -- 
-    threadTest fs ch nms _n = do
-      runHalfs $ mapM_ (flip (mkdir fs) defaultDirPerms . (</>) rootPath) nms
-      writeChan ch ()
+    threadTest fs ch nms _n = 
+      runHalfs (mapM_ (flip (mkdir fs) defaultDirPerms . (</>) rootPath) nms)
+        >>= writeChan ch . either Just (const Nothing)
 
 propM_hardlinksOK :: HalfsProp
 propM_hardlinksOK _g dev = do

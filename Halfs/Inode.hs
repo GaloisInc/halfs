@@ -628,7 +628,7 @@ withLockedInode fs inr act =
   -- We use the map to track lock info so that we don't hold locks for lengthy
   -- intervals when we have access requests for disparate inode refs.
 
-  hbracket before after (const act {- inode lock doesn't escape -}) 
+  hbracket (const $ return ()) before after (const act {- inode lock doesn't escape -}) 
 
   where
     before = do
