@@ -25,6 +25,7 @@ import Halfs.File hiding (createFile)
 import Halfs.HalfsState
 import qualified Halfs.Inode as IN
 import Halfs.Monad
+import Halfs.Protection
 import Halfs.SuperBlock
 import Halfs.Types
 
@@ -49,25 +50,28 @@ type HalfsProp =
 
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
-  [ exec 10  "Init and mount"         propM_initAndMountOK
-  ,
-    exec 10  "Mount/unmount"          propM_mountUnmountOK
-  ,
-    exec 10  "Unmount mutex"          propM_unmountMutexOK
-  ,
-    exec 10  "Directory construction" propM_dirConstructionOK
-  ,
-    exec 10  "Simple file creation"   propM_fileBasicsOK
-  ,
-    exec 50  "Simple file ops"        propM_simpleFileOpsOK
-  ,
-    exec 5   "File WR 1"              (propM_fileWROK "myfile")
-  ,
-    exec 5   "File WR 2"              (propM_fileWROK "foo/bar/baz")
-  ,
-    exec 50  "Directory mutex"        propM_dirMutexOK
-  ,
-    exec 10  "Hardlink creation"      propM_hardlinksOK
+  [
+--     exec 100 "Init and mount"         propM_initAndMountOK
+--   ,
+--     exec 100 "Mount/unmount"          propM_mountUnmountOK
+--   ,
+--     exec 100 "Unmount mutex"          propM_unmountMutexOK
+--   ,
+--     exec 100 "Directory construction" propM_dirConstructionOK
+--   ,
+--     exec 100 "Simple file creation"   propM_fileBasicsOK
+--   ,
+--     exec 100 "Simple file ops"        propM_simpleFileOpsOK
+--   ,
+--     exec 100 "chmod/chown ops"        propM_chmodchownOK
+--   ,
+--     exec 50  "File WR 1"              (propM_fileWROK "myfile")
+--   ,
+--     exec 50  "File WR 2"              (propM_fileWROK "foo/bar/baz")
+--   ,
+    exec 2000 "Directory mutex"        propM_dirMutexOK
+--   ,
+--     exec 100 "Hardlink creation"      propM_hardlinksOK
   ]
   where
     exec = mkMemDevExec quick "CoreAPI"
@@ -184,7 +188,7 @@ propM_dirConstructionOK _g dev = do
     exec = execH "propM_dirConstructionOK"
     --
     test fs p = do
-      exec ("mkdir " ++ p) (mkdir fs p perms)
+      exec ("mkdir " ++ p) (mkdir fs p defaultDirPerms)
       isEmpty fs =<< exec ("openDir " ++ p) (openDir fs p)
     -- 
     isEmpty fs dh = do
@@ -202,7 +206,7 @@ propM_fileBasicsOK _g dev = do
       fp      = fooPath </> "f1"
       fp2     = fooPath </> "f2"
 
-  exec "mkdir /foo"          $ mkdir fs fooPath perms
+  exec "mkdir /foo"          $ mkdir fs fooPath defaultDirPerms
   exec "create /foo/f1"      $ createFile fs fp defaultFilePerms
   fh0 <- exec "open /foo/f1" $ openFile fs fp fofReadOnly
   exec "close /foo/f1"       $ closeFile fs fh0
@@ -256,12 +260,12 @@ propM_fileWROK pathFromRoot _g dev = do
 
   t1 <- time
   exec "bytes -> file" $ write fs fh 0 fileData
-  checkFileStat' (t1 <) (t1 <) (t1 <)
+  checkFileStat' (t1 <=) (t1 <=) (t1 <=)
 
   -- Readback and check before closing the file
   t2 <- time
   fileData' <- exec "bytes <- file" $ read fs fh 0 (fromIntegral fileSz)
-  checkFileStat' (t2 <) (t2 >) (t2 <)
+  checkFileStat' (t2 <=) (t2 >=) (t2 <=)
   assrt "File readback OK" $ fileData == fileData'
 
   exec "close file" $ closeFile fs fh
@@ -269,7 +273,7 @@ propM_fileWROK pathFromRoot _g dev = do
   -- Reacquire the FH, read and check
   fh' <- exec "reopen file" $ openFile fs thePath fofReadOnly
   fileData'' <- exec "bytes <- file 2" $ read fs fh' 0 (fromIntegral fileSz)
-  checkFileStat' (t2 <) (t2 >) (t2 <)
+  checkFileStat' (t2 <=) (t2 >=) (t2 <=)
   assrt "Reopened file readback OK" $ fileData == fileData''
 
   quickRemountCheck fs
@@ -284,10 +288,8 @@ propM_fileWROK pathFromRoot _g dev = do
 
 -- | Ensure that simple file operations (e.g., setFileSize) are
 -- working correctly.
-
 propM_simpleFileOpsOK :: HalfsProp
 propM_simpleFileOpsOK _g dev = do
-  trace ("simpleFileOpsOK") $ do
   fs <- runH (mkNewFS dev) >> mountOK dev
   forAllM (choose (1, maxBytes))        $ \fileSz    -> do
   forAllM (choose (0::Int, 2 * fileSz)) $ \resizedSz -> do 
@@ -322,14 +324,52 @@ propM_simpleFileOpsOK _g dev = do
   now <- exec "get time" getTime
   exec "setFileTimes" $ setFileTimes fs fp now now
   st' <- exec "fstat /foo" $ fstat fs fp
+
+{-
+  trace ("now = " ++ show now) $ do
+  trace ("fsAccessTime st' = " ++ show (fsAccessTime st')) $ do
+  trace ("fsModifyTime st' = " ++ show (fsModifyTime st')) $ do
+  trace ("fsChangeTime st' = " ++ show (fsChangeTime st')) $ do
+-}
+
+  -- NB: May need to have define a "close enough" equivalence function for
+  -- comparing times here, due to the second granularity of the time sampling
+  -- and truncation in the current implementation of getTime.
   assert (fsAccessTime st' == now)
   assert (fsModifyTime st' == now)
-  assert (fsChangeTime st' > now)
+  assert (fsChangeTime st' >= now)
 
   quickRemountCheck fs
   where
     maxBytes = fromIntegral $ bdBlockSize dev * bdNumBlocks dev `div` 8
     exec     = execH "propM_simpleFileOpsOK"
+
+-- | Ensure that simple file operations (e.g., setFileSize) are
+-- working correctly.
+propM_chmodchownOK :: HalfsProp
+propM_chmodchownOK _g dev = do
+  fs <- runH (mkNewFS dev) >> mountOK dev
+  let fp = rootPath </> "foo"
+
+  exec "create /foo" $ createFile fs fp defaultFilePerms
+
+  -- chmod to a random and check
+  forAllM arbitrary $ \perms -> do 
+  exec "chmod 600 /foo"    $ chmod fs fp perms
+  st0 <- exec "fstat /foo" $ fstat fs fp
+  assert (fsMode st0 == perms)
+
+  -- chown/chgrp to random uid/gid and check
+  forAllM arbitrary $ \usr -> do
+  forAllM arbitrary $ \grp -> do                             
+  exec "ch{own,grp} root /foo" $ chown fs fp usr grp
+  st1 <- exec "fstat /foo"     $ fstat fs fp
+  assert (fsUID st1 == usr)
+  assert (fsGID st1 == grp)
+
+  quickRemountCheck fs
+  where
+    exec = execH "propM_chmodchownOK"
 
 -- | Sanity check: multiple threads making many new directories
 -- simultaneously are interleaved in a sensible manner.
@@ -351,6 +391,12 @@ propM_dirMutexOK _g dev = do
   dh               <- exec "openDir /" $ openDir fs "/"
   (dnames, dstats) <- exec "readDir /" $ unzip `fmap` readDir fs dh
 
+  let p = L.sort dnames
+      q = L.sort (concat nmss ++ initDirEntNames)
+
+--   when (p /= q) $
+--     run $ putStrLn ("p/=q: " ++ "\np=" ++ show p ++ "\nq=" ++ show q) 
+
   assertMsg "propM_dirMutexOK" "Directory contents are coherent" $
     L.sort dnames == L.sort (concat nmss ++ initDirEntNames)
 
@@ -360,7 +406,7 @@ propM_dirMutexOK _g dev = do
 
   quickRemountCheck fs 
   where
-    maxDirs    = 50 -- } v
+    maxDirs    = 50 -- } v -- was 50
     maxLen     = 40 -- } arbitrary but fit into small devices
     maxThreads = 8
     exec       = execH "propM_dirMutexOK"
@@ -370,7 +416,7 @@ propM_dirMutexOK _g dev = do
     genNm n = map ((++) ("f" ++ show n ++ "_")) `fmap` ng filename
     -- 
     threadTest fs ch nms _n = do
-      runHalfs $ mapM_ (flip (mkdir fs) perms . (</>) rootPath) nms
+      runHalfs $ mapM_ (flip (mkdir fs) defaultDirPerms . (</>) rootPath) nms
       writeChan ch ()
 
 propM_hardlinksOK :: HalfsProp
@@ -436,9 +482,6 @@ propM_hardlinksOK _g dev = do
 
 initDirEntNames :: [FilePath]
 initDirEntNames = [dotPath, dotdotPath]
-
-perms :: FileMode
-perms = FileMode [Read,Write,Execute] [Read,Execute] [Read,Execute]
 
 rootPath :: FilePath
 rootPath = [pathSeparator]

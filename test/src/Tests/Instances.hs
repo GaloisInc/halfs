@@ -216,8 +216,8 @@ instance (Arbitrary a, Ord a, Serialize a, Show a) => Arbitrary (Inode a) where
       <*> arbitrary `suchThat` (>= createTm) -- inoModifyTime
       <*> arbitrary `suchThat` (>= createTm) -- inoAccessTime
       <*> arbitrary `suchThat` (>= createTm) -- inoChangeTime
-      <*> UID `fmap` arbitrary               -- inoUser
-      <*> GID `fmap` arbitrary               -- inoGroup
+      <*> arbitrary                          -- inoUser
+      <*> arbitrary                          -- inoGroup
       <*> (arbitrary >>= \cont -> do         -- inoCont
              let blockCount' = min (blockCount cont) addrCnt
              return
@@ -251,11 +251,17 @@ instance Arbitrary DirectoryEntry where
     DirEnt
       <$> (listOf1 arbitrary :: Gen String)          -- deName
       <*> IR  `fmap` arbitrary                       -- deInode
-      <*> UID `fmap` arbitrary                       -- deUser
-      <*> GID `fmap` arbitrary                       -- deGroup
+      <*> arbitrary                                  -- deUser
+      <*> arbitrary                                  -- deGroup
       <*> (arbitrary :: Gen FileMode)                -- deMode
       <*> elements [RegularFile, Directory, Symlink] -- deType
     
+instance Arbitrary UserID where
+  arbitrary = UID <$> arbitrary
+
+instance Arbitrary GroupID where
+  arbitrary = GID <$> arbitrary
+
 instance Arbitrary FileMode where
   arbitrary = 
     FileMode <$> gp <*> gp <*> gp

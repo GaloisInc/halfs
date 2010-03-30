@@ -32,7 +32,7 @@ import System.Device.ST
 import Tests.Instances
 import Tests.Types
 
--- import Debug.Trace
+import Debug.Trace
 
 type DevCtor = BDGeom -> IO (Maybe (BlockDevice IO))
 

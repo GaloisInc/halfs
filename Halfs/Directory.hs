@@ -81,16 +81,26 @@ makeDirectory fs parentIR dname user group perms =
          assert (BS.length bstr == fromIntegral (bdBlockSize dev)) $ return ()
          lift $ bdWriteBlock dev (inodeRefToBlockAddr thisIR) bstr
        
+{- tack 1: exhibits racecond in propM_dirMutexOK, presumably by somehow
+           overlapping makeDirectory unsafely.  TODO: Should start by
+           doing a sanity check over a lock of the entire makeDirectory
+           routine, and then step lock granularity inwards.  Also, there
+           may be some related funny business in openDirectory etc.
+
          -- Add the '.' and '..' directory entries.
          pde <- maybe (throwError $ HE_PathComponentNotFound dotPath) return
                       (M.lookup dotPath contents)
 
-         writeStream_lckd dev (hsBlockMap fs) thisIR 0 True $
+         writeStream fs thisIR 0 True $
            encode [ DirEnt dotPath thisIR user group perms Directory
                   , DirEnt dotdotPath thisIR (deUser pde) 
                            (deGroup pde) (deMode pde) Directory
                   ]
-
+-}
+{- tack 2: as expected, still exhibits racecond
+         withDirectory fs thisIR $ \dh -> do
+           addDirEnt dh dotPath thisIR user group perms Directory
+-}
          -- Add 'dname' to parent directory's contents
          addDirEnt_lckd pdh dname thisIR user group perms Directory
          return thisIR

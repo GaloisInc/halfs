@@ -28,7 +28,7 @@ import Tests.Instances           (printableBytes)
 import Tests.Types
 import Tests.Utils
 
--- import Debug.Trace
+import Debug.Trace
 
 
 --------------------------------------------------------------------------------
@@ -37,15 +37,15 @@ import Tests.Utils
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [ -- Inode module invariants
-    exec 10 "Inode module invariants" propM_inodeModuleInvs
+    exec 100 "Inode module invariants" propM_inodeModuleInvs
   , -- Inode stream write/read/(over)write/read property
-    exec 10 "Basic WRWR" propM_basicWRWR
+    exec 100 "Basic WRWR" propM_basicWRWR
   , -- Inode stream write/read/(truncating)write/read property
-    exec 10 "Truncating WRWR" propM_truncWRWR
+    exec 100 "Truncating WRWR" propM_truncWRWR
   , -- Inode length-specific stream write/read
-    exec 10 "Length-specific WR" propM_lengthWR
+    exec 100 "Length-specific WR" propM_lengthWR
   , -- Inode single reader/writer lock testing
-    exec 10 "Inode single reader/write mutex" propM_inodeMutexOK
+    exec 100 "Inode single reader/write mutex" propM_inodeMutexOK
   ]
   where
     exec = mkMemDevExec quick "Inode"
@@ -77,8 +77,8 @@ propM_basicWRWR :: HalfsCapable b t r l m =>
 propM_basicWRWR _g dev = do
   withFSData dev $ \fs rdirIR dataSz testData -> do
   let dataSzI      = fromIntegral dataSz
-      checkWriteMD t = \sz eb -> chk sz eb (t <) (t <) (t <)
-      checkReadMD  t = \sz eb -> chk sz eb (t <) (t >) (t <)
+      checkWriteMD t = \sz eb -> chk sz eb (t <=) (t <=) (t <=)
+      checkReadMD  t = \sz eb -> chk sz eb (t <=) (t >=) (t <=)
       chk          = checkInodeMetadata fs rdirIR Directory rootDirPerms
                                         rootUser rootGroup
 
@@ -167,8 +167,8 @@ propM_truncWRWR :: HalfsCapable b t r l m =>
 propM_truncWRWR _g dev = do
   withFSData dev $ \fs rdirIR dataSz testData -> do
   let numFree      = sreadRef $ bmNumFree $ hsBlockMap fs
-      checkWriteMD t = \sz eb -> chk sz eb (t <) (t <) (t <)
-      checkReadMD  t = \sz eb -> chk sz eb (t <) (t >) (t <)
+      checkWriteMD t = \sz eb -> chk sz eb (t <=) (t <=) (t <=)
+      checkReadMD  t = \sz eb -> chk sz eb (t <=) (t >=) (t <=)
       chk          = checkInodeMetadata fs rdirIR Directory rootDirPerms
                                         rootUser rootGroup
 
@@ -217,8 +217,8 @@ propM_lengthWR :: HalfsCapable b t r l m =>
 propM_lengthWR _g dev = do
   withFSData dev $ \fs rdirIR dataSz testData -> do 
   let blkSz          = bdBlockSize dev
-      checkWriteMD t = \sz eb -> chk sz eb (t <) (t <) (t <)
-      checkReadMD  t = \sz eb -> chk sz eb (t <) (t >) (t <)
+      checkWriteMD t = \sz eb -> chk sz eb (t <=) (t <=) (t <=)
+      checkReadMD  t = \sz eb -> chk sz eb (t <=) (t >=) (t <=)
       chk            = checkInodeMetadata fs rdirIR Directory rootDirPerms
                                           rootUser rootGroup 
 

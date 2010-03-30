@@ -571,15 +571,18 @@ decLinkCount fs inr =
   atomicModifyInode fs inr $ \nd ->
     return $ nd{ inoNumLinks = inoNumLinks nd - 1 }
 
+-- | Atomically modifies an inode; always updates inoChangeTime, but
+-- callers are responsible for other metadata modifications.
 atomicModifyInode :: HalfsCapable b t r l m =>
                      HalfsState b r l m
                   -> InodeRef
                   -> (Inode t -> HalfsM m (Inode t))
                   -> HalfsM m ()
 atomicModifyInode fs inr f = 
-  withLockedInode fs inr $ do 
+  withLockedInode fs inr $ do
     inode  <- drefInode (hsBlockDev fs) inr
-    inode' <- f inode
+    now    <- getTime
+    inode' <- setChangeTime now `fmap` f inode
     lift $ writeInode (hsBlockDev fs) inode'
 
 fileStat :: HalfsCapable b t r l m =>
@@ -882,6 +885,9 @@ drefInode :: HalfsCapable b t r l m =>
              BlockDevice m -> InodeRef -> HalfsM m (Inode t)
 drefInode dev (IR addr) = do 
   lift (bdReadBlock dev addr) >>= decodeInode (bdBlockSize dev) 
+
+setChangeTime :: (Ord t, Serialize t) => t -> Inode t -> Inode t
+setChangeTime t nd = nd{ inoChangeTime = t }
 
 -- | Decompose the given absolute byte offset into an inode's data stream into
 -- Cont index (i.e., 0-based index into the cont chain), a block offset within

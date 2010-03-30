@@ -329,14 +329,9 @@ setFileTimes :: (HalfsCapable b t r l m) =>
              -> t                  -- ^ access time
              -> t                  -- ^ modification time  
              -> HalfsM m ()
-setFileTimes fs fp accTm modTm =
-  withFile fs fp (fofReadWrite True) $ \fh -> do
-    now <- getTime
-    atomicModifyInode fs (fhInode fh) $ \nd -> do
-      return $ nd { inoModifyTime = modTm
-                  , inoAccessTime = accTm
-                  , inoChangeTime = now
-                  }
+setFileTimes fs fp accTm modTm = do
+  -- TODO: Check permissions
+  modifyInode fs fp $ \nd -> nd{ inoModifyTime = modTm, inoAccessTime = accTm }
 
 rename :: (HalfsCapable b t r l m) =>
           HalfsState b r l m -> FilePath -> FilePath -> HalfsM m ()
@@ -348,13 +343,16 @@ rename = undefined
 
 chmod :: (HalfsCapable b t r l m) =>
          HalfsState b r l m -> FilePath -> FileMode -> HalfsM m ()
-chmod = undefined
+chmod fs fp mode = do
+  -- TODO: Check perms
+  modifyInode fs fp $ \nd -> nd{ inoMode = mode }
 
 chown :: (HalfsCapable b t r l m) =>
          HalfsState b r l m -> FilePath -> UserID -> GroupID -> HalfsM m ()
-chown = undefined
+chown fs fp usr grp = do
+  -- TODO: Check perms
+  modifyInode fs fp $ \nd -> nd{ inoUser = usr, inoGroup = grp }
 
--- | JS XXX/TODO: What's the intent of this function?
 access :: (HalfsCapable b t r l m) =>
           HalfsState b r l m -> FilePath -> [AccessRight] -> HalfsM m ()
 access = undefined
@@ -367,8 +365,7 @@ access = undefined
 mklink :: (HalfsCapable b t r l m) =>
           HalfsState b r l m -> FilePath -> FilePath -> HalfsM m ()
 mklink fs path1 {-src-} path2 {-dst-} = do
-
-  {- Currently does not implement the following POSIX error behaviors:
+  {- Currently status of POSIX error behaviors:
 
      TODO
      ---- 
@@ -517,6 +514,16 @@ fsstat fs = do
 
 --------------------------------------------------------------------------------
 -- Utility functions & consts
+
+-- | Atomic inode modification wrapper
+modifyInode :: HalfsCapable b t r l m =>
+               HalfsState b r l m
+            -> FilePath
+            -> (Inode t -> Inode t)
+            -> HalfsM m ()
+modifyInode fs fp f = 
+  withFile fs fp (fofReadWrite True) $ \fh -> 
+    atomicModifyInode fs (fhInode fh) (return . f)
 
 -- | Find the InodeRef corresponding to the given path.  On error, raises
 -- exceptions HE_PathComponentNotFound, HE_AbsolutePathExpected, or
