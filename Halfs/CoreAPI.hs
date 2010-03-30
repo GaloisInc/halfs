@@ -152,7 +152,6 @@ unmount fs@HalfsState{hsBlockDev = dev, hsSuperBlock = sbRef} =
      -- * Persist all dirty data structures (dirents, files w/ buffered IO, etc.)
 
      -- Sync all directories; clean directory state is a no-op
-     trace "umount syncdirectory invocations" $ do
      mapM_ (syncDirectory fs) =<< M.elems `fmap` readRef dhMapRef
 
      lift $ bdFlush dev
@@ -208,9 +207,13 @@ readDir :: (HalfsCapable b t r l m) =>
         -> DirHandle r l
         -> HalfsM m [(FilePath, FileStat t)]
 readDir fs dh =
-  liftM M.toList $
-    T.mapM (fileStat fs . deInode)
-      =<< withLock (dhLock dh) (readRef $ dhContents dh)
+  liftM M.toList $ T.mapM (fileStat fs) =<< withLock (dhLock dh) readContents
+  where
+    readContents = do 
+      contents <- fmap deInode `fmap` readRef (dhContents dh) 
+      -- HERE: transform to M.Map FilePath InodeRef here by T.mapM'ing
+      -- deInode, and then mix in '.' and '..' entries.
+      return contents
 
 -- | Synchronize the given directory to disk.
 syncDir :: (HalfsCapable b t r l m) =>
@@ -564,7 +567,7 @@ withFile :: (HalfsCapable b t r l m) =>
          -> (FileHandle -> HalfsM m a)
          -> HalfsM m a
 withFile fs fp oflags = 
-  hbracket (const $ return ()) (openFile fs fp oflags) (\fh -> {- TODO: sync? -} closeFile fs fh)
+  hbracket (openFile fs fp oflags) (\fh -> {- TODO: sync? -} closeFile fs fh)
 
 fsElemExists :: HalfsCapable b t r l m =>
                 HalfsState b r l m

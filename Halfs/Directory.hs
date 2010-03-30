@@ -58,76 +58,33 @@ makeDirectory :: HalfsCapable b t r l m =>
               -> HalfsM m InodeRef  -- ^ on success, the inode ref to the
                                     --   created directory
 makeDirectory fs parentIR dname user group perms = do
-  logMsg (hsLogger fs) $ "makeDirectory entry: " ++ dname
-  rslt <- withDirectory True fs parentIR $ \pdh -> do
-    withLock (dhLock pdh) $ do 
-    -- Begin critical section over parent's DirHandle 
-    contents <- readRef (dhContents pdh)
-    if M.member dname contents
-     then throwError $ HE_ObjectExists dname 
-     else do
-       mir <- (fmap . fmap) blockAddrToInodeRef $ alloc1 (hsBlockMap fs)
-       case mir of
-         Nothing     -> throwError HE_AllocFailed
-         Just thisIR -> do
-           -- Build the directory inode and persist it
-           bstr <- lift $ buildEmptyInodeEnc
-                            dev
-                            Directory
-                            perms
-                            thisIR
-                            parentIR
-                            user
-                            group
-           assert (BS.length bstr == fromIntegral (bdBlockSize dev)) $ return ()
-           lift $ bdWriteBlock dev (inodeRefToBlockAddr thisIR) bstr
+  withDirectory fs parentIR $ \pdh -> do
+  withLock (dhLock pdh) $ do 
+  -- Begin critical section over parent's DirHandle 
+  contents <- readRef (dhContents pdh)
+  if M.member dname contents
+   then throwError $ HE_ObjectExists dname 
+   else do
+     mir <- (fmap . fmap) blockAddrToInodeRef $ alloc1 (hsBlockMap fs)
+     case mir of
+       Nothing     -> throwError HE_AllocFailed
+       Just thisIR -> do
+         -- Build the directory inode and persist it
+         bstr <- lift $ buildEmptyInodeEnc
+                          dev
+                          Directory
+                          perms
+                          thisIR
+                          parentIR
+                          user
+                          group
+         assert (BS.length bstr == fromIntegral (bdBlockSize dev)) $ return ()
+         lift $ bdWriteBlock dev (inodeRefToBlockAddr thisIR) bstr
 
-  -- NB: Can probably make '.' and '..' implicit and not have to consume
-  -- an extra block per directory right off the bat...instead add these
-  -- entries to readDirectory and so forth.  However, this has brought
-  -- up the interesting bugs below with respect to exception handling
-  -- failures, so is probably still worth it.
-         
-  {- tack 1: exhibits racecond in propM_dirMutexOK, presumably by somehow
-             overlapping makeDirectory unsafely.  TODO: Should start by
-             doing a sanity check over a lock of the entire makeDirectory
-             routine, and then step lock granularity inwards.  Also, there
-             may be some related funny business in openDirectory etc.
-
-           -- Add the '.' and '..' directory entries.
-           pde <- maybe (throwError $ HE_PathComponentNotFound dotPath) return
-                        (M.lookup dotPath contents)
-  
-           tid <- getThreadId
-           trace ("[" ++ show tid ++ "]: "
-                  ++ "makeDirectory: Adding . de to thisIR = " ++ show thisIR
-                  ++ ", dname = "               ++ show dname
-                 ) $ do
-           writeStream fs thisIR 0 True $
-             encode [ DirEnt dotPath thisIR user group perms Directory
-                    , DirEnt dotdotPath thisIR (deUser pde) 
-                             (deGroup pde) (deMode pde) Directory
-                    ]
-  -}
-  -- {- tack 2: as expected, still exhibits racecond
-           tid <- getThreadId
-           logMsg (hsLogger fs) $ "[" ++ show tid ++ "]: makeDirectory: opening subdir"
-           withDirectory False fs thisIR $ \dh -> do
-             logMsg (hsLogger fs)
-                    ("[" ++ show tid ++ "]: "
-                      ++ "makeDirectory: Adding . de to thisIR = " ++ show thisIR
-                      ++ ", dname = "               ++ show dname
-                      ++ ", parentIR = "            ++ show parentIR
-                    )
-             addDirEnt dh dotPath thisIR user group perms Directory
-           logMsg (hsLogger fs) $ "[" ++ show tid ++ "]: makeDirectory: subdir closed"
-  -- -}
-           -- Add 'dname' to parent directory's contents
-           addDirEnt_lckd pdh dname thisIR user group perms Directory
-           return thisIR
-    -- End critical section over parent's DirHandle 
-  logMsg (hsLogger fs) $ "makeDirectory exit: " ++ dname
-  return rslt
+         -- Add 'dname' to parent directory's contents
+         addDirEnt_lckd pdh dname thisIR user group perms Directory
+         return thisIR
+  -- End critical section over parent's DirHandle 
   where
     dev = hsBlockDev fs
 
@@ -140,12 +97,8 @@ syncDirectory :: HalfsCapable b t r l m =>
               -> DirHandle r l
               -> HalfsM m ()
 syncDirectory fs dh = do 
-  tid <- getThreadId
-  logMsg (hsLogger fs) $ "syncDirectory: entry"
   withLock (dhLock dh) $ do 
-  logMsg (hsLogger fs) $ "syncDirectory: lock acquire"
   state <- readRef $ dhState dh
-  logMsg (hsLogger fs) $ "syncDirectory: read dh state"
   case state of
     Clean       -> return ()
     OnlyAdded   -> do
@@ -156,13 +109,11 @@ syncDirectory fs dh = do
       -- braindead, though.  Instead, we should do something like tracking the
       -- end of the stream and appending new contents there.
 
-      logMsg (hsLogger fs) $ "syncDirectory: " ++ show tid ++ " writing stream to inode = " ++ show (dhInode dh)
       writeStream fs (dhInode dh) 0 True toWrite
       modifyRef (dhState dh) dirStTransClean
   
     OnlyDeleted -> fail "syncDirectory for OnlyDeleted DirHandle state NYI"
     VeryDirty   -> fail "syncDirectory for VeryDirty DirHandle state NYI"
-  logMsg (hsLogger fs) $ "syncDirectory: leaving"
 
 -- | Obtains an active directory handle for the directory at the given InodeRef
 openDirectory :: HalfsCapable b t r l m =>
@@ -183,7 +134,6 @@ openDirectory fs inr = do
 
   -- TODO FIXME permissions checks!
 
-  logMsg (hsLogger fs) $ "openDirectory: entry"
   mdh <- withLockedRscRef (hsDHMap fs) (lookupRM inr)
   case mdh of
     Just dh -> return dh
@@ -217,9 +167,7 @@ closeDirectory :: HalfsCapable b t r l m =>
                -> DirHandle r l
                -> HalfsM m ()
 closeDirectory fs dh = do
-  logMsg (hsLogger fs) $ "in closeDirectory"
   syncDirectory fs dh
-  logMsg (hsLogger fs) $ "about to leave closeDirectory post syncDirectory"
   return ()
   
 -- | Add a directory entry for a file, directory, or symlink; expects
@@ -254,14 +202,6 @@ addDirEnt_lckd dh name ir u g mode ftype = do
   -- end sanity check
   modifyRef (dhContents dh) (M.insert name $ DirEnt name ir u g mode ftype)
   modifyRef (dhState dh) dirStTransAdd
-
-_addDot :: HalfsCapable b t r l m =>
-          DirHandle r l
-        -> UserID
-        -> GroupID
-        -> FileMode
-        -> HalfsM m ()
-_addDot dh u g mode = addDirEnt dh "." (dhInode dh) u g mode Directory
 
 -- | Finds a directory, file, or symlink given a starting inode
 -- reference (i.e., the directory inode at which to begin the search)
@@ -313,17 +253,11 @@ findInDir dh fname ftype = (fmap . fmap) deInode (findDE dh fname ftype)
 -- Utility functions
 
 withDirectory :: HalfsCapable b t r l m =>
-                 Bool
-              -> HalfsState b r l m
+                 HalfsState b r l m
               -> InodeRef
               -> (DirHandle r l -> HalfsM m a)
               -> HalfsM m a
-withDirectory v fs ir act = do 
-  dbug "withDirectory: entry" 
-  hbracket dbug (dbug "WITHDIR OPENDIR INVOKE" >> openDirectory fs ir)
-                (\x -> dbug "WITHDIR CLOSEDIR INVOKE" >> closeDirectory fs x)
-                act     
-  where dbug s = when v $ logMsg (hsLogger fs) s
+withDirectory fs ir = hbracket (openDirectory fs ir) (closeDirectory fs)
 
 isFileType :: DirectoryEntry -> FileType -> Bool
 isFileType _ AnyFileType              = True

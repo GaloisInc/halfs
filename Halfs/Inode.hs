@@ -63,7 +63,7 @@ import Halfs.Utils
 
 import System.Device.BlockDevice
 
-import Debug.Trace
+--import Debug.Trace
 dbug :: String -> a -> a
 dbug _ = id
 --dbug = trace
@@ -628,7 +628,7 @@ withLockedInode fs inr act =
   -- We use the map to track lock info so that we don't hold locks for lengthy
   -- intervals when we have access requests for disparate inode refs.
 
-  hbracket (const $ return ()) before after (const act {- inode lock doesn't escape -}) 
+  hbracket before after (const act {- inode lock doesn't escape! -}) 
 
   where
     before = do

@@ -53,27 +53,27 @@ type HalfsProp =
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [
---     exec 100 "Init and mount"         propM_initAndMountOK
---   ,
---     exec 100 "Mount/unmount"          propM_mountUnmountOK
---   ,
---     exec 100 "Unmount mutex"          propM_unmountMutexOK
---   ,
---     exec 100 "Directory construction" propM_dirConstructionOK
---   ,
---     exec 100 "Simple file creation"   propM_fileBasicsOK
---   ,
---     exec 100 "Simple file ops"        propM_simpleFileOpsOK
---   ,
---     exec 100 "chmod/chown ops"        propM_chmodchownOK
---   ,
---     exec 50  "File WR 1"              (propM_fileWROK "myfile")
---   ,
---     exec 50  "File WR 2"              (propM_fileWROK "foo/bar/baz")
---   ,
-    exec 1 "Directory mutex"        propM_dirMutexOK
---   ,
---     exec 100 "Hardlink creation"      propM_hardlinksOK
+    exec 100 "Init and mount"         propM_initAndMountOK
+  ,
+    exec 100 "Mount/unmount"          propM_mountUnmountOK
+  ,
+    exec 100 "Unmount mutex"          propM_unmountMutexOK
+  ,
+    exec 100 "Directory construction" propM_dirConstructionOK
+  ,
+    exec 100 "Simple file creation"   propM_fileBasicsOK
+  ,
+    exec 100 "Simple file ops"        propM_simpleFileOpsOK
+  ,
+    exec 100 "chmod/chown ops"        propM_chmodchownOK
+  ,
+    exec 50  "File WR 1"              (propM_fileWROK "myfile")
+  ,
+    exec 50  "File WR 2"              (propM_fileWROK "foo/bar/baz")
+  ,
+    exec 100 "Directory mutex"        propM_dirMutexOK
+  ,
+    exec 100 "Hardlink creation"      propM_hardlinksOK
   ]
   where
     exec = mkMemDevExec quick "CoreAPI"
@@ -379,12 +379,9 @@ propM_dirMutexOK :: BDGeom
                  -> BlockDevice IO
                  -> PropertyM IO ()
 propM_dirMutexOK _g dev = do
-  fs0 <- runH (mkNewFS dev) >> mountOK dev
-  outH <- run $ System.IO.openFile "dirmutex.log" System.IO.WriteMode
-  let fs = fs0 { hsLogger = Just $ \s -> System.IO.hPutStrLn outH s >> System.IO.hFlush outH }
+  fs <- runH (mkNewFS dev) >> mountOK dev
 
-  -- FIXME, 2..maxThreads range
-  forAllM (DirMutexOk `fmap` choose (maxThreads, maxThreads)) $ \(DirMutexOk n) -> do
+  forAllM (DirMutexOk `fmap` choose (8, maxThreads)) $ \(DirMutexOk n) -> do
   forAllM (mapM genNm [1..n])                        $ \nmss           -> do
 
   ch <- run newChan
@@ -402,9 +399,6 @@ propM_dirMutexOK _g dev = do
   let p = L.sort dnames
       q = L.sort (concat nmss ++ initDirEntNames)
 
-  when (p /= q) $
-    run $ putStrLn ("p/=q: " ++ "\np=" ++ show p ++ "\nq=" ++ show q) 
-
   assertMsg "propM_dirMutexOK" "Directory contents are coherent" $
     L.sort dnames == L.sort (concat nmss ++ initDirEntNames)
 
@@ -414,9 +408,9 @@ propM_dirMutexOK _g dev = do
 
   quickRemountCheck fs 
   where
-    maxDirs    = 100 -- } v was 50
-    maxLen     = 10 -- } -- was 40 arbitrary directory name length, but fit into small devices
-    maxThreads = 1
+    maxDirs    = 50 -- } v
+    maxLen     = 40 -- } arbitrary name length, but fit into small devices
+    maxThreads = 8
     exec       = execH "propM_dirMutexOK"
     ng f       = L.nub `fmap` vectorOf maxDirs (f maxLen) -- resize maxDirs (listOf1 $ f maxLen)
     -- 
