@@ -58,22 +58,22 @@ qcProps quick =
     exec 100 "Mount/unmount"          propM_mountUnmountOK
   ,
     exec 100 "Unmount mutex"          propM_unmountMutexOK
---   ,
---     exec 100 "Directory construction" propM_dirConstructionOK
---   ,
---     exec 100 "Simple file creation"   propM_fileBasicsOK
---   ,
---     exec 100 "Simple file ops"        propM_simpleFileOpsOK
---   ,
---     exec 100 "chmod/chown ops"        propM_chmodchownOK
---   ,
---     exec 50  "File WR 1"              (propM_fileWROK "myfile")
---   ,
---     exec 50  "File WR 2"              (propM_fileWROK "foo/bar/baz")
---   ,
---     exec 100 "Directory mutex"        propM_dirMutexOK
---   ,
---     exec 100 "Hardlink creation"      propM_hardlinksOK
+  ,
+    exec 100 "Directory construction" propM_dirConstructionOK
+  ,
+    exec 100 "Simple file creation"   propM_fileBasicsOK
+  ,
+    exec 100 "Simple file ops"        propM_simpleFileOpsOK
+  ,
+    exec 100 "chmod/chown ops"        propM_chmodchownOK
+  ,
+    exec 50  "File WR 1"              (propM_fileWROK "myfile")
+  ,
+    exec 50  "File WR 2"              (propM_fileWROK "foo/bar/baz")
+  ,
+    exec 100 "Directory mutex"        propM_dirMutexOK
+  ,
+    exec 100 "Hardlink creation"      propM_hardlinksOK
   ]
   where
     exec = mkMemDevExec quick "CoreAPI"
@@ -168,12 +168,11 @@ propM_dirConstructionOK :: HalfsProp
 propM_dirConstructionOK _g dev = do
   fs <- runH (mkNewFS dev) >> mountOK dev
 
-  -- Check that the root directory is present and contains only the initial
-  -- directory entries.
+  -- Check that the root directory is present and empty (. and .. are
+  -- implicit via readDir)
   exec "openDir /" (openDir fs rootPath) >>= \dh -> do
     assert =<< (== Clean) `fmap` sreadRef (dhState dh)
-    assert =<< ((== initDirEntNames) . L.sort . map deName . M.elems)
-               `fmap` sreadRef (dhContents dh)
+    assert =<< M.null `fmap` sreadRef (dhContents dh)
     
   -- TODO: replace this with a random valid hierarchy
   let p0 = rootPath </> "foo"
@@ -193,9 +192,9 @@ propM_dirConstructionOK _g dev = do
       exec ("mkdir " ++ p) (mkdir fs p defaultDirPerms)
       isEmpty fs =<< exec ("openDir " ++ p) (openDir fs p)
     -- 
-    isEmpty fs dh = do
-      assert =<< (null . flip (\\) initDirEntNames . map fst)
-                 `fmap` exec ("readDir") (readDir fs dh)
+    isEmpty fs dh = 
+      assert =<< do dnames <- map fst `fmap` exec "readDir" (readDir fs dh)
+                    return $ L.sort dnames == L.sort initDirEntNames
 
 -- | Ensure that a new filesystem populated with a handful of
 -- directories permits creation/open/close of a file; also checks open
