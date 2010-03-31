@@ -58,22 +58,22 @@ qcProps quick =
     exec 100 "Mount/unmount"          propM_mountUnmountOK
   ,
     exec 100 "Unmount mutex"          propM_unmountMutexOK
-  ,
-    exec 100 "Directory construction" propM_dirConstructionOK
-  ,
-    exec 100 "Simple file creation"   propM_fileBasicsOK
-  ,
-    exec 100 "Simple file ops"        propM_simpleFileOpsOK
-  ,
-    exec 100 "chmod/chown ops"        propM_chmodchownOK
-  ,
-    exec 50  "File WR 1"              (propM_fileWROK "myfile")
-  ,
-    exec 50  "File WR 2"              (propM_fileWROK "foo/bar/baz")
-  ,
-    exec 100 "Directory mutex"        propM_dirMutexOK
-  ,
-    exec 100 "Hardlink creation"      propM_hardlinksOK
+--   ,
+--     exec 100 "Directory construction" propM_dirConstructionOK
+--   ,
+--     exec 100 "Simple file creation"   propM_fileBasicsOK
+--   ,
+--     exec 100 "Simple file ops"        propM_simpleFileOpsOK
+--   ,
+--     exec 100 "chmod/chown ops"        propM_chmodchownOK
+--   ,
+--     exec 50  "File WR 1"              (propM_fileWROK "myfile")
+--   ,
+--     exec 50  "File WR 2"              (propM_fileWROK "foo/bar/baz")
+--   ,
+--     exec 100 "Directory mutex"        propM_dirMutexOK
+--   ,
+--     exec 100 "Hardlink creation"      propM_hardlinksOK
   ]
   where
     exec = mkMemDevExec quick "CoreAPI"
@@ -389,30 +389,30 @@ propM_dirMutexOK _g dev = do
   -- ^ n threads attempting to create directories simultaneously in /
   exceptions <- catMaybes `fmap` replicateM n (run $ readChan ch)
   -- ^ barrier with exceptions aggregated from each thread
-  assertMsg "propM_dirMutexOK"
-            ("Caught exception(s) from thread(s): " ++ show exceptions)
-            (null exceptions)
+  assrt ("Caught exception(s) from thread(s): " ++ show exceptions)
+        (null exceptions)
 
   dh               <- exec "openDir /" $ openDir fs "/"
   (dnames, dstats) <- exec "readDir /" $ unzip `fmap` readDir fs dh
 
-  let p = L.sort dnames
-      q = L.sort (concat nmss ++ initDirEntNames)
-
-  assertMsg "propM_dirMutexOK" "Directory contents are coherent" $
-    L.sort dnames == L.sort (concat nmss ++ initDirEntNames)
+  let p = L.sort dnames; q = L.sort $ concat nmss ++ initDirEntNames
+  assrt ("Directory contents incoherent (found discrepancy: "
+          ++ show (nub $ (p \\ q) ++ (q \\ p)) ++ ")"
+        )
+        (p == q)
 
   -- Misc extra check; convenient to do it here
-  assertMsg "propM_dirMutexOK" "FileStats report Directory type" $
+  assrt "File stats reported non-Directory type" $
     all (== Directory) $ map fsType dstats
 
   quickRemountCheck fs 
   where
+    assrt      = assertMsg "propM_dirMutexOK"
     maxDirs    = 50 -- } v
     maxLen     = 40 -- } arbitrary name length, but fit into small devices
     maxThreads = 8
     exec       = execH "propM_dirMutexOK"
-    ng f       = L.nub `fmap` vectorOf maxDirs (f maxLen) -- resize maxDirs (listOf1 $ f maxLen)
+    ng f       = L.nub `fmap` resize maxDirs (listOf1 $ f maxLen)
     -- 
     genNm :: Int -> Gen [String]
     genNm n = map ((++) ("f" ++ show n ++ "_")) `fmap` ng filename

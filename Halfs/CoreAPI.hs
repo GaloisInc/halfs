@@ -88,12 +88,14 @@ newfs dev uid gid rdirPerms = do
   assert (BS.length dirInode == fromIntegral (bdBlockSize dev)) $ do
   lift $ bdWriteBlock dev rdirAddr dirInode
 
+{-
   -- Write the root directory entries: we can safely use the locked writeStream
   -- variant here, as no locks yet exist.
   writeStream_lckd dev blockMap rdirIR 0 True $
     encode [ DirEnt dotPath    rdirIR uid gid rdirPerms Directory
            , DirEnt dotdotPath rdirIR uid gid rdirPerms Directory
            ]
+-}
 
   finalFree <- readRef (bmNumFree blockMap)
   -- Persist the remaining data structures
@@ -207,14 +209,16 @@ readDir :: (HalfsCapable b t r l m) =>
         -> DirHandle r l
         -> HalfsM m [(FilePath, FileStat t)]
 readDir fs dh =
-  liftM M.toList $ T.mapM (fileStat fs) =<< withLock (dhLock dh) readContents
+  liftM M.toList $ T.mapM (fileStat fs) =<< readContents
   where
-    readContents = do 
-      contents <- fmap deInode `fmap` readRef (dhContents dh) 
-      -- HERE: transform to M.Map FilePath InodeRef here by T.mapM'ing
-      -- deInode, and then mix in '.' and '..' entries.
-      return contents
-
+    readContents = withLock (dhLock dh) $ do 
+      p    <- atomicReadInode fs (dhInode dh) inoParent
+      pinr <- if p == nilInodeRef
+               then rootDir `fmap` readRef (hsSuperBlock fs)
+               else return p
+      (M.insert dotdotPath pinr . M.insert dotPath (dhInode dh))
+        `fmap` fmap deInode `fmap` readRef (dhContents dh)
+ 
 -- | Synchronize the given directory to disk.
 syncDir :: (HalfsCapable b t r l m) =>
            HalfsState b r l m -> FilePath -> SyncType -> HalfsM m ()

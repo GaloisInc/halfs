@@ -65,7 +65,7 @@ makeDirectory fs parentIR dname user group perms = do
   if M.member dname contents
    then throwError $ HE_ObjectExists dname 
    else do
-     mir <- (fmap . fmap) blockAddrToInodeRef $ alloc1 (hsBlockMap fs)
+     mir <- fmap blockAddrToInodeRef `fmap` alloc1 (hsBlockMap fs)
      case mir of
        Nothing     -> throwError HE_AllocFailed
        Just thisIR -> do
@@ -246,7 +246,7 @@ findInDir :: HalfsCapable b t r l m =>
           -> String
           -> FileType
           -> HalfsM m (DirFindRslt InodeRef)
-findInDir dh fname ftype = (fmap . fmap) deInode (findDE dh fname ftype)
+findInDir dh fname ftype = fmap deInode `fmap` findDE dh fname ftype
 
 
 --------------------------------------------------------------------------------

@@ -14,7 +14,9 @@ module Halfs.Inode
   , writeStream
   -- * for internal use only!
   , atomicModifyInode
+  , atomicReadInode
   , bsReplicate
+  , drefInode
   , fileStat_lckd
   , withLockedInode
   , writeStream_lckd
@@ -142,7 +144,7 @@ minContBlocks = 57
 data (Eq t, Ord t, Serialize t) => Inode t = Inode
   { inoParent        :: InodeRef -- ^ block addr of parent directory inode:
                                  --   This is nilInodeRef for the root
-                                 --   directory inode and for inodes in the
+                                 --   directory inode
   -- begin fstat metadata
   , inoAddress       :: InodeRef -- ^ block addr of this inode
   , inoFileSize      :: Word64
@@ -585,6 +587,14 @@ atomicModifyInode fs inr f =
     inode' <- setChangeTime now `fmap` f inode
     lift $ writeInode (hsBlockDev fs) inode'
 
+atomicReadInode :: HalfsCapable b t r l m =>
+                   HalfsState b r l m
+                -> InodeRef
+                -> (Inode t -> a)
+                -> HalfsM m a
+atomicReadInode fs inr f = do
+  withLockedInode fs inr $ f `fmap` drefInode (hsBlockDev fs) inr
+
 fileStat :: HalfsCapable b t r l m =>
             HalfsState b r l m
          -> InodeRef
@@ -748,7 +758,7 @@ allocFill dev bm avail blksToAlloc contsToAlloc existing = do
       else do
         -- TODO: Catch allocation errors and unalloc partial allocs?
         mconts <- fmap sequence $ replicateM (safeToInt contsToAlloc) $ do
-          mcr <- (fmap . fmap) CR (BM.alloc1 bm)
+          mcr <- fmap CR `fmap` BM.alloc1 bm
           case mcr of
             Nothing -> return Nothing
             Just cr -> Just `fmap` lift (buildEmptyCont dev cr)

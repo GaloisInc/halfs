@@ -43,7 +43,7 @@ createFile :: HalfsCapable b t r l m =>
            -> FileMode
            -> HalfsM m InodeRef
 createFile fs parentDH fname usr grp mode = do
-  mfileIR <- (fmap . fmap) blockAddrToInodeRef $ lift $ alloc1 (hsBlockMap fs)
+  mfileIR <- fmap blockAddrToInodeRef `fmap` lift (alloc1 $ hsBlockMap fs)
   case mfileIR of
     Nothing      -> throwError HE_AllocFailed
     Just fileIR -> do
