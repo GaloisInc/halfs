@@ -35,7 +35,6 @@ import Halfs.Inode ( InodeRef(..)
                    , inodeRefToBlockAddr
                    , readStream
                    , writeStream
-                   , writeStream_lckd
                    )
 import Halfs.Protection
 import Halfs.Types

@@ -26,7 +26,7 @@ import Halfs.File hiding (createFile)
 import Halfs.HalfsState
 import qualified Halfs.Inode as IN
 import Halfs.Monad
-import Halfs.Protection
+-- import Halfs.Protection
 import Halfs.SuperBlock
 import Halfs.Types
 
@@ -36,7 +36,6 @@ import Tests.Instances (printableBytes, filename)
 import Tests.Types
 import Tests.Utils
 
-import qualified System.IO
 import Debug.Trace
 
 
@@ -363,10 +362,23 @@ propM_chmodchownOK _g dev = do
   -- chown/chgrp to random uid/gid and check
   forAllM arbitrary $ \usr -> do
   forAllM arbitrary $ \grp -> do                             
-  exec "ch{own,grp} root /foo" $ chown fs fp usr grp
-  st1 <- exec "fstat /foo"     $ fstat fs fp
+  exec "ch{own,grp} /foo"  $ chown fs fp (Just usr) (Just grp)
+  st1 <- exec "fstat /foo" $ fstat fs fp
   assert (fsUID st1 == usr)
   assert (fsGID st1 == grp)
+
+  -- No change variants
+  forAllM arbitrary $ \usr2 -> do
+  forAllM arbitrary $ \grp2 -> do
+  exec "chown /foo" $ chown fs fp (Just usr2) Nothing -- don't change group
+  st2 <- exec "fstat /foo" $ fstat fs fp
+  assert (fsUID st2 == usr2)
+  assert (fsGID st2 == grp)
+
+  exec "chgrp /foo" $ chown fs fp Nothing (Just grp2) -- don't change user
+  st3 <- exec "fstat /foo" $ fstat fs fp
+  assert (fsUID st3 == usr2)
+  assert (fsGID st3 == grp2)
 
   quickRemountCheck fs
   where

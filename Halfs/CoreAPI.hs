@@ -27,8 +27,6 @@ import Halfs.Utils
 
 import System.Device.BlockDevice
 
-import Debug.Trace
-
 data SyncType = Data | Everything
 
 data FileSystemStats = FSS
@@ -358,10 +356,17 @@ chmod fs fp mode = do
   modifyInode fs fp $ \nd -> nd{ inoMode = mode }
 
 chown :: (HalfsCapable b t r l m) =>
-         HalfsState b r l m -> FilePath -> UserID -> GroupID -> HalfsM m ()
-chown fs fp usr grp = do
+         HalfsState b r l m
+      -> FilePath
+      -> Maybe UserID  -- ^ Nothing indicates no change to user
+      -> Maybe GroupID -- ^ Nothing indicates no change to group
+      -> HalfsM m ()
+chown fs fp musr mgrp = do
   -- TODO: Check perms
-  modifyInode fs fp $ \nd -> nd{ inoUser = usr, inoGroup = grp }
+  modifyInode fs fp $ \nd ->
+    nd{ inoUser  = maybe (inoUser nd) id musr
+      , inoGroup = maybe (inoGroup nd) id mgrp
+      }
 
 access :: (HalfsCapable b t r l m) =>
           HalfsState b r l m -> FilePath -> [AccessRight] -> HalfsM m ()

@@ -28,7 +28,7 @@ import Tests.Instances           (printableBytes)
 import Tests.Types
 import Tests.Utils
 
-import Debug.Trace
+-- import Debug.Trace
 
 
 --------------------------------------------------------------------------------

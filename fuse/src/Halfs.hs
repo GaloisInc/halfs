@@ -254,10 +254,21 @@ halfsSetOwnerAndGroup :: HalfsCapable b t r l m =>
                          HalfsSpecific b r l m
                       -> FilePath -> UserID -> GroupID
                       -> m Errno
-halfsSetOwnerAndGroup HS{ hspLogger = log, hspState = fs } fp uid gid = do
+halfsSetOwnerAndGroup HS{ hspLogger = log, hspState = fs } fp uid' gid' = do
+  -- uid and gid get passed as System.Posix.Types.C[UG]id which are newtype'd
+  -- Word32s.  Unfortunately, this means that a user or group argument of -1
+  -- (which means "unchanged" according to the man page for chown(2)) is only
+  -- visible to us here as maxBound :: Word32.
+
+  let uid   = cvt uid'
+      gid   = cvt gid'
+      cvt x = if fromIntegral x == (maxBound :: Word32)
+               then Nothing
+               else Just (fromIntegral x)
+
   log $ "halfsSetOwnerAndGroup: setting " ++ show fp ++ " to user = "
         ++ show uid ++ ", group = " ++ show gid
-  execDefault log $ chown fs fp (fromIntegral uid) (fromIntegral gid)
+  execDefault log $ chown fs fp uid gid
          
 halfsSetFileSize :: HalfsCapable b t r l m =>
                     HalfsSpecific b r l m
