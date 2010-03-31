@@ -209,15 +209,17 @@ readDir :: (HalfsCapable b t r l m) =>
         -> DirHandle r l
         -> HalfsM m [(FilePath, FileStat t)]
 readDir fs dh =
-  liftM M.toList $ T.mapM (fileStat fs) =<< readContents
-  where
-    readContents = withLock (dhLock dh) $ do 
-      p    <- atomicReadInode fs (dhInode dh) inoParent
-      pinr <- if p == nilInodeRef
-               then rootDir `fmap` readRef (hsSuperBlock fs)
-               else return p
-      (M.insert dotdotPath pinr . M.insert dotPath (dhInode dh))
-        `fmap` fmap deInode `fmap` readRef (dhContents dh)
+  withLock (dhLock dh) $ do
+    contents <- liftM M.toList $
+                  T.mapM (fileStat fs)
+                    =<< fmap deInode `fmap` readRef (dhContents dh)
+    thisStat   <- fileStat fs (dhInode dh)
+    parentStat <- fileStat fs =<< do
+      p <- atomicReadInode fs (dhInode dh) inoParent
+      if p == nilInodeRef
+       then rootDir `fmap` readRef (hsSuperBlock fs)
+       else return p
+    return $ (dotPath, thisStat) : (dotdotPath, parentStat) : contents
  
 -- | Synchronize the given directory to disk.
 syncDir :: (HalfsCapable b t r l m) =>
