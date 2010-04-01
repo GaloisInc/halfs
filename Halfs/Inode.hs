@@ -66,7 +66,7 @@ import Halfs.Utils
 
 import System.Device.BlockDevice
 
---import Debug.Trace
+import Debug.Trace
 dbug :: String -> a -> a
 dbug _ = id
 --dbug = trace
@@ -632,9 +632,12 @@ freeInode :: HalfsCapable b t r l m =>
              HalfsState b r l m
           -> InodeRef -- ^ reference to the inode to remove
           -> HalfsM m ()
-freeInode fs inr@(IR addr) = 
+freeInode fs@HalfsState{ hsBlockDev = dev, hsBlockMap = bm } inr@(IR addr) = 
   withLockedInode fs inr $ do
-    writeStream_lckd (hsBlockDev fs) (hsBlockMap fs) inr 0 True BS.empty
+    conts <- expandConts dev =<< inoCont `fmap` drefInode dev inr
+    lift $ BM.unallocBlocks bm $ BM.Discontig $ map (`BM.Extent` 1) $
+      concatMap blockAddrs conts ++ map (unCR . address) (tail conts)
+      -- ^ all blocks in all conts; ^ blocks for non-embedded cont storage
     BM.unalloc1 (hsBlockMap fs) addr
 
 withLockedInode :: HalfsCapable b t r l m =>
