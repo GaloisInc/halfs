@@ -37,15 +37,15 @@ import Tests.Utils
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [ -- Inode module invariants
-    exec 100 "Inode module invariants" propM_inodeModuleInvs
+    exec 10 "Inode module invariants" propM_inodeModuleInvs
   , -- Inode stream write/read/(over)write/read property
-    exec 100 "Basic WRWR" propM_basicWRWR
+    exec 10 "Basic WRWR" propM_basicWRWR
   , -- Inode stream write/read/(truncating)write/read property
-    exec 100 "Truncating WRWR" propM_truncWRWR
+    exec 10 "Truncating WRWR" propM_truncWRWR
   , -- Inode length-specific stream write/read
-    exec 100 "Length-specific WR" propM_lengthWR
+    exec 10 "Length-specific WR" propM_lengthWR
   , -- Inode single reader/writer lock testing
-    exec 100 "Inode single reader/write mutex" propM_inodeMutexOK
+    exec 10 "Inode single reader/write mutex" propM_inodeMutexOK
   ]
   where
     exec = mkMemDevExec quick "Inode"

@@ -21,6 +21,7 @@ data HalfsError =
   | HE_DecodeFail_Directory String
   | HE_DecodeFail_Inode String
   | HE_DirectoryHandleNotFound
+  | HE_DirectoryNotEmpty
   | HE_ErrnoAnnotated HalfsError Errno
   | HE_FileNotFound
   | HE_InternalError String

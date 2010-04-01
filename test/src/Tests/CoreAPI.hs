@@ -52,27 +52,29 @@ type HalfsProp =
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [
-    exec 100 "Init and mount"         propM_initAndMountOK
-  ,
-    exec 100 "Mount/unmount"          propM_mountUnmountOK
-  ,
-    exec 100 "Unmount mutex"          propM_unmountMutexOK
-  ,
-    exec 100 "Directory construction" propM_dirConstructionOK
-  ,
-    exec 100 "Simple file creation"   propM_fileBasicsOK
-  ,
-    exec 100 "Simple file ops"        propM_simpleFileOpsOK
-  ,
-    exec 100 "chmod/chown ops"        propM_chmodchownOK
-  ,
-    exec 50  "File WR 1"              (propM_fileWROK "myfile")
-  ,
-    exec 50  "File WR 2"              (propM_fileWROK "foo/bar/baz")
-  ,
-    exec 100 "Directory mutex"        propM_dirMutexOK
-  ,
-    exec 100 "Hardlink creation"      propM_hardlinksOK
+--     exec 10 "Init and mount"         propM_initAndMountOK
+--   ,
+--     exec 10 "Mount/unmount"          propM_mountUnmountOK
+--   ,
+--     exec 10 "Unmount mutex"          propM_unmountMutexOK
+--   ,
+--     exec 10 "Directory construction" propM_dirConstructionOK
+--   ,
+--     exec 10 "Simple file creation"   propM_fileBasicsOK
+--   ,
+--     exec 10 "Simple file ops"        propM_simpleFileOpsOK
+--   ,
+--     exec 10 "chmod/chown ops"        propM_chmodchownOK
+--   ,
+--     exec 5  "File WR 1"              (propM_fileWROK "myfile")
+--   ,
+--     exec 5  "File WR 2"              (propM_fileWROK "foo/bar/baz")
+--   ,
+--     exec 10 "Directory mutex"        propM_dirMutexOK
+--   ,
+--     exec 10 "Hardlink creation"      propM_hardlinksOK
+--   ,
+    exec 1 "Simple rmdir"            propM_simpleRmdirOK
   ]
   where
     exec = mkMemDevExec quick "CoreAPI"
@@ -488,6 +490,32 @@ propM_hardlinksOK _g dev = do
     --
     expectErrno exp (Left (HE_ErrnoAnnotated _ errno)) = assert (errno == exp)
     expectErrno _ _                                    = assert False
+
+propM_simpleRmdirOK :: HalfsProp
+propM_simpleRmdirOK _g dev = do
+  fs <- runH (mkNewFS dev) >> mountOK dev
+
+  -- Expected error: removal of non-empty directory
+  exec "mkdir /foo"     $ mkdir fs d0 defaultDirPerms
+  exec "create /foo/f1" $ createFile fs fp defaultFilePerms
+  e0 <- runH $ rmdir fs d0
+  case e0 of
+    Left (HE_DirectoryNotEmpty) -> return ()
+    _                           -> assert False
+
+  -- simple mkdir/rmdir check
+  exec "mkdir /foo/bar" $ mkdir fs d1 defaultFilePerms
+  assert =<< exists fs d1
+  exec "rmdir /foo/bar" $ rmdir fs d1
+  assert =<< not `fmap` exists fs d1
+  where
+    exec           = execH "propM_simpleRmdirOK"
+    d0             = rootPath </> "foo"
+    d1             = d0       </> "bar"
+    fp             = d0       </> "f1"
+    exists fs path = (elem (takeFileName path) . map fst)
+                     `fmap` exec ("readDir " ++ path)
+                                 (withDir fs (takeDirectory path) $ readDir fs)
 
 
 --------------------------------------------------------------------------------

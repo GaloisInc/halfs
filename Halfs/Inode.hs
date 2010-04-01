@@ -18,6 +18,7 @@ module Halfs.Inode
   , bsReplicate
   , drefInode
   , fileStat_lckd
+  , freeInode
   , withLockedInode
   , writeStream_lckd
   -- * for testing: ought not be used by actual clients of this module!
@@ -479,34 +480,36 @@ writeStream_lckd dev bm startIR start trunc bytes           = do
     allocFill dev bm availBlks blksToAlloc contsToAlloc conts0
 
   let stCont1 = conts1 !! safeToInt sContIdx
-  sBlk <- lift $ readBlock dev stCont1 sBlkOff
 
-  let (sData, bytes') = bsSplitAt (bs - sByteOff) bytes
-      -- The first block-sized chunk to write is the region in the start block
-      -- prior to the start byte offset (header), followed by the first bytes of
-      -- the data.  The trailer is nonempty and must be included when BS.length
-      -- bytes < bs.
-      firstChunk =
-        let header   = bsTake sByteOff sBlk
-            trailLen = sByteOff + fromIntegral (BS.length sData)
-            trailer  = if trunc
-                       then bsReplicate (bs - trailLen) truncSentinel
-                       else bsDrop trailLen sBlk
-            r        = header `BS.append` sData `BS.append` trailer
-        in assert (fromIntegral (BS.length r) == bs) r
-
-      -- Destination block addresses starting at the the start block
-      blkAddrs = genericDrop sBlkOff (blockAddrs stCont1)
-                 ++ concatMap blockAddrs (genericDrop (sContIdx + 1) conts1)
-
-  chunks <- (firstChunk:) `fmap`
-            unfoldrM (lift . getBlockContents dev trunc)
-                     (bytes', drop 1 blkAddrs)
-
-  assert (all ((== safeToInt bs) . BS.length) chunks) $ do
-
-  -- Write the data into the appropriate blocks
-  mapM_ (\(a,d) -> lift $ bdWriteBlock dev a d) (blkAddrs `zip` chunks)
+  when (sBlkOff < blockCount stCont1) $ do 
+    sBlk <- lift $ readBlock dev stCont1 sBlkOff
+  
+    let (sData, bytes') = bsSplitAt (bs - sByteOff) bytes
+        -- The first block-sized chunk to write is the region in the start block
+        -- prior to the start byte offset (header), followed by the first bytes of
+        -- the data.  The trailer is nonempty and must be included when BS.length
+        -- bytes < bs.
+        firstChunk =
+          let header   = bsTake sByteOff sBlk
+              trailLen = sByteOff + fromIntegral (BS.length sData)
+              trailer  = if trunc
+                         then bsReplicate (bs - trailLen) truncSentinel
+                         else bsDrop trailLen sBlk
+              r        = header `BS.append` sData `BS.append` trailer
+          in assert (fromIntegral (BS.length r) == bs) r
+  
+        -- Destination block addresses starting at the the start block
+        blkAddrs = genericDrop sBlkOff (blockAddrs stCont1)
+                   ++ concatMap blockAddrs (genericDrop (sContIdx + 1) conts1)
+  
+    chunks <- (firstChunk:) `fmap`
+              unfoldrM (lift . getBlockContents dev trunc)
+                       (bytes', drop 1 blkAddrs)
+  
+    assert (all ((== safeToInt bs) . BS.length) chunks) $ do
+  
+    -- Write the data into the appropriate blocks
+    mapM_ (\(a,d) -> lift $ bdWriteBlock dev a d) (blkAddrs `zip` chunks)
 
   -- If this is a truncating write where we're not growing the region, free all
   -- blocks/Conts beyond in the leftover region endpoint and fix up the chain
@@ -624,6 +627,15 @@ fileStat_lckd dev inr = do
 
 --------------------------------------------------------------------------------
 -- Inode/Cont stream helper & utility functions 
+
+freeInode :: HalfsCapable b t r l m =>
+             HalfsState b r l m
+          -> InodeRef -- ^ reference to the inode to remove
+          -> HalfsM m ()
+freeInode fs inr@(IR addr) = 
+  withLockedInode fs inr $ do
+    writeStream_lckd (hsBlockDev fs) (hsBlockMap fs) inr 0 True BS.empty
+    BM.unalloc1 (hsBlockMap fs) addr
 
 withLockedInode :: HalfsCapable b t r l m =>
                    HalfsState b r l m

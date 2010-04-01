@@ -10,6 +10,7 @@ module Halfs.Directory
   , findInDir
   , makeDirectory
   , openDirectory
+  , removeDirectory
   , syncDirectory
   , withDirectory
   -- * for internal use only
@@ -32,9 +33,12 @@ import Halfs.Classes
 import Halfs.Errors
 import Halfs.HalfsState
 import Halfs.Monad
-import Halfs.Inode ( InodeRef(..)
+import Halfs.Inode ( Inode(..)
+                   , InodeRef(..)
+                   , atomicReadInode
                    , blockAddrToInodeRef
                    , buildEmptyInodeEnc
+                   , freeInode
                    , inodeRefToBlockAddr
                    , readStream
                    , writeStream
@@ -43,6 +47,8 @@ import Halfs.Protection
 import Halfs.Types
 import Halfs.Utils
 import System.Device.BlockDevice
+
+import Debug.Trace
 
 
 --------------------------------------------------------------------------------
@@ -93,17 +99,40 @@ makeDirectory fs parentIR dname user group perms =
 -- | Given a parent directory's inode ref, remove the directory with the given name.
 removeDirectory :: HalfsCapable b t r l m =>
                    HalfsState b r l m -- ^ the filesystem
+                -> String             -- ^ directory basename
                 -> InodeRef           -- ^ inode of directory to remove
                 -> HalfsM m ()
-removeDirectory fs inr =
+removeDirectory fs dname inr =
   -- We lock the dirhandle map so (a) there's no contention for
   -- dirhandle lookup/creation for the directory we're removing and (b)
   -- so we can ensure that the directory is empty.
   withLockedRscRef (hsDHMap fs) $ \dhMapRef -> do
-  undefined -- HERE
-    
---   withDirectory fs parentIR $ \pdh -> do
---   withLock (dhLock pdh) $ do
+  dh <- lookupRM inr dhMapRef >>= maybe (newDirHandle fs inr) return
+  withLock (dhLock dh) $ do
+
+  -- begin dirhandle critical section   
+
+  contents <- readRef (dhContents dh)
+  unless (M.null contents) $ throwError HE_DirectoryNotEmpty
+
+  trace ("got locks and about to rment from parent") $ do
+  pinr <- atomicReadInode fs inr inoParent
+  trace ("inr = " ++ show inr ++ ", pinr = " ++ show pinr) $ do 
+
+  -- Purge this dir's dirent from the parent directory
+  pdh <- lookupRM pinr dhMapRef >>= maybe (newDirHandle fs pinr) return
+  rmDirEnt pdh dname
+
+  trace ("rm'd from parent") $ do
+
+  writeRef (dhInode dh) Nothing -- Invalidate dh so that all subsequent
+                                -- DH-mediated access to this directory will
+                                -- fail
+  trace ("invalidated dh") $ do
+  freeInode fs inr
+  trace ("freed inode") $ return ()
+  -- end dirhandle critical section   
+
   -- Begin critical section over parent's DirHandle
   {-
     Sketch:
@@ -238,24 +267,6 @@ openDirectory fs inr = do
             modifyRef ref (M.insert inr dh)
             return dh
 
-
-newDirHandle :: HalfsCapable b t r l m =>
-                HalfsState b r l m
-             -> InodeRef
-             -> HalfsM m (DirHandle r l)
-newDirHandle fs inr = do
-  rawDirBytes <- readStream fs inr 0 Nothing
-  dirEnts     <- if BS.null rawDirBytes
-                 then do return []
-                 else case decode rawDirBytes of 
-                   Left msg -> throwError $ HE_DecodeFail_Directory msg
-                   Right x  -> return x
-  DirHandle
-    `fmap` newRef (Just inr)
-    `ap`   newRef (M.fromList $ map deName dirEnts `zip` dirEnts)
-    `ap`   newRef Clean
-    `ap`   newLock
-
 closeDirectory :: HalfsCapable b t r l m =>
                   HalfsState b r l m 
                -> DirHandle r l
@@ -301,19 +312,19 @@ addDirEnt_lckd dh name inr u g mode ftype = do
 rmDirEnt :: HalfsCapable b t r l m =>
             DirHandle r l
          -> String
-         -> InodeRef
          -> HalfsM m ()
-rmDirEnt dh name inr = 
-  withLock (dhLock dh) $ rmDirEnt_lckd dh name inr
+rmDirEnt dh name =
+  trace ("rmDirEnt entry, prior to dh lock acqui") $ do
+  withLock (dhLock dh) $ rmDirEnt_lckd dh name
 
 rmDirEnt_lckd :: HalfsCapable b t r l m =>
                  DirHandle r l
               -> String
-              -> InodeRef
               -> HalfsM m ()
-rmDirEnt_lckd dh name ir = do
+rmDirEnt_lckd dh name = do
   -- Precond: (dhLock dh) is currently held (can we assert this? TODO)
   -- begin sanity check
+  trace ("rmDirEnt_lckd: entry") $ do
   mfound <- lookupRM name (dhContents dh)
   maybe (throwError $ HE_ObjectDNE name) (const $ return ()) mfound
   -- end sanity check
@@ -369,12 +380,22 @@ findInDir dh fname ftype = fmap deInode `fmap` findDE dh fname ftype
 --------------------------------------------------------------------------------
 -- Utility functions
 
-withDirectory :: HalfsCapable b t r l m =>
-                 HalfsState b r l m
-              -> InodeRef
-              -> (DirHandle r l -> HalfsM m a)
-              -> HalfsM m a
-withDirectory fs ir = hbracket (openDirectory fs ir) (closeDirectory fs)
+newDirHandle :: HalfsCapable b t r l m =>
+                HalfsState b r l m
+             -> InodeRef
+             -> HalfsM m (DirHandle r l)
+newDirHandle fs inr = do
+  rawDirBytes <- readStream fs inr 0 Nothing
+  dirEnts     <- if BS.null rawDirBytes
+                 then do return []
+                 else case decode rawDirBytes of 
+                   Left msg -> throwError $ HE_DecodeFail_Directory msg
+                   Right x  -> return x
+  DirHandle
+    `fmap` newRef (Just inr)
+    `ap`   newRef (M.fromList $ map deName dirEnts `zip` dirEnts)
+    `ap`   newRef Clean
+    `ap`   newLock
 
 -- Get directory handle's inode reference...
 getDHINR_lckd :: HalfsCapable b t r l m =>
@@ -383,7 +404,13 @@ getDHINR_lckd :: HalfsCapable b t r l m =>
 getDHINR_lckd dh = do
   -- Precond: (dhLock dh) has been acquired (TODO: can we assert this?)
   readRef (dhInode dh) >>= maybe (throwError HE_InvalidDirHandle) return
---  maybe (throwError HE_InvalidDirHandle) id `fmap` readRef (dhInode dh)
+
+withDirectory :: HalfsCapable b t r l m =>
+                 HalfsState b r l m
+              -> InodeRef
+              -> (DirHandle r l -> HalfsM m a)
+              -> HalfsM m a
+withDirectory fs ir = hbracket (openDirectory fs ir) (closeDirectory fs)
 
 isFileType :: DirectoryEntry -> FileType -> Bool
 isFileType _ AnyFileType              = True

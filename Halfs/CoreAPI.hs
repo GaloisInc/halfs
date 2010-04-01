@@ -192,7 +192,7 @@ mkdir fs fp fm = do
 
 rmdir :: (HalfsCapable b t r l m) =>
          HalfsState b r l m -> FilePath -> HalfsM m ()
-rmdir = undefined
+rmdir fs fp = absPathIR fs fp Directory >>= removeDirectory fs (takeBaseName fp)
 
 openDir :: (HalfsCapable b t r l m) =>
            HalfsState b r l m -> FilePath -> HalfsM m (DirHandle r l)
