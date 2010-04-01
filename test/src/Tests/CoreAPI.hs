@@ -504,11 +504,14 @@ propM_simpleRmdirOK _g dev = do
     _                           -> assert False
 
   -- simple mkdir/rmdir check
+  freeBefore <- getFree fs
   exec "mkdir /foo/bar" $ mkdir fs d1 defaultFilePerms
   assert =<< exists fs d1
   exec "rmdir /foo/bar" $ rmdir fs d1
+  assert =<< liftM2 (==) (getFree fs) (return freeBefore)
   assert =<< not `fmap` exists fs d1
   where
+    getFree        = sreadRef . bmNumFree . hsBlockMap
     exec           = execH "propM_simpleRmdirOK"
     d0             = rootPath </> "foo"
     d1             = d0       </> "bar"
