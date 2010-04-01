@@ -49,7 +49,7 @@ createFile fs parentDH fname usr grp mode = do
     Just fileIR -> do
       let dev = hsBlockDev fs
       withLock (dhLock parentDH) $ do
-      pIR <- getDHINR_lckd parentDH               
+      pIR <- getDHINR_lckd parentDH
       n   <- lift $ buildEmptyInodeEnc
                       dev
                       RegularFile

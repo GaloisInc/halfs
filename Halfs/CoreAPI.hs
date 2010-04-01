@@ -566,11 +566,13 @@ withDir :: HalfsCapable b t r l m =>
         -> FilePath
         -> (DirHandle r l -> HalfsM m a)
         -> HalfsM m a
-withDir fs fp f = do
+withDir fs fp = hbracket (openDir fs fp) (closeDir fs) 
+{-
   dh   <- openDir fs fp
   rslt <- f dh `catchError` \e -> closeDir fs dh >> throwError e
   closeDir fs dh
   return rslt
+-}
 
 withFile :: (HalfsCapable b t r l m) =>
             HalfsState b r l m

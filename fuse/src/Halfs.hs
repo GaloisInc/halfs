@@ -216,6 +216,7 @@ halfsRemoveDirectory :: HalfsCapable b t r l m =>
 halfsRemoveDirectory HS{ hspLogger = log, hspState = fs } fp = do
   log $ "halfsRemoveDirectory: removing " ++ show fp
   execDefault log $ rmdir fs fp
+
          
 halfsCreateSymbolicLink :: HalfsCapable b t r l m =>
                            HalfsSpecific b r l m

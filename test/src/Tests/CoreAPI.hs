@@ -6,6 +6,7 @@ module Tests.CoreAPI
 where
 
 import Control.Concurrent
+import Data.Either
 import Data.List
 import Data.Maybe
 import Data.Serialize
@@ -52,29 +53,31 @@ type HalfsProp =
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [
---     exec 10 "Init and mount"         propM_initAndMountOK
---   ,
---     exec 10 "Mount/unmount"          propM_mountUnmountOK
---   ,
---     exec 10 "Unmount mutex"          propM_unmountMutexOK
---   ,
---     exec 10 "Directory construction" propM_dirConstructionOK
---   ,
---     exec 10 "Simple file creation"   propM_fileBasicsOK
---   ,
---     exec 10 "Simple file ops"        propM_simpleFileOpsOK
---   ,
---     exec 10 "chmod/chown ops"        propM_chmodchownOK
---   ,
---     exec 5  "File WR 1"              (propM_fileWROK "myfile")
---   ,
---     exec 5  "File WR 2"              (propM_fileWROK "foo/bar/baz")
---   ,
---     exec 10 "Directory mutex"        propM_dirMutexOK
---   ,
---     exec 10 "Hardlink creation"      propM_hardlinksOK
---   ,
-    exec 1 "Simple rmdir"            propM_simpleRmdirOK
+    exec 10 "Init and mount"         propM_initAndMountOK
+  ,
+    exec 10 "Mount/unmount"          propM_mountUnmountOK
+  ,
+    exec 10 "Unmount mutex"          propM_unmountMutexOK
+  ,
+    exec 10 "Directory construction" propM_dirConstructionOK
+  ,
+    exec 10 "Simple file creation"   propM_fileBasicsOK
+  ,
+    exec 10 "Simple file ops"        propM_simpleFileOpsOK
+  ,
+    exec 10 "chmod/chown ops"        propM_chmodchownOK
+  ,
+    exec 5  "File WR 1"              (propM_fileWROK "myfile")
+  ,
+    exec 5  "File WR 2"              (propM_fileWROK "foo/bar/baz")
+  ,
+    exec 10 "Directory mutex"        propM_dirMutexOK
+  ,
+    exec 10 "Hardlink creation"      propM_hardlinksOK
+  ,
+    exec 10 "Simple rmdir"           propM_simpleRmdirOK
+  ,
+    exec 10 "rmdir mutex"            propM_rmdirMutexOK
   ]
   where
     exec = mkMemDevExec quick "CoreAPI"
@@ -506,7 +509,7 @@ propM_simpleRmdirOK _g dev = do
 
   -- simple mkdir/rmdir check
   freeBefore <- getFree fs
-  exec "mkdir /foo/bar" $ mkdir fs d1 defaultFilePerms
+  exec "mkdir /foo/bar" $ mkdir fs d1 defaultDirPerms
   dh <- exec "openDir /foo/bar" $ openDir fs d1
   assert =<< exists fs d1
   exec "rmdir /foo/bar" $ rmdir fs d1
@@ -528,6 +531,70 @@ propM_simpleRmdirOK _g dev = do
     exists fs path = (elem (takeFileName path) . map fst)
                      `fmap` exec ("readDir " ++ path)
                                  (withDir fs (takeDirectory path) $ readDir fs)
+
+-- Simple sanity check for the mutex behavior rmdir is supposed to be enforcing.
+-- We have two threads, A and B.  Thread A repeatedly attempts to create a
+-- directory and delete it.  Directory creation should never fail. Thread B
+-- repeatedly attempts to readDir on the directory and and should fail only if
+-- (1) the directory does not exist or (2) the directory handle has been
+-- invalidated (due to A's removal of the directory).
+--
+-- This test can be beefed up considerably (e.g., by creating files into the
+-- directory to give mkdir an acceptable failure case, etc.), but at the time
+-- the test was written, file removal and so forth didn't exist
+-- yet. Furthermore, this'll only catch bad/unexpected errors getting thrown and
+-- will not necessarily catch, e.g., illegal writes going to the underlying
+-- inode.
+-- 
+-- TODO: Revisit.
+propM_rmdirMutexOK :: BDGeom
+                   -> BlockDevice IO
+                   -> PropertyM IO ()
+propM_rmdirMutexOK _g dev = do
+  fs  <- runH (mkNewFS dev) >> mountOK dev
+  chA <- run newChan
+  chB <- run newChan
+  forAllM (choose (100, 1000) :: Gen Int) $ \numTrials -> do
+  run $ forkIO $ threadA fs chA numTrials
+  run $ forkIO $ threadB fs chB numTrials
+  
+  -- except only Left-constructed results from the worker threads
+  assert =<< (null . rights) `fmap` replicateM numTrials (run $ readChan chA)
+  assert =<< (null . rights) `fmap` replicateM numTrials (run $ readChan chB)
+  -- ^ barriers
+  
+  quickRemountCheck fs 
+  where
+    dp = rootPath </> "theDir"
+    fp = dp </> "theFile"
+    --
+    threadA fs ch n
+      | n == 0    = return () -- writeChan ch ()
+      | otherwise = do
+          -- Thread A create directory, should never fail
+          e0 <- runHalfs $ mkdir fs dp defaultDirPerms
+          merr <- case e0 of
+            Left e  -> return (Right e)
+            Right _ -> runHalfs (rmdir fs dp)
+                         >>= either (return . Right)
+                                    (const $ return $ Left "ok")
+          writeChan ch merr            
+          threadA fs ch (n-1)
+    -- 
+    threadB fs ch n
+      | n == 0    = return ()
+      | otherwise = do
+          -- ThreadB readDir, should only fail if dir DNE or DH invalid
+          e0 <- runHalfs $ withDir fs dp $ readDir fs 
+          merr <- case e0 of
+            Left e@(HE_ErrnoAnnotated HE_PathComponentNotFound{} errno) -> 
+              return $ if errno == eNOENT then Left "pcnf" else Right e
+            Left HE_InvalidDirHandle -> return (Left "idh")
+            Left e                   -> return (Right e)
+            _                        -> return (Left "ok")
+          writeChan ch merr
+          threadB fs ch (n-1)
+
 
 --------------------------------------------------------------------------------
 -- Misc
