@@ -213,9 +213,9 @@ halfsRemoveDirectory :: HalfsCapable b t r l m =>
                         HalfsSpecific b r l m
                      -> FilePath
                      -> m Errno
-halfsRemoveDirectory HS{ hspLogger = _log, hspState = _fs } _fp = do
-  error "halfsRemoveDirectory: Not Yet Implemented." -- TODO
-  return eNOSYS
+halfsRemoveDirectory HS{ hspLogger = log, hspState = fs } fp = do
+  log $ "halfsRemoveDirectory: removing " ++ show fp
+  execDefault log $ rmdir fs fp
          
 halfsCreateSymbolicLink :: HalfsCapable b t r l m =>
                            HalfsSpecific b r l m

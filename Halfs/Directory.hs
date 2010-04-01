@@ -26,6 +26,7 @@ import Control.Exception (assert)
 import qualified Data.ByteString as BS
 import qualified Data.Map as M
 import Data.Serialize
+import Foreign.C.Error
 import System.FilePath
 
 import Halfs.BlockMap
@@ -48,7 +49,7 @@ import Halfs.Types
 import Halfs.Utils
 import System.Device.BlockDevice
 
-import Debug.Trace
+-- import Debug.Trace
 
 
 --------------------------------------------------------------------------------
@@ -103,34 +104,27 @@ removeDirectory :: HalfsCapable b t r l m =>
                 -> InodeRef           -- ^ inode of directory to remove
                 -> HalfsM m ()
 removeDirectory fs dname inr =
+  -- TODO: Perms check (write perms on parent directory, etc.)
+
   -- We lock the dirhandle map so (a) there's no contention for
   -- dirhandle lookup/creation for the directory we're removing and (b)
   -- so we can ensure that the directory is empty.
   withLockedRscRef (hsDHMap fs) $ \dhMapRef -> do
   dh <- lookupRM inr dhMapRef >>= maybe (newDirHandle fs inr) return
   withLock (dhLock dh) $ do
-
   -- begin dirhandle critical section   
 
   contents <- readRef (dhContents dh)
-  unless (M.null contents) $ throwError HE_DirectoryNotEmpty
-
-  trace ("got locks and about to rment from parent") $ do
-  pinr <- atomicReadInode fs inr inoParent
-  trace ("inr = " ++ show inr ++ ", pinr = " ++ show pinr) $ do 
+  unless (M.null contents) $ HE_DirectoryNotEmpty `annErrno` eNOTEMPTY
 
   -- Purge this dir's dirent from the parent directory
-  pdh <- lookupRM pinr dhMapRef >>= maybe (newDirHandle fs pinr) return
+  pinr <- atomicReadInode fs inr inoParent
+  pdh  <- lookupRM pinr dhMapRef >>= maybe (newDirHandle fs pinr) return
   rmDirEnt pdh dname
 
-  trace ("rm'd from parent") $ do
-
-  writeRef (dhInode dh) Nothing -- Invalidate dh so that all subsequent
-                                -- DH-mediated access to this directory will
-                                -- fail
-  trace ("invalidated dh") $ do
+  -- Invalidate dh so that all subsequent DH-mediated access fails
+  writeRef (dhInode dh) Nothing 
   freeInode fs inr
-  trace ("freed inode") $ return ()
   -- end dirhandle critical section   
 
   -- Begin critical section over parent's DirHandle
@@ -314,7 +308,6 @@ rmDirEnt :: HalfsCapable b t r l m =>
          -> String
          -> HalfsM m ()
 rmDirEnt dh name =
-  trace ("rmDirEnt entry, prior to dh lock acqui") $ do
   withLock (dhLock dh) $ rmDirEnt_lckd dh name
 
 rmDirEnt_lckd :: HalfsCapable b t r l m =>
@@ -324,7 +317,6 @@ rmDirEnt_lckd :: HalfsCapable b t r l m =>
 rmDirEnt_lckd dh name = do
   -- Precond: (dhLock dh) is currently held (can we assert this? TODO)
   -- begin sanity check
-  trace ("rmDirEnt_lckd: entry") $ do
   mfound <- lookupRM name (dhContents dh)
   maybe (throwError $ HE_ObjectDNE name) (const $ return ()) mfound
   -- end sanity check

@@ -500,16 +500,25 @@ propM_simpleRmdirOK _g dev = do
   exec "create /foo/f1" $ createFile fs fp defaultFilePerms
   e0 <- runH $ rmdir fs d0
   case e0 of
-    Left (HE_DirectoryNotEmpty) -> return ()
-    _                           -> assert False
+    Left (HE_ErrnoAnnotated HE_DirectoryNotEmpty errno) ->
+      assert (errno == eNOTEMPTY)
+    _ -> assert False
 
   -- simple mkdir/rmdir check
   freeBefore <- getFree fs
   exec "mkdir /foo/bar" $ mkdir fs d1 defaultFilePerms
+  dh <- exec "openDir /foo/bar" $ openDir fs d1
   assert =<< exists fs d1
   exec "rmdir /foo/bar" $ rmdir fs d1
   assert =<< liftM2 (==) (getFree fs) (return freeBefore)
   assert =<< not `fmap` exists fs d1
+
+  -- Expected error: access to invalidated directory handle
+  e1 <- runH $ readDir fs dh
+  case e1 of
+    Left HE_InvalidDirHandle -> return ()
+    _                        -> assert False
+
   where
     getFree        = sreadRef . bmNumFree . hsBlockMap
     exec           = execH "propM_simpleRmdirOK"
@@ -519,7 +528,6 @@ propM_simpleRmdirOK _g dev = do
     exists fs path = (elem (takeFileName path) . map fst)
                      `fmap` exec ("readDir " ++ path)
                                  (withDir fs (takeDirectory path) $ readDir fs)
-
 
 --------------------------------------------------------------------------------
 -- Misc
