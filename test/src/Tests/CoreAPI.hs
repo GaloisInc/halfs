@@ -27,7 +27,6 @@ import Halfs.File hiding (createFile)
 import Halfs.HalfsState
 import qualified Halfs.Inode as IN
 import Halfs.Monad
--- import Halfs.Protection
 import Halfs.SuperBlock
 import Halfs.Types
 
@@ -37,7 +36,7 @@ import Tests.Instances (printableBytes, filename)
 import Tests.Types
 import Tests.Utils
 
-import Debug.Trace
+--import Debug.Trace
 
 
 --------------------------------------------------------------------------------
@@ -566,7 +565,6 @@ propM_rmdirMutexOK _g dev = do
   quickRemountCheck fs 
   where
     dp = rootPath </> "theDir"
-    fp = dp </> "theFile"
     --
     threadA fs ch n
       | n == 0    = return () -- writeChan ch ()
@@ -584,7 +582,7 @@ propM_rmdirMutexOK _g dev = do
     threadB fs ch n
       | n == 0    = return ()
       | otherwise = do
-          -- ThreadB readDir, should only fail if dir DNE or DH invalid
+          -- ThreadB readDir, should only fail if dir DNE or the DH is invalid
           e0 <- runHalfs $ withDir fs dp $ readDir fs 
           merr <- case e0 of
             Left e@(HE_ErrnoAnnotated HE_PathComponentNotFound{} errno) -> 
