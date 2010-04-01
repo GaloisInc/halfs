@@ -48,16 +48,18 @@ createFile fs parentDH fname usr grp mode = do
     Nothing      -> throwError HE_AllocFailed
     Just fileIR -> do
       let dev = hsBlockDev fs
-      n <- lift $ buildEmptyInodeEnc
-                    dev
-                    RegularFile
-                    mode
-                    fileIR
-                    (dhInode parentDH)
-                    usr
-                    grp
+      withLock (dhLock parentDH) $ do
+      pIR <- getDHINR_lckd parentDH               
+      n   <- lift $ buildEmptyInodeEnc
+                      dev
+                      RegularFile
+                      mode
+                      fileIR
+                      pIR
+                      usr
+                      grp
       lift $ bdWriteBlock dev (inodeRefToBlockAddr fileIR) n 
-      addDirEnt parentDH fname fileIR usr grp mode RegularFile
+      addDirEnt_lckd parentDH fname fileIR usr grp mode RegularFile
       atomicModifyLockedRscRef (hsNumFileNodes fs) (+1)
       return $ fileIR
 

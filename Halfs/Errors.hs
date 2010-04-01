@@ -25,8 +25,10 @@ data HalfsError =
   | HE_FileNotFound
   | HE_InternalError String
   | HE_InvalidStreamIndex Word64
+  | HE_InvalidDirHandle
   | HE_MountFailed RsnHalfsMountFail
   | HE_ObjectExists FilePath
+  | HE_ObjectDNE FilePath
   | HE_PathComponentNotFound String
   | HE_TestFailed String
   | HE_UnexpectedFileType FileType FilePath

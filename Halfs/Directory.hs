@@ -12,6 +12,9 @@ module Halfs.Directory
   , openDirectory
   , syncDirectory
   , withDirectory
+  -- * for internal use only
+  , addDirEnt_lckd
+  , getDHINR_lckd
   -- * for testing
   , DirectoryEntry(..)
   , DirectoryState(..)
@@ -56,7 +59,7 @@ makeDirectory :: HalfsCapable b t r l m =>
               -> FileMode           -- ^ initial perms for new directory
               -> HalfsM m InodeRef  -- ^ on success, the inode ref to the
                                     --   created directory
-makeDirectory fs parentIR dname user group perms = do
+makeDirectory fs parentIR dname user group perms =
   withDirectory fs parentIR $ \pdh -> do
   withLock (dhLock pdh) $ do 
   -- Begin critical section over parent's DirHandle 
@@ -87,6 +90,90 @@ makeDirectory fs parentIR dname user group perms = do
   where
     dev = hsBlockDev fs
 
+-- | Given a parent directory's inode ref, remove the directory with the given name.
+removeDirectory :: HalfsCapable b t r l m =>
+                   HalfsState b r l m -- ^ the filesystem
+                -> InodeRef           -- ^ inode of directory to remove
+                -> HalfsM m ()
+removeDirectory fs inr =
+  -- We lock the dirhandle map so (a) there's no contention for
+  -- dirhandle lookup/creation for the directory we're removing and (b)
+  -- so we can ensure that the directory is empty.
+  withLockedRscRef (hsDHMap fs) $ \dhMapRef -> do
+  undefined -- HERE
+    
+--   withDirectory fs parentIR $ \pdh -> do
+--   withLock (dhLock pdh) $ do
+  -- Begin critical section over parent's DirHandle
+  {-
+    Sketch:
+
+    - ensure that this dir's content map is empty, otherwise raise error
+
+    - safely invalidate all directory handles by marking their InodeRefs
+      invalid; this is so that any DH-mediated access that occurs in other
+      threads will fail after this occurs.  openDirectory likely cannot do the
+      1-2 punch of briefly locking the dhmap for lookup and then relocking later
+      to see if one showed up...although maybe that's okay as long as the
+      reference-based invalidation is working okay...
+
+      key: lock dhmap (no new acquisitions of a DH for this inr), locked
+      invalidation of the dirhandle associated with the dhmap, unlock dhmap.
+
+      The idea is that, since the Maybe InodeRefs are locked resources, they
+      can't be invalidated in the middle of someone else using them.
+      Furthermore, if we acquire them in removeDirectory, we know that someone
+      else can't, and since we'll be using the lockDH utility routine and errors
+      will be raised elsewhere when they are acquired and the references
+      indicate that they are bad...
+
+      If I do decide to try to change opendirectory, though, see more notes
+      below...
+
+    - remove directory entry from parent content map
+
+    - unallocate the inode entirely (new inode utility function to do this?)
+
+    - invalidate any dirhandles that refer to this directory? we can probably
+      lock the dhmap in order to do this.  we may need to do this first to avoid
+      race conditions with openDirectory...?
+
+      -----------------------------------------
+
+      openDirectory needs to change :( right now, consider the following:
+
+      dname is valid
+      openDirectory from process A locks dhmap, does a lookup of an inr, releases (and returns dh to caller!)
+
+      removeDirectory from process B locks dhmap, does all of the deletion,
+      removes directory entirely including freeing its inode.
+
+      ...
+
+      process A openDirectory caller performs an operation on the dh: acquires
+      lock and starts writing to the invalid inode (which could have already
+      been reallocated etc.)
+
+      The problem with this scenario is that even if the dhmap extends over the
+      entire openDirectory operation, process A is still given a handle that
+      holds only the inode reference, and this can be held indefinitely.  We
+      need an independent way of determining when a directory handle has become
+      invalid...it seems like what we need is for dirhandles to contain a
+      reference to a Maybe InodeRef that can atomically become Nothing to
+      indicate invalidation...?
+
+      e.g., dhInode :: LockedRscRef l r (Maybe InodeRef)
+
+      but this has more problems, because DirHandles are themselves by-value, so
+      all we're going to do is end up creating new locks?
+
+      a helper function like lockDH could be used to make the locking still very
+      clean as with withLock.
+
+  -}
+  
+  -- End critical section over parent's DirHandle  
+
 -- | Syncs directory contents to disk
 
 -- NB: We need to decide where all open & dirty DirHandles are sync'd.  Probably
@@ -98,21 +185,22 @@ syncDirectory :: HalfsCapable b t r l m =>
 syncDirectory fs dh = do 
   withLock (dhLock dh) $ do 
   state <- readRef $ dhState dh
+  -- TODO: Currently, we overwrite the entire DirectoryEntry list, truncating
+  -- the directory's inode data stream as needed.  This is _braindead_, however.
+  -- For OnlyAdded, we can just append to the stream; for OnlyDeleted, we can
+  -- write only invalidating entries and employ incremental coalescing, etc.
+  -- overwriteAll should be reserved for the VeryDirty case only.
   case state of
     Clean       -> return ()
-    OnlyAdded   -> do
-      toWrite <- (encode . M.elems) `fmap` readRef (dhContents dh)
-  
-      -- TODO: Currently, we overwrite the entire DirectoryEntry list,
-      -- truncating the directory's inode data stream as needed -- this is
-      -- braindead, though.  Instead, we should do something like tracking the
-      -- end of the stream and appending new contents there.
-
-      writeStream fs (dhInode dh) 0 True toWrite
+    OnlyAdded   -> overwriteAll
+    OnlyDeleted -> overwriteAll
+    VeryDirty   -> overwriteAll
+  where
+    overwriteAll = do
+      inr <- getDHINR_lckd dh
+      writeStream fs inr 0 True
+        =<< (encode . M.elems) `fmap` readRef (dhContents dh)
       modifyRef (dhState dh) dirStTransClean
-  
-    OnlyDeleted -> fail "syncDirectory for OnlyDeleted DirHandle state NYI"
-    VeryDirty   -> fail "syncDirectory for VeryDirty DirHandle state NYI"
 
 -- | Obtains an active directory handle for the directory at the given InodeRef
 openDirectory :: HalfsCapable b t r l m =>
@@ -137,18 +225,7 @@ openDirectory fs inr = do
   case mdh of
     Just dh -> return dh
     Nothing -> do
-      -- No DirHandle for this InodeRef, so pull in the directory info
-      -- from the dev and make one.
-      rawDirBytes <- readStream fs inr 0 Nothing
-      dirEnts     <- if BS.null rawDirBytes
-                     then do return []
-                     else case decode rawDirBytes of 
-                       Left msg -> throwError $ HE_DecodeFail_Directory msg
-                       Right x  -> return x
-      dh <- DirHandle inr
-              `fmap` newRef (M.fromList $ map deName dirEnts `zip` dirEnts)
-              `ap`   newRef Clean
-              `ap`   newLock
+      dh <- newDirHandle fs inr
       withLockedRscRef (hsDHMap fs) $ \ref -> do
         -- If there's now a DirHandle in the map for our inode ref, prefer it to
         -- the one we just created; this is to safely avoid race conditions
@@ -160,6 +237,24 @@ openDirectory fs inr = do
           Nothing  -> do
             modifyRef ref (M.insert inr dh)
             return dh
+
+
+newDirHandle :: HalfsCapable b t r l m =>
+                HalfsState b r l m
+             -> InodeRef
+             -> HalfsM m (DirHandle r l)
+newDirHandle fs inr = do
+  rawDirBytes <- readStream fs inr 0 Nothing
+  dirEnts     <- if BS.null rawDirBytes
+                 then do return []
+                 else case decode rawDirBytes of 
+                   Left msg -> throwError $ HE_DecodeFail_Directory msg
+                   Right x  -> return x
+  DirHandle
+    `fmap` newRef (Just inr)
+    `ap`   newRef (M.fromList $ map deName dirEnts `zip` dirEnts)
+    `ap`   newRef Clean
+    `ap`   newLock
 
 closeDirectory :: HalfsCapable b t r l m =>
                   HalfsState b r l m 
@@ -182,7 +277,6 @@ addDirEnt :: HalfsCapable b t r l m =>
           -> HalfsM m ()
 addDirEnt dh name ir u g mode ftype =
   withLock (dhLock dh) $ addDirEnt_lckd dh name ir u g mode ftype
-  -- By default, always acquire the DirHandle lock!
 
 addDirEnt_lckd :: HalfsCapable b t r l m =>
                   DirHandle r l
@@ -193,14 +287,38 @@ addDirEnt_lckd :: HalfsCapable b t r l m =>
                -> FileMode
                -> FileType
                -> HalfsM m ()
-addDirEnt_lckd dh name ir u g mode ftype = do
+addDirEnt_lckd dh name inr u g mode ftype = do
   -- Precond: (dhLock dh) is currently held (can we assert this? TODO)
   -- begin sanity check
   mfound <- lookupRM name (dhContents dh)
   maybe (return ()) (const $ throwError $ HE_ObjectExists name) mfound
   -- end sanity check
-  modifyRef (dhContents dh) (M.insert name $ DirEnt name ir u g mode ftype)
+  modifyRef (dhContents dh) (M.insert name $ DirEnt name inr u g mode ftype)
   modifyRef (dhState dh) dirStTransAdd
+
+-- | Remove a directory entry for a file, directory, or symlink; expects
+-- that the item exists in the directory.  Thread-safe.
+rmDirEnt :: HalfsCapable b t r l m =>
+            DirHandle r l
+         -> String
+         -> InodeRef
+         -> HalfsM m ()
+rmDirEnt dh name inr = 
+  withLock (dhLock dh) $ rmDirEnt_lckd dh name inr
+
+rmDirEnt_lckd :: HalfsCapable b t r l m =>
+                 DirHandle r l
+              -> String
+              -> InodeRef
+              -> HalfsM m ()
+rmDirEnt_lckd dh name ir = do
+  -- Precond: (dhLock dh) is currently held (can we assert this? TODO)
+  -- begin sanity check
+  mfound <- lookupRM name (dhContents dh)
+  maybe (throwError $ HE_ObjectDNE name) (const $ return ()) mfound
+  -- end sanity check
+  modifyRef (dhContents dh) (M.delete name)
+  modifyRef (dhState dh) dirStTransRm
 
 -- | Finds a directory, file, or symlink given a starting inode
 -- reference (i.e., the directory inode at which to begin the search)
@@ -258,6 +376,15 @@ withDirectory :: HalfsCapable b t r l m =>
               -> HalfsM m a
 withDirectory fs ir = hbracket (openDirectory fs ir) (closeDirectory fs)
 
+-- Get directory handle's inode reference...
+getDHINR_lckd :: HalfsCapable b t r l m =>
+                 DirHandle r l
+              -> HalfsM m InodeRef
+getDHINR_lckd dh = do
+  -- Precond: (dhLock dh) has been acquired (TODO: can we assert this?)
+  readRef (dhInode dh) >>= maybe (throwError HE_InvalidDirHandle) return
+--  maybe (throwError HE_InvalidDirHandle) id `fmap` readRef (dhInode dh)
+
 isFileType :: DirectoryEntry -> FileType -> Bool
 isFileType _ AnyFileType              = True
 isFileType (DirEnt { deType = t }) ft = t == ft
@@ -267,7 +394,8 @@ _showDH dh = do
   withLock (dhLock dh) $ do 
     state    <- readRef $ dhState dh
     contents <- readRef $ dhContents dh
-    return $ "DirHandle { dhInode    = " ++ show (dhInode dh)
+    inr      <- getDHINR_lckd dh
+    return $ "DirHandle { dhInode    = " ++ show inr
                     ++ ", dhContents = " ++ show contents
                     ++ ", dhState    = " ++ show state
 
@@ -276,10 +404,10 @@ dirStTransAdd Clean     = OnlyAdded
 dirStTransAdd OnlyAdded = OnlyAdded
 dirStTransAdd _         = VeryDirty
 
-_dirStTransRm :: DirectoryState -> DirectoryState
-_dirStTransRm Clean       = OnlyDeleted
-_dirStTransRm OnlyDeleted = OnlyDeleted
-_dirStTransRm _           = VeryDirty
+dirStTransRm :: DirectoryState -> DirectoryState
+dirStTransRm Clean       = OnlyDeleted
+dirStTransRm OnlyDeleted = OnlyDeleted
+dirStTransRm _           = VeryDirty
 
 dirStTransClean :: DirectoryState -> DirectoryState
 dirStTransClean = const Clean

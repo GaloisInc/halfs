@@ -87,7 +87,7 @@ data DirectoryEntry = DirEnt
   deriving (Show, Eq)
 
 data DirHandle r l = DirHandle
-  { dhInode       :: InodeRef
+  { dhInode       :: r (Maybe InodeRef)
   , dhContents    :: r (M.Map FilePath DirectoryEntry)
   , dhState       :: r DirectoryState
   , dhLock        :: l

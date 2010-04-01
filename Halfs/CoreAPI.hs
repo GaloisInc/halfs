@@ -208,12 +208,13 @@ readDir :: (HalfsCapable b t r l m) =>
         -> HalfsM m [(FilePath, FileStat t)]
 readDir fs dh =
   withLock (dhLock dh) $ do
+    inr      <- getDHINR_lckd dh
     contents <- liftM M.toList $
                   T.mapM (fileStat fs)
                     =<< fmap deInode `fmap` readRef (dhContents dh)
-    thisStat   <- fileStat fs (dhInode dh)
+    thisStat   <- fileStat fs inr
     parentStat <- fileStat fs =<< do
-      p <- atomicReadInode fs (dhInode dh) inoParent
+      p <- atomicReadInode fs inr inoParent
       if p == nilInodeRef
        then rootDir `fmap` readRef (hsSuperBlock fs)
        else return p
@@ -579,13 +580,6 @@ withFile :: (HalfsCapable b t r l m) =>
          -> HalfsM m a
 withFile fs fp oflags = 
   hbracket (openFile fs fp oflags) (\fh -> {- TODO: sync? -} closeFile fs fh)
-
-fsElemExists :: HalfsCapable b t r l m =>
-                HalfsState b r l m
-             -> FilePath
-             -> FileType
-             -> HalfsM m Bool
-fsElemExists = undefined
 
 writeSB :: (HalfsCapable b t r l m) =>
            BlockDevice m -> SuperBlock -> m SuperBlock
