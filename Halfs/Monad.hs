@@ -89,11 +89,7 @@ hbracket before after act = do
 
 withLock :: HalfsCapable b t r l m =>
             l -> HalfsM m a -> HalfsM m a
-withLock l act = do
-  lock l
-  res <- act `catchError` \e -> release l >> throwError e
-  release l
-  return res
+withLock l act = hbracket (lock l) (const $ release l) (const act)
 
 withLockM :: (Monad m, Lockable l m) =>
              l -> m a -> m a
