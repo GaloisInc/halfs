@@ -86,15 +86,6 @@ newfs dev uid gid rdirPerms = do
   assert (BS.length dirInode == fromIntegral (bdBlockSize dev)) $ do
   lift $ bdWriteBlock dev rdirAddr dirInode
 
-{-
-  -- Write the root directory entries: we can safely use the locked writeStream
-  -- variant here, as no locks yet exist.
-  writeStream_lckd dev blockMap rdirIR 0 True $
-    encode [ DirEnt dotPath    rdirIR uid gid rdirPerms Directory
-           , DirEnt dotdotPath rdirIR uid gid rdirPerms Directory
-           ]
--}
-
   finalFree <- readRef (bmNumFree blockMap)
   -- Persist the remaining data structures
   lift $ writeBlockMap dev blockMap
