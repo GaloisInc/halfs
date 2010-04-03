@@ -1,0 +1,8 @@
+TAGS
+*.o
+*.hi
+*.a
+/dist/*
+/test/dist/*
+/deps/hfuse/dist
+/deps/hfuse/examples/HelloFS
