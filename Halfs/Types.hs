@@ -93,6 +93,14 @@ data DirHandle r l = DirHandle
   , dhLock        :: l
   }
 
+data FileHandle r l = FH
+  { fhReadable :: Bool
+  , fhWritable :: Bool 
+  , _fhFlags   :: FileOpenFlags
+  , fhInode    :: r (Maybe InodeRef) -- Maybe to denote FileHandle invalidation
+  , fhLock     :: l                  -- Ensures sequential access to the INR
+  }
+
 data AccessRight = Read | Write | Execute
   deriving (Show, Eq, Ord)
 

@@ -29,7 +29,7 @@ import System.Fuse
 
 import Halfs.Classes
 import Halfs.CoreAPI
-import Halfs.File (FileHandle)
+import Halfs.File (FileHandle, openFilePrim)
 import Halfs.Errors
 import Halfs.HalfsState
 import Halfs.Monad
@@ -125,7 +125,7 @@ main = do
 -- JS: ST monad impls will have to get mapped to hFUSE ops via stToIO?
 
 ops :: HalfsSpecific (IOUArray Word64 Bool) IORef IOLock IO
-    -> FuseOperations FileHandle
+    -> FuseOperations (FileHandle IORef IOLock)
 ops hsp = FuseOperations
   { fuseGetFileStat          = halfsGetFileStat        hsp
   , fuseReadSymbolicLink     = halfsReadSymbolicLink   hsp
@@ -296,12 +296,12 @@ halfsSetFileTimes hsp@HS{ hspLogger = log } fp accTm modTm = do
 halfsOpen :: HalfsCapable b t r l m =>
              HalfsSpecific b r l m             
           -> FilePath -> OpenMode -> OpenFileFlags
-          -> m (Either Errno FileHandle)
+          -> m (Either Errno (FileHandle r l))
 halfsOpen hsp@HS{ hspLogger = log } fp omode flags = do
   log $ "halfsOpen: fp = " ++ show fp ++ ", omode = " ++ show omode ++ 
         ", flags = " ++ show flags
   rslt <- execOrErrno hsp eINVAL id $ openFile fp halfsFlags
-  log $ "halfsOpen: CoreAPI.openFile completed: rslt = " ++ show rslt
+  log $ "halfsOpen: CoreAPI.openFile completed"
   return rslt
   where
     -- NB: In HFuse 0.2.2, the explicit and truncate are always false,
@@ -318,7 +318,7 @@ halfsOpen hsp@HS{ hspLogger = log } fp omode flags = do
 
 halfsRead :: HalfsCapable b t r l m =>
              HalfsSpecific b r l m
-          -> FilePath -> FileHandle -> ByteCount -> FileOffset
+          -> FilePath -> FileHandle r l -> ByteCount -> FileOffset
           -> m (Either Errno BS.ByteString)
 halfsRead hsp@HS{ hspLogger = log } fp fh byteCnt offset = do
   log $ "halfsRead: Reading " ++ show byteCnt ++ " bytes from " ++
@@ -328,7 +328,7 @@ halfsRead hsp@HS{ hspLogger = log } fp fh byteCnt offset = do
 
 halfsWrite :: HalfsCapable b t r l m =>
               HalfsSpecific b r l m
-           -> FilePath -> FileHandle -> BS.ByteString -> FileOffset
+           -> FilePath -> FileHandle r l -> BS.ByteString -> FileOffset
            -> m (Either Errno ByteCount)
 halfsWrite hsp@HS{ hspLogger = log } fp fh bytes offset = do
   log $ "halfsWrite: Writing " ++ show (BS.length bytes) ++ " bytes to " ++ 
@@ -357,7 +357,7 @@ halfsGetFileSystemStats hsp _fp = do
 
 halfsFlush :: HalfsCapable b t r l m =>
               HalfsSpecific b r l m
-           -> FilePath -> FileHandle
+           -> FilePath -> FileHandle r l
            -> m Errno
 halfsFlush hsp@HS{ hspLogger = log } fp fh = do
   log $ "halfsFlush: Flushing " ++ show fp
@@ -365,7 +365,7 @@ halfsFlush hsp@HS{ hspLogger = log } fp fh = do
          
 halfsRelease :: HalfsCapable b t r l m =>
                 HalfsSpecific b r l m
-             -> FilePath -> FileHandle
+             -> FilePath -> FileHandle r l
              -> m ()
 halfsRelease HS{ hspLogger = log, hspState = fs } fp fh = do
   log $ "halfsRelease: Releasing " ++ show fp
@@ -621,3 +621,8 @@ instance Show OpenFileFlags where
     ", nonBlock = "  ++ show nonBlock'  ++
     ", trunc = "     ++ show trunc'     ++
     "}"
+
+-- Get rid of extraneous Halfs.File not-used warning
+_dummy :: HalfsCapable b t r l m =>
+          H.InodeRef -> HalfsM b r l m (FileHandle r l)
+_dummy = openFilePrim undefined

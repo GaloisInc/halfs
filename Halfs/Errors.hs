@@ -27,6 +27,7 @@ data HalfsError =
   | HE_InternalError String
   | HE_InvalidStreamIndex Word64
   | HE_InvalidDirHandle
+  | HE_InvalidFileHandle
   | HE_MountFailed RsnHalfsMountFail
   | HE_ObjectExists FilePath
   | HE_ObjectDNE FilePath

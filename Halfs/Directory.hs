@@ -106,8 +106,8 @@ removeDirectory :: HalfsCapable b t r l m =>
                 -> HalfsM b r l m ()
 removeDirectory dname inr = do
   -- TODO: Perms check (write perms on parent directory, etc.)
-
   dhMap <- hasks hsDHMap
+
   -- We lock the dirhandle map so (a) there's no contention for
   -- dirhandle lookup/creation for the directory we're removing and (b)
   -- so we can ensure that the directory is empty.

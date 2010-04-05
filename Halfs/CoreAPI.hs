@@ -123,8 +123,9 @@ mount dev usr grp = do
            `ap`   newRef sb'              -- superblock 
            `ap`   newLock                 -- filesystem lock
            `ap`   newLockedRscRef 0       -- Locked file node count
-           `ap`   newLockedRscRef M.empty -- Locked map: InodeRef -> DirHandle
-           `ap`   newLockedRscRef M.empty -- Locked map: InodeRef -> (l, refcnt)
+           `ap`   newLockedRscRef M.empty -- Locked map: inr -> DH
+           `ap`   newLockedRscRef M.empty -- Locked map: inr -> (l, refcnt)
+           `ap`   newLockedRscRef M.empty -- Locked map: inr -> (FH, opencnt)
        else throwError $ HE_MountFailed DirtyUnmount
 
 -- | Unmounts the given filesystem.  After this operation completes, the
@@ -211,7 +212,7 @@ readDir dh = do
     parentStat <- fileStat =<< do
       p <- atomicReadInode inr inoParent
       if p == nilInodeRef
-       then hasks hsSuperBlock >>= liftM rootDir . readRef -- rootDir `fmap` readRef (hsSuperBlock fs)
+       then fmap rootDir . readRef =<< hasks hsSuperBlock
        else return p
     return $ (dotPath, thisStat) : (dotdotPath, parentStat) : contents
  
@@ -253,7 +254,7 @@ createFile fp mode = do
 openFile :: (HalfsCapable b t r l m) =>
             FilePath            -- ^ The absolute path of the file
          -> FileOpenFlags       -- ^ open flags / open mode (ronly, wonly, wr)
-         -> HalfsM b r l m FileHandle 
+         -> HalfsM b r l m (FileHandle r l) 
 openFile fp oflags = do
   -- TODO: check perms
   logMsg $ "CoreAPI.openFile entry: fp = " ++ show fp ++ ", oflags = " ++ show oflags
@@ -266,34 +267,38 @@ openFile fp oflags = do
              DF_Found fir        -> foundFile fir
   logMsg $ "CoreAPI.openFile: findInDir on parent complete"
   closeDir pdh
-  logMsg $ "CoreAPI.openFile: closeDir complete, returning fh = " ++ show fh
+  logMsg $ "CoreAPI.openFile: closeDir complete"
   return fh
   where
     (ppath, fname) = splitFileName fp
     foundFile      = openFilePrim oflags
                     
 read :: (HalfsCapable b t r l m) =>
-        FileHandle                -- ^ the handle for the open file to read
+        FileHandle r l            -- ^ the handle for the open file to read
      -> Word64                    -- ^ the byte offset into the file
      -> Word64                    -- ^ the number of bytes to read
      -> HalfsM b r l m ByteString -- ^ the data read
 read fh byteOff len = do
   -- TODO: Check perms
   unless (fhReadable fh) $ HE_BadFileHandleForRead `annErrno` eBADF
-  readStream (fhInode fh) byteOff (Just len)
+  withLock (fhLock fh) $ do 
+    inr <- getFHINR_lckd fh
+    readStream inr byteOff (Just len)
 
 write :: (HalfsCapable b t r l m) =>
-         FileHandle         -- ^ the handle for the open file to write
+         FileHandle r l     -- ^ the handle for the open file to write
       -> Word64             -- ^ the byte offset into the file
       -> ByteString         -- ^ the data to write
       -> HalfsM b r l m ()
 write fh byteOff bytes = do
   -- TODO: Check perms
   unless (fhWritable fh) $ HE_BadFileHandleForWrite `annErrno` eBADF
-  writeStream (fhInode fh) byteOff False bytes
+  withLock (fhLock fh) $ do 
+    inr <- getFHINR_lckd fh
+    writeStream inr byteOff False bytes
 
 flush :: (HalfsCapable b t r l m) =>
-         FileHandle -> HalfsM b r l m ()
+         FileHandle r l -> HalfsM b r l m ()
 flush _fh = do
   -- TODO: handle buffer flush if FH denotes buffering is being used
   dev <- hasks hsBlockDev
@@ -304,12 +309,12 @@ syncFile :: (HalfsCapable b t r l m) =>
 syncFile = undefined
 
 closeFile :: (HalfsCapable b t r l m) =>
-             FileHandle -- ^ the handle to the open file to close
+             FileHandle r l -- ^ the handle to the open file to close
           -> HalfsM b r l m ()
-closeFile _fh = do
+closeFile fh = do
   -- TODO/FIXME: sync & synchronously mark fh closed so other ops can't
   -- continue writing (FHs must track open/closed state first).
-  return ()
+  closeFilePrim fh
 
 setFileSize :: (HalfsCapable b t r l m) =>
                FilePath -> Word64 -> HalfsM b r l m ()
@@ -317,13 +322,14 @@ setFileSize fp len =
   withFile fp (fofWriteOnly True) $ \fh -> do
     dev <- hasks hsBlockDev
     bm  <- hasks hsBlockMap
-    let inr = fhInode fh
-        wr  = writeStream_lckd dev bm inr
-    withLockedInode inr $ do
-      sz <- fsSize `fmap` fileStat_lckd dev inr
-      if sz > len
-        then wr len True BS.empty                   -- truncate at len
-        else wr sz False $ bsReplicate (len - sz) 0 -- pad up to len
+    withLock (fhLock fh) $ do 
+      inr <- getFHINR_lckd fh
+      let wr  = writeStream_lckd dev bm inr
+      withLockedInode inr $ do
+        sz <- fsSize `fmap` fileStat_lckd dev inr
+        if sz > len
+          then wr len True BS.empty                   -- truncate at len
+          else wr sz False $ bsReplicate (len - sz) 0 -- pad up to len
 
 setFileTimes :: (HalfsCapable b t r l m) =>
                 FilePath            
@@ -442,38 +448,40 @@ mklink path1 {-src-} path2 {-dst-} = do
   
   usr <- getUser
   grp <- getGroup
-  let srcINR  = fhInode p1h
-      cleanup = decLinkCount srcINR
 
-  incLinkCount srcINR
-
-  -- TODO: Obtain the proper permissions for the link
-  let defaultLinkPerms = FileMode [Read,Write] [Read] [Read]
-               
-  addDirEnt p2pfxdh p2fname srcINR usr grp defaultLinkPerms RegularFile
-    `catchError` \e -> do
-      cleanup
-      case e of
-        -- [EEXIST]: The link named by path2 already exists.
-        HE_ObjectExists{} -> e `annErrno` eEXIST
-        _                 -> throwError e
-
-  syncDirectory p2pfxdh
-    `catchError` \e -> do
-      cleanup
-      case e of
-        -- TODO: The syncDirectory failed, so we'll need to remove the
-        -- newly-inserted DirEnt from the map.  This kind of
-        -- rollback-on-exception will be common, and must maintain thread safety
-        -- properties, so we probably want to think of a clean way to handle it.
-        -- At minimum, I think, we need to acquire the lock on p2pfxdh and hold
-        -- it over the syncDirectory duration.
-      
-        -- [ENOSPC]: The directory in which the entry for the new link is being
-        -- placed cannot be extended because there is no space left on the file
-        -- system containing the directory.
-        HE_AllocFailed{} -> e `annErrno` eNOSPC
-        _                -> throwError e
+  withLock (fhLock p1h) $ do 
+    srcINR <- getFHINR_lckd p1h
+    let cleanup = decLinkCount srcINR
+  
+    incLinkCount srcINR
+  
+    -- TODO: Obtain the proper permissions for the link
+    let defaultLinkPerms = FileMode [Read,Write] [Read] [Read]
+                 
+    addDirEnt p2pfxdh p2fname srcINR usr grp defaultLinkPerms RegularFile
+      `catchError` \e -> do
+        cleanup
+        case e of
+          -- [EEXIST]: The link named by path2 already exists.
+          HE_ObjectExists{} -> e `annErrno` eEXIST
+          _                 -> throwError e
+  
+    syncDirectory p2pfxdh
+      `catchError` \e -> do
+        cleanup
+        case e of
+          -- TODO: The syncDirectory failed, so we'll need to remove the
+          -- newly-inserted DirEnt from the map.  This kind of
+          -- rollback-on-exception will be common, and must maintain thread safety
+          -- properties, so we probably want to think of a clean way to handle it.
+          -- At minimum, I think, we need to acquire the lock on p2pfxdh and hold
+          -- it over the syncDirectory duration.
+        
+          -- [ENOSPC]: The directory in which the entry for the new link is being
+          -- placed cannot be extended because there is no space left on the file
+          -- system containing the directory.
+          HE_AllocFailed{} -> e `annErrno` eNOSPC
+          _                -> throwError e
           
   closeDir p2pfxdh
 
@@ -529,8 +537,9 @@ modifyInode :: HalfsCapable b t r l m =>
             -> (Inode t -> Inode t)
             -> HalfsM b r l m ()
 modifyInode fp f = 
-  withFile fp (fofReadWrite True) $ \fh -> 
-    atomicModifyInode (fhInode fh) (return . f)
+  withFile fp (fofReadWrite True) $ \fh ->
+    withLock (fhLock fh) $
+      getFHINR_lckd fh >>= flip atomicModifyInode (return . f)
 
 -- | Find the InodeRef corresponding to the given path.  On error, raises
 -- exceptions HE_PathComponentNotFound, HE_AbsolutePathExpected, or
@@ -561,7 +570,7 @@ withDir fp = hbracket (openDir fp) closeDir
 withFile :: (HalfsCapable b t r l m) =>
             FilePath
          -> FileOpenFlags
-         -> (FileHandle -> HalfsM b r l m a)
+         -> (FileHandle r l -> HalfsM b r l m a)
          -> HalfsM b r l m a
 withFile fp oflags = 
   hbracket (openFile fp oflags) (\fh -> {- TODO: sync? -} closeFile fh)
