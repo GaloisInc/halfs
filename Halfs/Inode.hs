@@ -49,6 +49,7 @@ import qualified Data.ByteString as BS
 import Data.Char
 import Data.List (find, genericDrop, genericLength, genericTake, genericSplitAt)
 import qualified Data.Map as M
+import Data.Maybe
 import Data.Serialize 
 import Data.Serialize.Get
 import Data.Serialize.Put
@@ -61,6 +62,7 @@ import Halfs.Errors
 import Halfs.HalfsState
 import Halfs.Protection
 import Halfs.Monad
+import Halfs.MonadUtils
 import Halfs.Types
 import Halfs.Utils
 
@@ -72,7 +74,6 @@ dbug _ = id
 --dbug = trace
 
 type HalfsM b r l m a = HalfsT HalfsError (Maybe (HalfsState b r l m)) m a
-
 
 --------------------------------------------------------------------------------
 -- Inode/Cont constructors, geometry calculation, and helpful constructors
@@ -344,6 +345,16 @@ readStream :: HalfsCapable b t r l m =>
 readStream fs startIR start mlen = 
   withLockedInode fs startIR $ do  
   -- ====================== Begin inode critical section ======================
+  dev <- hasks hsBlockDev
+  let bs        = bdBlockSize dev
+      readB n b = lift $ readBlock dev n b
+      -- 
+      -- Calculate the remaining blocks (up to len, if applicable) to read from
+      -- the given Cont.  f is just a length modifier.
+      calcRemBlks cont f = case mlen of 
+        Nothing  -> blockCount cont
+        Just len -> min (blockCount cont) $ f len `divCeil` bs
+
   startInode <- drefInode dev startIR
   let fileSz  = inoFileSize startInode
   if 0 == blockCount (inoCont startInode)
@@ -396,17 +407,6 @@ readStream fs startIR start mlen =
      dbug ("==== readStream end ===") $ return ()
      return rslt                                         
   -- ======================= End inode critical section =======================
-  where
-    bs        = bdBlockSize dev
-    readB n b = lift $ readBlock dev n b
-    dev       = hsBlockDev fs
-    -- 
-    -- Calculate the remaining blocks (up to len, if applicable) to read from
-    -- the given Cont.  f is just a length modifier.
-    calcRemBlks cont f =
-      case mlen of 
-        Nothing  -> blockCount cont
-        Just len -> min (blockCount cont) $ f len `divCeil` bs
 
 -- | Writes to the inode stream at the given starting inode and starting byte
 -- offset, overwriting data and allocating new space on disk as needed.  If the

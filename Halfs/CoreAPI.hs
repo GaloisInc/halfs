@@ -20,6 +20,7 @@ import qualified Halfs.File as F
 import Halfs.HalfsState
 import Halfs.Inode
 import Halfs.Monad
+import Halfs.MonadUtils
 import Halfs.Protection
 import Halfs.SuperBlock
 import Halfs.Types

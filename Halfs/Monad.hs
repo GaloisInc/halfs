@@ -2,7 +2,8 @@
 
 module Halfs.Monad
   (
-    module Control.Monad.Error
+    module Control.Monad.Reader
+  , MonadError(..)
   , HalfsT
   , atomicModifyLockedRscRef
   , hbracket
@@ -53,6 +54,10 @@ instance (Monad m) => MonadError err (HalfsT err env m) where
         Left  e -> runHalfsT (h e)
         Right a -> return $ Right a
 
+instance Monad m => MonadReader r (HalfsT err r m) where
+  ask       = HalfsT $ ReaderT $ return . Right
+  local f m = HalfsT $ ReaderT $ \r -> runReaderT (runHalfsT m) (f r)
+  
 instance Reffable r m => Reffable r (HalfsT err env m) where
   newRef     = lift . newRef     
   readRef    = lift . readRef    
