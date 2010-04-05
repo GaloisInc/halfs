@@ -15,6 +15,7 @@ import Halfs.Errors
 import Halfs.HalfsState
 import Halfs.Inode
 import Halfs.Monad
+import Halfs.MonadUtils
 import Halfs.Protection
 import Halfs.Types
 
@@ -37,19 +38,19 @@ data FileHandle = FH
 -- File creation and manipulation functions
 
 createFile :: HalfsCapable b t r l m =>
-              HalfsState b r l m 
-           -> DirHandle r l
+              DirHandle r l
            -> FilePath
            -> UserID
            -> GroupID
            -> FileMode
            -> HalfsM b r l m InodeRef
-createFile fs parentDH fname usr grp mode = do
-  mfileIR <- fmap blockAddrToInodeRef `fmap` lift (alloc1 $ hsBlockMap fs)
+createFile parentDH fname usr grp mode = do
+  dev <- hasks hsBlockDev
+  bm  <- hasks hsBlockMap
+  mfileIR <- fmap blockAddrToInodeRef `fmap` lift (alloc1 bm)
   case mfileIR of
     Nothing      -> throwError HE_AllocFailed
     Just fileIR -> do
-      let dev = hsBlockDev fs
       withLock (dhLock parentDH) $ do
       pIR <- getDHINR_lckd parentDH
       n   <- lift $ buildEmptyInodeEnc
@@ -62,7 +63,8 @@ createFile fs parentDH fname usr grp mode = do
                       grp
       lift $ bdWriteBlock dev (inodeRefToBlockAddr fileIR) n 
       addDirEnt_lckd parentDH fname fileIR usr grp mode RegularFile
-      atomicModifyLockedRscRef (hsNumFileNodes fs) (+1)
+      numNodesRsc <- hasks hsNumFileNodes
+      atomicModifyLockedRscRef numNodesRsc (+1)
       return $ fileIR
 
 openFilePrim :: Monad m =>

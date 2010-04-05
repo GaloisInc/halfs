@@ -86,17 +86,17 @@ propM_basicWRWR _g dev = do
 
   -- Check truncation of initial data (the root dir cruft) to a single byte
   t0 <- time
-  exec "Stream trunc to 1 byte" $ writeStream fs rdirIR 0 True dummyByte
+  exec "Stream trunc to 1 byte" $ writeStream rdirIR 0 True dummyByte
   checkWriteMD t0 1 2 -- expecting 1 inode block and 1 data block
  
   -- Expected error: write past end of 1-byte stream (beyond block boundary)
-  e0 <- runH fs $ writeStream fs rdirIR (bdBlockSize dev) False testData
+  e0 <- runH fs $ writeStream rdirIR (bdBlockSize dev) False testData
   case e0 of
     Left (HE_InvalidStreamIndex idx) -> assert (idx == bdBlockSize dev)
     _                                -> assert False
                                         
   -- Expected error: write past end of 1-byte stream (beyond byte boundary)
-  e0' <- runH fs $ writeStream fs rdirIR 2 False testData
+  e0' <- runH fs $ writeStream rdirIR 2 False testData
   case e0' of
     Left (HE_InvalidStreamIndex idx) -> assert (idx == 2)
     _                                -> assert False
@@ -106,27 +106,27 @@ propM_basicWRWR _g dev = do
 
   -- Check truncation to 0 bytes
   t1 <- time
-  exec "Stream trunc to 0 bytes" $ writeStream fs rdirIR 0 True BS.empty
+  exec "Stream trunc to 0 bytes" $ writeStream rdirIR 0 True BS.empty
   checkWriteMD t1 0 1 -- expecting 1 inode block only (no data blocks)
  
   -- Non-truncating write & read-back of generated data
   t2 <- time
-  exec "Non-truncating write" $ writeStream fs rdirIR 0 False testData
+  exec "Non-truncating write" $ writeStream rdirIR 0 False testData
   checkWriteMD t2 dataSzI expBlks
   t3  <- time
-  bs1 <- exec "Readback 1" $ readStream fs rdirIR 0 Nothing
+  bs1 <- exec "Readback 1" $ readStream rdirIR 0 Nothing
   checkReadMD t3 dataSz expBlks 
   assert (BS.length bs1 == BS.length testData)
   assert (bs1 == testData)
 
   -- Recheck truncation to 0 bytes
   t4 <- time
-  exec "Stream trunc to 0 bytes" $ writeStream fs rdirIR 0 True BS.empty
+  exec "Stream trunc to 0 bytes" $ writeStream rdirIR 0 True BS.empty
   checkWriteMD t4 0 1 -- expecting 1 inode block only (no data blocks)
    
   -- Non-truncating rewrite of generated data
   t5 <- time
-  exec "Non-truncating write" $ writeStream fs rdirIR 0 False testData
+  exec "Non-truncating write" $ writeStream rdirIR 0 False testData
   checkWriteMD t5 dataSzI expBlks
 
   -- Non-truncating partial overwrite of new data & read-back
@@ -135,10 +135,10 @@ propM_basicWRWR _g dev = do
   forAllM (printableBytes overwriteSz)     $ \newData     -> do
   t6 <- time
   exec "Non-trunc overwrite" $
-    writeStream fs rdirIR (fromIntegral startByte) False newData
+    writeStream rdirIR (fromIntegral startByte) False newData
   checkWriteMD t6 dataSzI expBlks
   t7  <- time
-  bs2 <- exec "Readback 2" $ readStream fs rdirIR 0 Nothing
+  bs2 <- exec "Readback 2" $ readStream rdirIR 0 Nothing
   checkReadMD t7 dataSz expBlks
   let expected = bsTake startByte testData
                  `BS.append`
@@ -150,10 +150,10 @@ propM_basicWRWR _g dev = do
 
   -- Check truncation to a single byte again w/ read-back
   t8 <- time
-  exec "Stream trunc to 1 byte" $ writeStream fs rdirIR 0 True dummyByte
+  exec "Stream trunc to 1 byte" $ writeStream rdirIR 0 True dummyByte
   checkWriteMD t8 1 2 -- expecting 1 inode block and 1 data block
   t9  <- time 
-  bs3 <- exec "Readback 3" $ readStream fs rdirIR 0 Nothing
+  bs3 <- exec "Readback 3" $ readStream rdirIR 0 Nothing
   checkReadMD t9 1 2
   assert (bs3 == dummyByte)
   where
@@ -179,7 +179,7 @@ propM_truncWRWR _g dev = do
 
   -- Non-truncating write
   t1 <- time
-  exec "Non-truncating write" $ writeStream fs rdirIR 0 False testData
+  exec "Non-truncating write" $ writeStream rdirIR 0 False testData
   checkWriteMD t1 dataSz (expBlks dataSz) 
 
   forAllM (choose (dataSz `div` 8, dataSz `div` 4)) $ \dataSz'   -> do
@@ -191,12 +191,12 @@ propM_truncWRWR _g dev = do
   -- Truncating write
   t2 <- time
   exec "Truncating write" $
-    writeStream fs rdirIR (fromIntegral truncIdx) True testData'
+    writeStream rdirIR (fromIntegral truncIdx) True testData'
   checkWriteMD t2 dataSz'' (expBlks dataSz'')
 
   -- Read until the end of the stream and check truncation       
   t3 <- time
-  bs <- exec "Readback" $ readStream fs rdirIR (fromIntegral truncIdx) Nothing
+  bs <- exec "Readback" $ readStream rdirIR (fromIntegral truncIdx) Nothing
   checkReadMD t3 dataSz'' (expBlks dataSz'')
   assert (BS.length bs == BS.length testData')
   assert (bs == testData')
@@ -228,7 +228,7 @@ propM_lengthWR _g dev = do
 
   -- Write random data to the stream
   t1 <- time
-  exec "Populate" $ writeStream fs rdirIR 0 False testData
+  exec "Populate" $ writeStream rdirIR 0 False testData
   checkWriteMD t1 dataSz expBlks 
 
   -- If possible, read a minimum of one full inode + 1 byte worth of data
@@ -247,7 +247,7 @@ propM_lengthWR _g dev = do
 
   t2 <- time
   bs <- exec "Bounded readback" $
-          readStream fs rdirIR stIdxW64 (Just $ fromIntegral readLen')
+          readStream rdirIR stIdxW64 (Just $ fromIntegral readLen')
   assert (bs == bsTake readLen' (bsDrop startIdx testData))
   checkReadMD t2 dataSz expBlks 
 
@@ -308,8 +308,8 @@ propM_inodeMutexOK _g dev = do
       (:acc) `fmap` (printableBytes sz `suchThat` (not . (`elem` acc)))
     --
     test fs ch inr sz bstrings bs = do
-      _   <- runHalfs fs $ writeStream fs inr 0 False bs
-      eeb <- runHalfs fs $ readStream fs inr 0 Nothing
+      _   <- runHalfs fs $ writeStream inr 0 False bs
+      eeb <- runHalfs fs $ readStream inr 0 Nothing
       case eeb of
         Left _err -> writeChan ch (False, error "interleaved not computed")
         Right rb  -> writeChan ch (rb' `elem` bstrings, rb' /= bs)
@@ -366,6 +366,6 @@ checkInodeMetadata :: (HalfsCapable b t r l m, Integral a) =>
                    -> PropertyM m ()
 checkInodeMetadata fs inr expFileTy expMode expUsr expGrp
                    expFileSz expNumBlocks accessp modifyp changep = do
-  st <- execH "checkInodeMetadata" fs "filestat" $ fileStat fs inr
+  st <- execH "checkInodeMetadata" fs "filestat" $ fileStat inr
   checkFileStat st expFileSz expFileTy expMode
                 expUsr expGrp expNumBlocks accessp modifyp changep

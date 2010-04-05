@@ -335,15 +335,14 @@ emptyCont nAddrs me =
 -- continuations.  This function performs a write to update inode metadata
 -- (e.g., access time).
 readStream :: HalfsCapable b t r l m => 
-              HalfsState b r l m        -- ^ Filesystem state
-           -> InodeRef                  -- ^ Starting inode reference
+              InodeRef                  -- ^ Starting inode reference
            -> Word64                    -- ^ Starting stream (byte) offset
            -> Maybe Word64              -- ^ Stream length (Nothing => read
                                         --   until end of stream, including
                                         --   entire last block)
            -> HalfsM b r l m ByteString -- ^ Stream contents
-readStream fs startIR start mlen = 
-  withLockedInode fs startIR $ do  
+readStream startIR start mlen = 
+  withLockedInode startIR $ do  
   -- ====================== Begin inode critical section ======================
   dev <- hasks hsBlockDev
   let bs        = bdBlockSize dev
@@ -414,16 +413,16 @@ readStream fs startIR start mlen =
 -- are freed.  Whenever the data to be written exceeds the the end of the
 -- stream, the trunc flag is ignored.
 writeStream :: HalfsCapable b t r l m =>
-               HalfsState b r l m -- ^ The filesystem state
-            -> InodeRef           -- ^ Starting inode ref
+               InodeRef           -- ^ Starting inode ref
             -> Word64             -- ^ Starting stream (byte) offset
             -> Bool               -- ^ Truncating write?
             -> ByteString         -- ^ Data to write
             -> HalfsM b r l m ()
-writeStream _ _ _ False bytes | 0 == BS.length bytes = return ()
-writeStream fs startIR start trunc bytes             =
-  withLockedInode fs startIR $
-    writeStream_lckd (hsBlockDev fs) (hsBlockMap fs) startIR start trunc bytes
+writeStream _ _ False bytes | 0 == BS.length bytes = return ()
+writeStream startIR start trunc bytes              = do
+  dev <- hasks hsBlockDev
+  bm  <- hasks hsBlockMap
+  withLockedInode startIR $ writeStream_lckd dev bm startIR start trunc bytes
 
 writeStream_lckd :: HalfsCapable b t r l m =>
                     BlockDevice m
@@ -563,48 +562,47 @@ writeStream_lckd dev bm startIR start trunc bytes           = do
 -- Inode operations
 
 incLinkCount :: HalfsCapable b t r l m =>
-                HalfsState b r l m
-             -> InodeRef -- ^ Source inode ref
+                InodeRef -- ^ Source inode ref
              -> HalfsM b r l m ()
-incLinkCount fs inr =
-  atomicModifyInode fs inr $ \nd ->
+incLinkCount inr =
+  atomicModifyInode inr $ \nd ->
     return $ nd{ inoNumLinks = inoNumLinks nd + 1 }
 
 decLinkCount :: HalfsCapable b t r l m =>
-                HalfsState b r l m
-             -> InodeRef -- ^ Source inode ref
+                InodeRef -- ^ Source inode ref
              -> HalfsM b r l m ()
-decLinkCount fs inr =
-  atomicModifyInode fs inr $ \nd ->
+decLinkCount inr =
+  atomicModifyInode inr $ \nd ->
     return $ nd{ inoNumLinks = inoNumLinks nd - 1 }
 
 -- | Atomically modifies an inode; always updates inoChangeTime, but
 -- callers are responsible for other metadata modifications.
 atomicModifyInode :: HalfsCapable b t r l m =>
-                     HalfsState b r l m
-                  -> InodeRef
+                     InodeRef
                   -> (Inode t -> HalfsM b r l m (Inode t))
                   -> HalfsM b r l m ()
-atomicModifyInode fs inr f = 
-  withLockedInode fs inr $ do
-    inode  <- drefInode (hsBlockDev fs) inr
+atomicModifyInode inr f = 
+  withLockedInode inr $ do
+    dev    <- hasks hsBlockDev
+    inode  <- drefInode dev inr
     now    <- getTime
     inode' <- setChangeTime now `fmap` f inode
-    lift $ writeInode (hsBlockDev fs) inode'
+    lift $ writeInode dev inode'
 
 atomicReadInode :: HalfsCapable b t r l m =>
-                   HalfsState b r l m
-                -> InodeRef
+                    InodeRef
                 -> (Inode t -> a)
                 -> HalfsM b r l m a
-atomicReadInode fs inr f = do
-  withLockedInode fs inr $ f `fmap` drefInode (hsBlockDev fs) inr
+atomicReadInode inr f = do
+  dev <- hasks hsBlockDev
+  withLockedInode inr $ f `fmap` drefInode dev inr
 
 fileStat :: HalfsCapable b t r l m =>
-            HalfsState b r l m
-         -> InodeRef
+            InodeRef
          -> HalfsM b r l m (FileStat t)
-fileStat fs inr = withLockedInode fs inr $ fileStat_lckd (hsBlockDev fs) inr
+fileStat inr = do
+  dev <- hasks hsBlockDev
+  withLockedInode inr $ fileStat_lckd dev inr
 
 fileStat_lckd :: HalfsCapable b t r l m =>
                  BlockDevice m
@@ -631,23 +629,23 @@ fileStat_lckd dev inr = do
 -- Inode/Cont stream helper & utility functions 
 
 freeInode :: HalfsCapable b t r l m =>
-             HalfsState b r l m
-          -> InodeRef -- ^ reference to the inode to remove
+             InodeRef -- ^ reference to the inode to remove
           -> HalfsM b r l m ()
-freeInode fs@HalfsState{ hsBlockDev = dev, hsBlockMap = bm } inr@(IR addr) = 
-  withLockedInode fs inr $ do
+freeInode inr@(IR addr) = 
+  withLockedInode inr $ do
+    dev <- hasks hsBlockDev
+    bm  <- hasks hsBlockMap
     conts <- expandConts dev =<< inoCont `fmap` drefInode dev inr
     lift $ BM.unallocBlocks bm $ BM.Discontig $ map (`BM.Extent` 1) $
       concatMap blockAddrs conts ++ map (unCR . address) (tail conts)
       -- ^ all blocks in all conts; ^ blocks for non-embedded cont storage
-    BM.unalloc1 (hsBlockMap fs) addr
+    BM.unalloc1 bm addr
 
 withLockedInode :: HalfsCapable b t r l m =>
-                   HalfsState b r l m
-                -> InodeRef         -- ^ reference to inode to lock
+                   InodeRef         -- ^ reference to inode to lock
                 -> HalfsM b r l m a -- ^ action to take while holding lock
                 -> HalfsM b r l m a
-withLockedInode fs inr act =
+withLockedInode inr act =
   -- Inode locking: We currently use a single reader/writer lock tracked by the
   -- InodeRef -> (lock, ref count) map in HalfsState. Reference counting is used
   -- to determine when it is safe to remove a lock from the map.
@@ -661,8 +659,9 @@ withLockedInode fs inr act =
     before = do
       -- When the InodeRef is already in the map, atomically increment its
       -- reference count and acquire; otherwise, create a new lock and acquire.
-      inodeLock <-
-        withLockedRscRef (hsInodeLockMap fs) $ \mapRef -> do
+      inodeLock <- do
+        lm <- hasks hsInodeLockMap       
+        withLockedRscRef lm $ \mapRef -> do
           -- begin inode lock map critical section
           lockInfo <- lookupRM inr mapRef
           case lockInfo of
@@ -680,7 +679,8 @@ withLockedInode fs inr act =
     after inodeLock = do
       -- Atomically decrement the reference count for the InodeRef and then
       -- release the lock
-      withLockedRscRef (hsInodeLockMap fs) $ \mapRef -> do
+      lm <- hasks hsInodeLockMap
+      withLockedRscRef lm $ \mapRef -> do
         -- begin inode lock map critical section
         lockInfo <- lookupRM inr mapRef
         case lockInfo of

@@ -21,6 +21,7 @@ import Halfs.Directory
 import Halfs.Errors
 import Halfs.HalfsState
 import Halfs.Monad
+import Halfs.MonadUtils
 import Halfs.Protection
 import Halfs.SuperBlock
 import Halfs.Utils   (divCeil)
@@ -133,7 +134,7 @@ mountOK dev =
 unmountOK :: HalfsCapable b t r l m =>
              HalfsState b r l m -> PropertyM m ()
 unmountOK fs =
-  runH fs (unmount fs) >>=
+  runH fs unmount >>=
     either (fail . (++) "Unxpected unmount failure: " . show)
            (const $ return ())
          
@@ -259,15 +260,16 @@ defaultFilePerms = FileMode [Read,Write] [Read] [Read]
 -- Debugging helpers
 
 dumpfs :: HalfsCapable b t r l m =>
-          HalfsState b r l m -> HalfsM b r l m String
-dumpfs fs = do
-  dump <- dumpfs' 2 "/\n" =<< rootDir `fmap` readRef (hsSuperBlock fs)
+          HalfsM b r l m String
+dumpfs = do
+  sbRef <- hasks hsSuperBlock
+  dump <- dumpfs' 2 "/\n" =<< rootDir `fmap` readRef sbRef
   return $ "=== fs dump begin ===\n"
         ++ dump
         ++ "=== fs dump end ===\n"
   where
     dumpfs' i ipfx inr = do 
-      contents <- withDirectory fs inr $ \dh -> do
+      contents <- withDirectory inr $ \dh -> do
                     withLock (dhLock dh) $ readRef $ dhContents dh
       foldM (\dumpAcc (path, dirEnt) -> do
                sub <- if deType dirEnt == Directory && path /= "." && path /= ".."

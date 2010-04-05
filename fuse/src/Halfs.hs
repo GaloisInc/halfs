@@ -33,6 +33,7 @@ import Halfs.File (FileHandle)
 import Halfs.Errors
 import Halfs.HalfsState
 import Halfs.Monad
+import Halfs.MonadUtils
 import Halfs.Utils
 import System.Device.BlockDevice
 import System.Device.File
@@ -159,9 +160,9 @@ halfsGetFileStat :: HalfsCapable b t r l m =>
                     HalfsSpecific b r l m
                  -> FilePath
                  -> m (Either Errno FileStat)
-halfsGetFileStat hsp@HS{ hspLogger = log, hspState = fs} fp = do
+halfsGetFileStat hsp@HS{ hspLogger = log } fp = do
   log $ "halfsGetFileStat: fp = " ++ show fp
-  eestat <- execOrErrno hsp eINVAL id (fstat fs fp)
+  eestat <- execOrErrno hsp eINVAL id (fstat fp)
   case eestat of
     Left en -> do
       log $ "  (fstat failed w/ " ++ show en ++ ")"
@@ -181,13 +182,13 @@ halfsCreateDevice :: HalfsCapable b t r l m =>
                      HalfsSpecific b r l m
                   -> FilePath -> EntryType -> FileMode -> DeviceID
                   -> m Errno
-halfsCreateDevice hsp@HS{ hspLogger = log, hspState = fs } fp etype mode _devID = do
+halfsCreateDevice hsp@HS{ hspLogger = log } fp etype mode _devID = do
   log $ "halfsCreateDevice: fp = " ++ show fp ++ ", etype = " ++ show etype ++
         ", mode = " ++ show mode
   case etype of
     RegularFile -> do
       log $ "halfsCreateDevice: Regular file w/ " ++ show hmode
-      execDefault hsp $ createFile (withLogger log fs) fp hmode
+      execDefault hsp $ hlocal (withLogger log) $ createFile fp hmode
     _ -> do
       log $ "halfsCreateDevice: Error: Unsupported EntryType encountered."
       return eINVAL
@@ -197,9 +198,9 @@ halfsCreateDirectory :: HalfsCapable b t r l m =>
                         HalfsSpecific b r l m
                      -> FilePath -> FileMode
                      -> m Errno
-halfsCreateDirectory hsp@HS{ hspLogger = log, hspState = fs } fp mode = do
+halfsCreateDirectory hsp@HS{ hspLogger = log } fp mode = do
   log $ "halfsCreateDirectory: fp = " ++ show fp
-  execDefault hsp $ mkdir fs fp (mode2hmode mode)
+  execDefault hsp $ mkdir fp (mode2hmode mode)
          
 halfsRemoveLink :: HalfsCapable b t r l m =>
                    HalfsSpecific b r l m
@@ -213,9 +214,9 @@ halfsRemoveDirectory :: HalfsCapable b t r l m =>
                         HalfsSpecific b r l m
                      -> FilePath
                      -> m Errno
-halfsRemoveDirectory hsp@HS{ hspLogger = log, hspState = fs } fp = do
+halfsRemoveDirectory hsp@HS{ hspLogger = log } fp = do
   log $ "halfsRemoveDirectory: removing " ++ show fp
-  execDefault hsp $ rmdir fs fp
+  execDefault hsp $ rmdir fp
 
          
 halfsCreateSymbolicLink :: HalfsCapable b t r l m =>
@@ -238,24 +239,24 @@ halfsCreateLink :: HalfsCapable b t r l m =>
                    HalfsSpecific b r l m
                 -> FilePath -> FilePath
                 -> m Errno
-halfsCreateLink hsp@HS{ hspLogger = log, hspState = fs } src dst = do
+halfsCreateLink hsp@HS{ hspLogger = log } src dst = do
   log $ "halfsCreateLink: creating hard link from '" ++ src
         ++ "' to '" ++ dst ++ "'"
-  execDefault hsp $ mklink fs src dst
+  execDefault hsp $ mklink src dst
          
 halfsSetFileMode :: HalfsCapable b t r l m =>
                     HalfsSpecific b r l m
                  -> FilePath -> FileMode
                  -> m Errno
-halfsSetFileMode hsp@HS{ hspLogger = log, hspState = fs } fp mode = do
+halfsSetFileMode hsp@HS{ hspLogger = log } fp mode = do
   log $ "halfsSetFileMode: setting " ++ show fp ++ " to mode " ++ show mode
-  execDefault hsp $ chmod fs fp (mode2hmode mode)
+  execDefault hsp $ chmod fp (mode2hmode mode)
          
 halfsSetOwnerAndGroup :: HalfsCapable b t r l m =>
                          HalfsSpecific b r l m
                       -> FilePath -> UserID -> GroupID
                       -> m Errno
-halfsSetOwnerAndGroup hsp@HS{ hspLogger = log, hspState = fs } fp uid' gid' = do
+halfsSetOwnerAndGroup hsp@HS{ hspLogger = log } fp uid' gid' = do
   -- uid and gid get passed as System.Posix.Types.C[UG]id which are newtype'd
   -- Word32s.  Unfortunately, this means that a user or group argument of -1
   -- (which means "unchanged" according to the man page for chown(2)) is only
@@ -269,37 +270,37 @@ halfsSetOwnerAndGroup hsp@HS{ hspLogger = log, hspState = fs } fp uid' gid' = do
 
   log $ "halfsSetOwnerAndGroup: setting " ++ show fp ++ " to user = "
         ++ show uid ++ ", group = " ++ show gid
-  execDefault hsp $ chown fs fp uid gid
+  execDefault hsp $ chown fp uid gid
          
 halfsSetFileSize :: HalfsCapable b t r l m =>
                     HalfsSpecific b r l m
                  -> FilePath -> FileOffset
                  -> m Errno
-halfsSetFileSize hsp@HS{ hspLogger = log, hspState = fs } fp offset = do
+halfsSetFileSize hsp@HS{ hspLogger = log } fp offset = do
   log $ "halfsSetFileSize: setting " ++ show fp ++ " to size " ++ show offset
-  execDefault hsp $ setFileSize fs fp (fromIntegral offset)
+  execDefault hsp $ setFileSize fp (fromIntegral offset)
          
 halfsSetFileTimes :: HalfsCapable b t r l m =>
                      HalfsSpecific b r l m
                   -> FilePath -> EpochTime -> EpochTime
                   -> m Errno
-halfsSetFileTimes hsp@HS{ hspLogger = log, hspState = fs } fp accTm modTm = do
+halfsSetFileTimes hsp@HS{ hspLogger = log } fp accTm modTm = do
   -- TODO: Check perms: caller must be file owner w/ write access or
   -- superuser.
   accTm' <- fromCTime accTm
   modTm' <- fromCTime modTm
   log $ "halfsSetFileTimes fp = " ++ show fp ++ ", accTm = " ++ show accTm' ++
         ", modTm = " ++ show modTm'
-  execDefault hsp $ setFileTimes fs fp accTm' modTm'     
+  execDefault hsp $ setFileTimes fp accTm' modTm'     
          
 halfsOpen :: HalfsCapable b t r l m =>
              HalfsSpecific b r l m             
           -> FilePath -> OpenMode -> OpenFileFlags
           -> m (Either Errno FileHandle)
-halfsOpen hsp@HS{ hspLogger = log, hspState = fs } fp omode flags = do
+halfsOpen hsp@HS{ hspLogger = log } fp omode flags = do
   log $ "halfsOpen: fp = " ++ show fp ++ ", omode = " ++ show omode ++ 
         ", flags = " ++ show flags
-  rslt <- execOrErrno hsp eINVAL id $ openFile fs fp halfsFlags
+  rslt <- execOrErrno hsp eINVAL id $ openFile fp halfsFlags
   log $ "halfsOpen: CoreAPI.openFile completed: rslt = " ++ show rslt
   return rslt
   where
@@ -319,29 +320,29 @@ halfsRead :: HalfsCapable b t r l m =>
              HalfsSpecific b r l m
           -> FilePath -> FileHandle -> ByteCount -> FileOffset
           -> m (Either Errno BS.ByteString)
-halfsRead hsp@HS{ hspLogger = log, hspState = fs } fp fh byteCnt offset = do
+halfsRead hsp@HS{ hspLogger = log } fp fh byteCnt offset = do
   log $ "halfsRead: Reading " ++ show byteCnt ++ " bytes from " ++
         show fp ++ " at offset " ++ show offset
   execOrErrno hsp eINVAL id $ 
-    read fs fh (fromIntegral offset) (fromIntegral byteCnt)
+    read fh (fromIntegral offset) (fromIntegral byteCnt)
 
 halfsWrite :: HalfsCapable b t r l m =>
               HalfsSpecific b r l m
            -> FilePath -> FileHandle -> BS.ByteString -> FileOffset
            -> m (Either Errno ByteCount)
-halfsWrite hsp@HS{ hspLogger = log, hspState = fs } fp fh bytes offset = do
+halfsWrite hsp@HS{ hspLogger = log } fp fh bytes offset = do
   log $ "halfsWrite: Writing " ++ show (BS.length bytes) ++ " bytes to " ++ 
         show fp ++ " at offset " ++ show offset
   execOrErrno hsp eINVAL id $ do
-    write fs fh (fromIntegral offset) bytes
+    write fh (fromIntegral offset) bytes
     return (fromIntegral $ BS.length bytes)
 
 halfsGetFileSystemStats :: HalfsCapable b t r l m =>
                            HalfsSpecific b r l m
                         -> FilePath
                         -> m (Either Errno System.Fuse.FileSystemStats)
-halfsGetFileSystemStats hsp@HS{ hspState = fs } _fp = do
-  execOrErrno hsp eINVAL fss2fss (fsstat fs)
+halfsGetFileSystemStats hsp _fp = do
+  execOrErrno hsp eINVAL fss2fss fsstat
   where
     fss2fss (FSS bs bc bf ba fc ff fa) = System.Fuse.FileSystemStats
       { fsStatBlockSize     = bs
@@ -358,9 +359,9 @@ halfsFlush :: HalfsCapable b t r l m =>
               HalfsSpecific b r l m
            -> FilePath -> FileHandle
            -> m Errno
-halfsFlush hsp@HS{ hspLogger = log, hspState = fs } fp fh = do
+halfsFlush hsp@HS{ hspLogger = log } fp fh = do
   log $ "halfsFlush: Flushing " ++ show fp
-  execDefault hsp $ flush fs fh
+  execDefault hsp $ flush fh
          
 halfsRelease :: HalfsCapable b t r l m =>
                 HalfsSpecific b r l m
@@ -368,7 +369,7 @@ halfsRelease :: HalfsCapable b t r l m =>
              -> m ()
 halfsRelease HS{ hspLogger = log, hspState = fs } fp fh = do
   log $ "halfsRelease: Releasing " ++ show fp
-  exec fs $ closeFile fs fh
+  exec fs $ closeFile fh
          
 halfsSyncFile :: HalfsCapable b t r l m =>
                  HalfsSpecific b r l m
@@ -382,27 +383,27 @@ halfsOpenDirectory :: HalfsCapable b t r l m =>
                       HalfsSpecific b r l m
                    -> FilePath
                    -> m Errno
-halfsOpenDirectory hsp@(HS log fs fpdhMap) fp = do
+halfsOpenDirectory hsp@HS{ hspLogger = log, hspFpdhMap = fpdhMap } fp = do
   log $ "halfsOpenDirectory: fp = " ++ show fp
   execDefault hsp $ 
     withLockedRscRef fpdhMap $ \ref -> do
       mdh <- lookupRM fp ref
       case mdh of
-        Nothing -> openDir fs fp >>= modifyRef ref . M.insert fp 
+        Nothing -> openDir fp >>= modifyRef ref . M.insert fp 
         _       -> return ()
   
 halfsReadDirectory :: HalfsCapable b t r l m =>  
                       HalfsSpecific b r l m
                    -> FilePath
                    -> m (Either Errno [(FilePath, FileStat)])
-halfsReadDirectory hsp@(HS log fs fpdhMap) fp = do
+halfsReadDirectory hsp@HS{ hspLogger = log, hspFpdhMap = fpdhMap } fp = do
   log $ "halfsReadDirectory: fp = " ++ show fp
   rslt <- execOrErrno hsp eINVAL id $ 
     withLockedRscRef fpdhMap $ \ref -> do
       mdh <- lookupRM fp ref
       case mdh of
         Nothing -> throwError HE_DirectoryHandleNotFound
-        Just dh -> readDir fs dh
+        Just dh -> readDir dh
                      >>= mapM (\(p, s) -> (,) p `fmap` hfstat2fstat s)
   log $ "  rslt = " ++ show rslt
   return rslt
@@ -411,14 +412,14 @@ halfsReleaseDirectory :: HalfsCapable b t r l m =>
                          HalfsSpecific b r l m
                       -> FilePath
                       -> m Errno
-halfsReleaseDirectory hsp@(HS log fs fpdhMap) fp = do
+halfsReleaseDirectory hsp@HS{ hspLogger = log, hspFpdhMap = fpdhMap} fp = do
   log $ "halfsReleaseDirectory: fp = " ++ show fp
   execDefault hsp $ 
     withLockedRscRef fpdhMap $ \ref -> do
       mdh <- lookupRM fp ref
       case mdh of
         Nothing -> throwError HE_DirectoryHandleNotFound
-        Just dh -> closeDir fs dh >> modifyRef ref (M.delete fp)
+        Just dh -> closeDir dh >> modifyRef ref (M.delete fp)
          
 halfsSyncDirectory :: HalfsCapable b t r l m =>
                       HalfsSpecific b r l m
@@ -448,7 +449,7 @@ halfsDestroy :: HalfsCapable b t r l m =>
              -> m ()
 halfsDestroy HS{ hspLogger = log, hspState = fs } = do
   log $ "halfsDestroy: Unmounting..." 
-  exec fs $ unmount fs
+  exec fs $ unmount
   log "halfsDestroy: Shutting block device down..."        
   exec fs $ lift $ bdShutdown (hsBlockDev fs)
   log $ "halfsDestroy: Done."

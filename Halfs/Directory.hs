@@ -34,6 +34,7 @@ import Halfs.Classes
 import Halfs.Errors
 import Halfs.HalfsState
 import Halfs.Monad
+import Halfs.MonadUtils
 import Halfs.Inode ( Inode(..)
                    , InodeRef(..)
                    , atomicReadInode
@@ -60,27 +61,28 @@ type HalfsM b r l m a = HalfsT HalfsError (Maybe (HalfsState b r l m)) m a
 -- | Given a parent directory's inoderef, its owner, and its group,
 -- generate a new, empty directory with the given name.
 makeDirectory :: HalfsCapable b t r l m =>
-                 HalfsState b r l m       -- ^ the filesystem
-              -> InodeRef                 -- ^ inr to parent directory
+                 InodeRef                 -- ^ inr to parent directory
               -> String                   -- ^ directory name
               -> UserID                   -- ^ user id for created directory
               -> GroupID                  -- ^ group id for created directory
               -> FileMode                 -- ^ initial perms for new directory
               -> HalfsM b r l m InodeRef  -- ^ on success, the inode ref to the
                                           --   created directory
-makeDirectory fs parentIR dname user group perms =
-  withDirectory fs parentIR $ \pdh -> do
+makeDirectory parentIR dname user group perms =
+  withDirectory parentIR $ \pdh -> do
   withLock (dhLock pdh) $ do 
   -- Begin critical section over parent's DirHandle 
   contents <- readRef (dhContents pdh)
   if M.member dname contents
    then throwError $ HE_ObjectExists dname 
    else do
-     mir <- fmap blockAddrToInodeRef `fmap` alloc1 (hsBlockMap fs)
+     bm  <- hasks hsBlockMap 
+     mir <- fmap blockAddrToInodeRef `fmap` alloc1 bm
      case mir of
        Nothing     -> throwError HE_AllocFailed
        Just thisIR -> do
          -- Build the directory inode and persist it
+         dev  <- hasks hsBlockDev       
          bstr <- lift $ buildEmptyInodeEnc
                           dev
                           Directory
@@ -96,23 +98,22 @@ makeDirectory fs parentIR dname user group perms =
          addDirEnt_lckd pdh dname thisIR user group perms Directory
          return thisIR
   -- End critical section over parent's DirHandle 
-  where
-    dev = hsBlockDev fs
 
 -- | Given a parent directory's inode ref, remove the directory with the given name.
 removeDirectory :: HalfsCapable b t r l m =>
-                   HalfsState b r l m -- ^ the filesystem
-                -> String             -- ^ directory basename
+                   String             -- ^ directory basename
                 -> InodeRef           -- ^ inode of directory to remove
                 -> HalfsM b r l m ()
-removeDirectory fs dname inr =
+removeDirectory dname inr = do
   -- TODO: Perms check (write perms on parent directory, etc.)
 
+  dhMap <- hasks hsDHMap
   -- We lock the dirhandle map so (a) there's no contention for
   -- dirhandle lookup/creation for the directory we're removing and (b)
   -- so we can ensure that the directory is empty.
-  withLockedRscRef (hsDHMap fs) $ \dhMapRef -> do
-  dh <- lookupRM inr dhMapRef >>= maybe (newDirHandle fs inr) return
+
+  withLockedRscRef dhMap $ \dhMapRef -> do
+  dh <- lookupRM inr dhMapRef >>= maybe (newDirHandle inr) return
   withLock (dhLock dh) $ do
   -- begin dirhandle critical section   
 
@@ -120,13 +121,13 @@ removeDirectory fs dname inr =
   unless (M.null contents) $ HE_DirectoryNotEmpty `annErrno` eNOTEMPTY
 
   -- Purge this dir's dirent from the parent directory
-  pinr <- atomicReadInode fs inr inoParent
-  pdh  <- lookupRM pinr dhMapRef >>= maybe (newDirHandle fs pinr) return
+  pinr <- atomicReadInode inr inoParent
+  pdh  <- lookupRM pinr dhMapRef >>= maybe (newDirHandle pinr) return
   rmDirEnt pdh dname
 
   -- Invalidate dh so that all subsequent DH-mediated access fails
   writeRef (dhInode dh) Nothing 
-  freeInode fs inr
+  freeInode inr
   -- end dirhandle critical section   
 
 -- | Syncs directory contents to disk
@@ -134,10 +135,9 @@ removeDirectory fs dname inr =
 -- NB: We need to decide where all open & dirty DirHandles are sync'd.  Probably
 -- in fs unmount/teardown via CoreAPI.
 syncDirectory :: HalfsCapable b t r l m =>
-                 HalfsState b r l m
-              -> DirHandle r l
+                 DirHandle r l
               -> HalfsM b r l m ()
-syncDirectory fs dh = do 
+syncDirectory dh = do 
   withLock (dhLock dh) $ do 
   state <- readRef $ dhState dh
   -- TODO: Currently, we overwrite the entire DirectoryEntry list, truncating
@@ -153,23 +153,23 @@ syncDirectory fs dh = do
   where
     overwriteAll = do
       inr <- getDHINR_lckd dh
-      writeStream fs inr 0 True
+      writeStream inr 0 True
         =<< (encode . M.elems) `fmap` readRef (dhContents dh)
       modifyRef (dhState dh) dirStTransClean
 
 -- | Obtains an active directory handle for the directory at the given InodeRef
 openDirectory :: HalfsCapable b t r l m =>
-                 HalfsState b r l m
-              -> InodeRef
+                 InodeRef
               -> HalfsM b r l m (DirHandle r l)
-openDirectory fs inr = do
+openDirectory inr = do
   -- TODO FIXME permissions checks!
-  mdh <- withLockedRscRef (hsDHMap fs) (lookupRM inr)
+  dhMap <- hasks hsDHMap
+  mdh   <- withLockedRscRef dhMap (lookupRM inr)
   case mdh of
     Just dh -> return dh
     Nothing -> do
-      dh <- newDirHandle fs inr
-      withLockedRscRef (hsDHMap fs) $ \ref -> do
+      dh <- newDirHandle inr
+      withLockedRscRef dhMap $ \ref -> do
         -- If there's now a DirHandle in the map for our inode ref, prefer it to
         -- the one we just created; this is to safely avoid race conditions
         -- without extending the critical section over this entire function,
@@ -182,11 +182,10 @@ openDirectory fs inr = do
             return dh
 
 closeDirectory :: HalfsCapable b t r l m =>
-                  HalfsState b r l m 
-               -> DirHandle r l
+                  DirHandle r l
                -> HalfsM b r l m ()
-closeDirectory fs dh = do
-  syncDirectory fs dh
+closeDirectory dh = do
+  syncDirectory dh
   return ()
   
 -- | Add a directory entry for a file, directory, or symlink; expects
@@ -248,22 +247,21 @@ rmDirEnt_lckd dh name = do
 -- and a list of path components.  Success is denoted using the DF_Found
 -- constructor of the DirFindRslt type.
 find :: HalfsCapable b t r l m => 
-        HalfsState b r l m -- ^ The filesystem to search
-     -> InodeRef           -- ^ The starting inode reference
+        InodeRef           -- ^ The starting inode reference
      -> FileType           -- ^ A match must be of this filetype
      -> [FilePath]         -- ^ Path components
      -> HalfsM b r l m (DirFindRslt InodeRef)
 --
-find _ startINR _ [] = 
+find startINR _ [] = 
   return $ DF_Found startINR
 --
-find fs startINR ftype (pathComp:rest) = do
-  dh <- openDirectory fs startINR
+find startINR ftype (pathComp:rest) = do
+  dh <- openDirectory startINR
   sr <- findDE dh pathComp (if null rest then ftype else Directory)
   case sr of
     DF_NotFound         -> return $ DF_NotFound
     DF_WrongFileType ft -> return $ DF_WrongFileType ft
-    DF_Found de         -> find fs (deInode de) ftype rest
+    DF_Found de         -> find (deInode de) ftype rest
 
 -- | Locate the given directory entry typed file by filename in the
 -- DirHandle's content map
@@ -293,11 +291,10 @@ findInDir dh fname ftype = fmap deInode `fmap` findDE dh fname ftype
 -- Utility functions
 
 newDirHandle :: HalfsCapable b t r l m =>
-                HalfsState b r l m
-             -> InodeRef
+                InodeRef
              -> HalfsM b r l m (DirHandle r l)
-newDirHandle fs inr = do
-  rawDirBytes <- readStream fs inr 0 Nothing
+newDirHandle inr = do
+  rawDirBytes <- readStream inr 0 Nothing
   dirEnts     <- if BS.null rawDirBytes
                  then do return []
                  else case decode rawDirBytes of 
@@ -318,11 +315,10 @@ getDHINR_lckd dh = do
   readRef (dhInode dh) >>= maybe (throwError HE_InvalidDirHandle) return
 
 withDirectory :: HalfsCapable b t r l m =>
-                 HalfsState b r l m
-              -> InodeRef
+                 InodeRef
               -> (DirHandle r l -> HalfsM b r l m a)
               -> HalfsM b r l m a
-withDirectory fs ir = hbracket (openDirectory fs ir) (closeDirectory fs)
+withDirectory ir = hbracket (openDirectory ir) closeDirectory
 
 isFileType :: DirectoryEntry -> FileType -> Bool
 isFileType _ AnyFileType              = True

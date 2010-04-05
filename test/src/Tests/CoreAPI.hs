@@ -136,8 +136,8 @@ propM_mountUnmountOK _g dev = do
 
   -- Ensure that double unmount results in an error
   mountOK dev >>= \fs' -> do
-    unmountOK fs'           -- Unmount #1
-    e0 <- runHNoEnv (unmount fs')
+    unmountOK fs' -- Unmount #1
+    e0 <- runH fs' unmount
     case e0 of
       Left HE_UnmountFailed -> return ()
       _                     -> assert False     
@@ -164,7 +164,7 @@ propM_unmountMutexOK _g dev = do
   assert $ (r1 || r2) && not (r1 && r2) -- r1 `xor` r2
   where
     threadTest fs ch =
-      runHalfs fs (unmount fs) >>=
+      runHalfs fs unmount >>=
         either (\_ -> writeChan ch False) (\_ -> writeChan ch True)
 
 -- | Ensure that a new filesystem has the expected root directory intact
@@ -175,16 +175,16 @@ propM_dirConstructionOK _g dev = do
   let exec = execH "propM_dirConstructionOK" fs
       --
       test p = do
-        exec ("mkdir " ++ p) (mkdir fs p defaultDirPerms)
-        isEmpty =<< exec ("openDir " ++ p) (openDir fs p)
+        exec ("mkdir " ++ p) (mkdir p defaultDirPerms)
+        isEmpty =<< exec ("openDir " ++ p) (openDir p)
       -- 
       isEmpty dh = 
-        assert =<< do dnames <- map fst `fmap` exec "readDir" (readDir fs dh)
+        assert =<< do dnames <- map fst `fmap` exec "readDir" (readDir dh)
                       return $ L.sort dnames == L.sort initDirEntNames
 
   -- Check that the root directory is present and empty (. and .. are
   -- implicit via readDir)
-  exec "openDir /" (openDir fs rootPath) >>= \dh -> do
+  exec "openDir /" (openDir rootPath) >>= \dh -> do
     assert =<< (== Clean) `fmap` sreadRef (dhState dh)
     assert =<< M.null `fmap` sreadRef (dhContents dh)
     
@@ -211,32 +211,32 @@ propM_fileBasicsOK _g dev = do
       fp2            = fooPath </> "f2"
 
 
-  exec "mkdir /foo"          $ mkdir fs fooPath defaultDirPerms
-  exec "create /foo/f1"      $ createFile fs fp defaultFilePerms
-  fh0 <- exec "open /foo/f1" $ openFile fs fp fofReadOnly
-  exec "close /foo/f1"       $ closeFile fs fh0
+  exec "mkdir /foo"          $ mkdir fooPath defaultDirPerms
+  exec "create /foo/f1"      $ createFile fp defaultFilePerms
+  fh0 <- exec "open /foo/f1" $ openFile fp fofReadOnly
+  exec "close /foo/f1"       $ closeFile fh0
 
-  e0 <- runH fs $ createFile fs fp defaultFilePerms
+  e0 <- runH fs $ createFile fp defaultFilePerms
   case e0 of
     Left (HE_ObjectExists fp') -> assert (fp == fp')
     _                          -> assert False
 
   -- Check open mode read/write permissiveness: can't read write-only,
   -- can't write read-only.
-  exec "create /foo/f2"             $ createFile fs fp2 defaultFilePerms
-  fh1 <- exec "rdonly open /foo/f1" $ openFile fs fp2 fofReadOnly
+  exec "create /foo/f2"             $ createFile fp2 defaultFilePerms
+  fh1 <- exec "rdonly open /foo/f1" $ openFile fp2 fofReadOnly
 
   -- Expect a write to a read-only file to fail
-  e1 <- runH fs $ write fs fh1 0 $ BS.singleton 0
+  e1 <- runH fs $ write fh1 0 $ BS.singleton 0
   case e1 of
     Left (HE_ErrnoAnnotated HE_BadFileHandleForWrite errno) ->
       assert (errno == eBADF)
     _ -> assert False
-  exec "close /foo/f2" $ closeFile fs fh1
+  exec "close /foo/f2" $ closeFile fh1
 
-  fh2 <- exec "wronly open /foo/f1" $ openFile fs fp2 (fofWriteOnly False)
+  fh2 <- exec "wronly open /foo/f1" $ openFile fp2 (fofWriteOnly False)
   -- Expect a read from a write-only file to fail
-  e2 <- runH fs $ read fs fh2 0 0
+  e2 <- runH fs $ read fh2 0 0
   case e2 of
     Left (HE_ErrnoAnnotated HE_BadFileHandleForRead errno) ->
       assert (errno == eBADF)
@@ -253,10 +253,10 @@ propM_fileWROK pathFromRoot _g dev = do
       time = exec "obtain time" getTime
 
   assert (isRelative pathFromRoot)
-  mapM_ (exec "making parent dir" . flip (mkdir fs) defaultDirPerms) mkdirs
+  mapM_ (exec "making parent dir" . flip mkdir defaultDirPerms) mkdirs
 
-  exec "create file"     $ createFile fs thePath defaultFilePerms
-  fh <- exec "open file" $ openFile fs thePath (fofReadWrite False)
+  exec "create file"     $ createFile thePath defaultFilePerms
+  fh <- exec "open file" $ openFile thePath (fofReadWrite False)
 
   forAllM (FileWR `fmap` choose (1, maxBytes)) $ \(FileWR fileSz) -> do
   forAllM (printableBytes fileSz)              $ \fileData        -> do 
@@ -265,27 +265,27 @@ propM_fileWROK pathFromRoot _g dev = do
   let expBlks = calcExpBlockCount (bdBlockSize dev) api apc fileSz
 
   let checkFileStat' atp mtp ctp = do
-        usr <- exec "get grp"    $ getUser fs
-        grp <- exec "get usr"    $ getGroup fs
-        st  <- exec "fstat file" $ fstat fs thePath
+        usr <- exec "get grp" getUser
+        grp <- exec "get usr" getGroup
+        st  <- exec "fstat file" $ fstat thePath
         checkFileStat st fileSz RegularFile defaultFilePerms
                       usr grp expBlks atp mtp ctp
 
   t1 <- time
-  exec "bytes -> file" $ write fs fh 0 fileData
+  exec "bytes -> file" $ write fh 0 fileData
   checkFileStat' (t1 <=) (t1 <=) (t1 <=)
 
   -- Readback and check before closing the file
   t2 <- time
-  fileData' <- exec "bytes <- file" $ read fs fh 0 (fromIntegral fileSz)
+  fileData' <- exec "bytes <- file" $ read fh 0 (fromIntegral fileSz)
   checkFileStat' (t2 <=) (t2 >=) (t2 <=)
   assrt "File readback OK" $ fileData == fileData'
 
-  exec "close file" $ closeFile fs fh
+  exec "close file" $ closeFile fh
 
   -- Reacquire the FH, read and check
-  fh' <- exec "reopen file" $ openFile fs thePath fofReadOnly
-  fileData'' <- exec "bytes <- file 2" $ read fs fh' 0 (fromIntegral fileSz)
+  fh' <- exec "reopen file" $ openFile thePath fofReadOnly
+  fileData'' <- exec "bytes <- file 2" $ read fh' 0 (fromIntegral fileSz)
   checkFileStat' (t2 <=) (t2 >=) (t2 <=)
   assrt "Reopened file readback OK" $ fileData == fileData''
 
@@ -309,20 +309,20 @@ propM_simpleFileOpsOK _g dev = do
   forAllM (printableBytes fileSz)       $ \fileData  -> do
                                  
   let fp = rootPath </> "foo"
-  exec "create /foo"      $ createFile fs fp defaultFilePerms
-  fh0 <- exec "open /foo" $ openFile fs fp (fofWriteOnly True)
-  exec "bytes -> file"    $ write fs fh0 0 fileData
-  exec "close /foo"       $ closeFile fs fh0
-  exec "resize /foo"      $ setFileSize fs fp (fromIntegral resizedSz)
+  exec "create /foo"      $ createFile fp defaultFilePerms
+  fh0 <- exec "open /foo" $ openFile fp (fofWriteOnly True)
+  exec "bytes -> file"    $ write fh0 0 fileData
+  exec "close /foo"       $ closeFile fh0
+  exec "resize /foo"      $ setFileSize fp (fromIntegral resizedSz)
 
   -- Check that fstat is coherent
-  st <- exec "fstat /foo" $ fstat fs fp
+  st <- exec "fstat /foo" $ fstat fp
   let newSz = fsSize st
   assert (newSz == fromIntegral resizedSz)
  
   -- Check that file contents have truncated/grown as expected
-  fh1       <- exec "reopen /foo" $ openFile fs fp fofReadOnly
-  fileData' <- exec "read /foo" $ read fs fh1 0 newSz
+  fh1       <- exec "reopen /foo" $ openFile fp fofReadOnly
+  fileData' <- exec "read /foo" $ read fh1 0 newSz
   assert (newSz == fromIntegral (BS.length fileData'))
   if resizedSz < fileSz
    then assert (fileData' == BS.take resizedSz fileData)
@@ -331,12 +331,12 @@ propM_simpleFileOpsOK _g dev = do
                          `BS.append`
                          BS.replicate (resizedSz - fileSz) 0
             )
-  exec "close /foo" $ closeFile fs fh1
+  exec "close /foo" $ closeFile fh1
 
   -- Check setFileTimes
   now <- exec "get time" getTime
-  exec "setFileTimes" $ setFileTimes fs fp now now
-  st' <- exec "fstat /foo" $ fstat fs fp
+  exec "setFileTimes" $ setFileTimes fp now now
+  st' <- exec "fstat /foo" $ fstat fp
 
 {-
   trace ("now = " ++ show now) $ do
@@ -365,32 +365,32 @@ propM_chmodchownOK _g dev = do
   let exec = execH "propM_chmodchownOK" fs
       fp   = rootPath </> "foo"
 
-  exec "create /foo" $ createFile fs fp defaultFilePerms
+  exec "create /foo" $ createFile fp defaultFilePerms
 
   -- chmod to a random and check
   forAllM arbitrary $ \perms -> do 
-  exec "chmod 600 /foo"    $ chmod fs fp perms
-  st0 <- exec "fstat /foo" $ fstat fs fp
+  exec "chmod 600 /foo"    $ chmod fp perms
+  st0 <- exec "fstat /foo" $ fstat fp
   assert (fsMode st0 == perms)
 
   -- chown/chgrp to random uid/gid and check
   forAllM arbitrary $ \usr -> do
   forAllM arbitrary $ \grp -> do                             
-  exec "ch{own,grp} /foo"  $ chown fs fp (Just usr) (Just grp)
-  st1 <- exec "fstat /foo" $ fstat fs fp
+  exec "ch{own,grp} /foo"  $ chown fp (Just usr) (Just grp)
+  st1 <- exec "fstat /foo" $ fstat fp
   assert (fsUID st1 == usr)
   assert (fsGID st1 == grp)
 
   -- No change variants
   forAllM arbitrary $ \usr2 -> do
   forAllM arbitrary $ \grp2 -> do
-  exec "chown /foo" $ chown fs fp (Just usr2) Nothing -- don't change group
-  st2 <- exec "fstat /foo" $ fstat fs fp
+  exec "chown /foo" $ chown fp (Just usr2) Nothing -- don't change group
+  st2 <- exec "fstat /foo" $ fstat fp
   assert (fsUID st2 == usr2)
   assert (fsGID st2 == grp)
 
-  exec "chgrp /foo" $ chown fs fp Nothing (Just grp2) -- don't change user
-  st3 <- exec "fstat /foo" $ fstat fs fp
+  exec "chgrp /foo" $ chown fp Nothing (Just grp2) -- don't change user
+  st3 <- exec "fstat /foo" $ fstat fp
   assert (fsUID st3 == usr2)
   assert (fsGID st3 == grp2)
 
@@ -416,8 +416,8 @@ propM_dirMutexOK _g dev = do
   assrt ("Caught exception(s) from thread(s): " ++ show exceptions)
         (null exceptions)
 
-  dh               <- exec "openDir /" $ openDir fs "/"
-  (dnames, dstats) <- exec "readDir /" $ unzip `fmap` readDir fs dh
+  dh               <- exec "openDir /" $ openDir "/"
+  (dnames, dstats) <- exec "readDir /" $ unzip `fmap` readDir dh
 
   let p = L.sort dnames; q = L.sort $ concat nmss ++ initDirEntNames
   assrt ("Directory contents incoherent (found discrepancy: "
@@ -441,7 +441,7 @@ propM_dirMutexOK _g dev = do
     genNm n = map ((++) ("f" ++ show n ++ "_")) `fmap` ng filename
     -- 
     threadTest fs ch nms _n = 
-      runHalfs fs (mapM_ (flip (mkdir fs) defaultDirPerms . (</>) rootPath) nms)
+      runHalfs fs (mapM_ (flip mkdir defaultDirPerms . (</>) rootPath) nms)
         >>= writeChan ch . either Just (const Nothing)
 
 propM_hardlinksOK :: HalfsProp
@@ -454,36 +454,36 @@ propM_hardlinksOK _g dev = do
   
   fs <- mkNewFS dev >> mountOK dev
   let exec = execH "propM_hardlinksOK" fs
-  exec "mkdir /foo"                 $ mkdir fs d0 defaultDirPerms
-  exec "mkdir /foo/bar"             $ mkdir fs d1 defaultDirPerms
-  exec "creat /foo/bar/source"      $ createFile fs src defaultFilePerms
-  fh <- exec "open /foo/bar/source" $ openFile fs src (fofWriteOnly True)
+  exec "mkdir /foo"                 $ mkdir d0 defaultDirPerms
+  exec "mkdir /foo/bar"             $ mkdir d1 defaultDirPerms
+  exec "creat /foo/bar/source"      $ createFile src defaultFilePerms
+  fh <- exec "open /foo/bar/source" $ openFile src (fofWriteOnly True)
   forAllM (choose (1, maxBytes))    $ \fileSz   -> do
   forAllM (printableBytes fileSz)   $ \srcBytes -> do 
-  exec "write /foo/bar/source"      $ write fs fh 0 srcBytes
-  exec "close /foo/bar/source"      $ closeFile fs fh
+  exec "write /foo/bar/source"      $ write fh 0 srcBytes
+  exec "close /foo/bar/source"      $ closeFile fh
 
   -- Expected error: File named by path1 is a directory
-  expectErrno ePERM   =<< runH fs (mklink fs d1 dst1)
+  expectErrno ePERM   =<< runH fs (mklink d1 dst1)
   -- Expected error: A component of path1's prefix is not a directory
-  expectErrno eNOTDIR =<< runH fs (mklink fs (src </> "source") dst1)
+  expectErrno eNOTDIR =<< runH fs (mklink (src </> "source") dst1)
   -- Expected error: A component of path1's prefix does not exist
-  expectErrno eNOENT  =<< runH fs (mklink fs (d1 </> "bad" </> "source") dst1)
+  expectErrno eNOENT  =<< runH fs (mklink (d1 </> "bad" </> "source") dst1)
   -- Expected error: The file named by path1 does not exist
-  expectErrno eNOENT  =<< runH fs (mklink fs (d1 </> "src2") dst1)
+  expectErrno eNOENT  =<< runH fs (mklink (d1 </> "src2") dst1)
   -- Expected error: A component of path2's prefix is not a directory
-  expectErrno eNOTDIR =<< runH fs (mklink fs src (src </> "dst1"))
+  expectErrno eNOTDIR =<< runH fs (mklink src (src </> "dst1"))
   -- Expected error: A component of path 2's prefix does not exist
-  expectErrno eNOENT  =<< runH fs (mklink fs src (d0 </> "bad" </> "bar"))
+  expectErrno eNOENT  =<< runH fs (mklink src (d0 </> "bad" </> "bar"))
        
-  mapM_ (\dst -> exec "mklink" $ mklink fs src dst) dests
+  mapM_ (\dst -> exec "mklink" $ mklink src dst) dests
 
-  fhs <- mapM (\nm -> exec "open dst" $ openFile fs nm fofReadOnly) dests
-  ds  <- mapM (\dh -> exec "read dst" $ read fs dh 0 (fromIntegral fileSz)) fhs
+  fhs <- mapM (\nm -> exec "open dst" $ openFile nm fofReadOnly) dests
+  ds  <- mapM (\dh -> exec "read dst" $ read dh 0 (fromIntegral fileSz)) fhs
 
   assert $ all (== srcBytes) ds
 
-  mapM (\dh -> exec "close dst" $ closeFile fs dh) fhs
+  mapM (exec "close dst" . closeFile) fhs
 
   -- TODO: Test rmlink here
 
@@ -512,13 +512,13 @@ propM_simpleRmdirOK _g dev = do
       exists path =
         (elem (takeFileName path) . map fst)
           `fmap` exec ("readDir " ++ path)
-                      (withDir fs (takeDirectory path) $ readDir fs)
+                      (withDir (takeDirectory path) readDir)
 
 
   -- Expected error: removal of non-empty directory
-  exec "mkdir /foo"     $ mkdir fs d0 defaultDirPerms
-  exec "create /foo/f1" $ createFile fs fp defaultFilePerms
-  e0 <- runH fs $ rmdir fs d0
+  exec "mkdir /foo"     $ mkdir d0 defaultDirPerms
+  exec "create /foo/f1" $ createFile fp defaultFilePerms
+  e0 <- runH fs $ rmdir d0
   case e0 of
     Left (HE_ErrnoAnnotated HE_DirectoryNotEmpty errno) ->
       assert (errno == eNOTEMPTY)
@@ -526,15 +526,15 @@ propM_simpleRmdirOK _g dev = do
 
   -- simple mkdir/rmdir check
   freeBefore <- getFree fs
-  exec "mkdir /foo/bar" $ mkdir fs d1 defaultDirPerms
-  dh <- exec "openDir /foo/bar" $ openDir fs d1
+  exec "mkdir /foo/bar" $ mkdir d1 defaultDirPerms
+  dh <- exec "openDir /foo/bar" $ openDir d1
   assert =<< exists d1
-  exec "rmdir /foo/bar" $ rmdir fs d1
+  exec "rmdir /foo/bar" $ rmdir d1
   assert =<< liftM2 (==) (getFree fs) (return freeBefore)
   assert =<< not `fmap` exists d1
 
   -- Expected error: access to invalidated directory handle
-  e1 <- runH fs $ readDir fs dh
+  e1 <- runH fs $ readDir dh
   case e1 of
     Left HE_InvalidDirHandle -> return ()
     _                        -> assert False
@@ -578,10 +578,10 @@ propM_rmdirMutexOK _g dev = do
       | n == 0    = return () -- writeChan ch ()
       | otherwise = do
           -- Thread A create directory, should never fail
-          e0 <- runHalfs fs $ mkdir fs dp defaultDirPerms
+          e0 <- runHalfs fs $ mkdir dp defaultDirPerms
           merr <- case e0 of
             Left e  -> return (Right e)
-            Right _ -> runHalfs fs (rmdir fs dp)
+            Right _ -> runHalfs fs (rmdir dp)
                          >>= either (return . Right)
                                     (const $ return $ Left "ok")
           writeChan ch merr            
@@ -591,7 +591,7 @@ propM_rmdirMutexOK _g dev = do
       | n == 0    = return ()
       | otherwise = do
           -- ThreadB readDir, should only fail if dir DNE or the DH is invalid
-          e0 <- runHalfs fs $ withDir fs dp $ readDir fs 
+          e0 <- runHalfs fs $ withDir dp readDir
           merr <- case e0 of
             Left e@(HE_ErrnoAnnotated HE_PathComponentNotFound{} errno) -> 
               return $ if errno == eNOENT then Left "pcnf" else Right e
@@ -618,10 +618,10 @@ quickRemountCheck :: HalfsCapable b t r l m =>
                      HalfsState b r l m
                   -> PropertyM m ()
 quickRemountCheck fs = do
-  dump0 <- exec "Get dump0" $ dumpfs fs
+  dump0 <- exec "Get dump0" dumpfs
   unmountOK fs
   fs'   <- mountOK (hsBlockDev fs)
-  dump1 <- exec "Get dump1" $ dumpfs fs'
+  dump1 <- exec "Get dump1" dumpfs
   assert (dump0 == dump1)
   unmountOK fs'
   where
