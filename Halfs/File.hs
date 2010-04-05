@@ -61,6 +61,12 @@ createFile parentDH fname usr grp mode = do
       atomicModifyLockedRscRef numNodesRsc (+1)
       return $ fileIR
 
+removeFile :: HalfsCapable b t r l m =>
+              String   -- ^ name of file to remove from parent directory
+           -> InodeRef -- ^ inr of file to remove
+           -> HalfsM b r l m ()
+removeFile = error "removeFile NYI" -- HERE!
+
 -- Get file handle's inode reference
 getFHINR_lckd :: HalfsCapable b t r l m =>
                  FileHandle r l

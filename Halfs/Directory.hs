@@ -102,7 +102,7 @@ makeDirectory parentIR dname user group perms =
 -- | Given a parent directory's inode ref, remove the directory with the given name.
 removeDirectory :: HalfsCapable b t r l m =>
                    String             -- ^ directory basename
-                -> InodeRef           -- ^ inode of directory to remove
+                -> InodeRef           -- ^ inr of directory to remove
                 -> HalfsM b r l m ()
 removeDirectory dname inr = do
   -- TODO: Perms check (write perms on parent directory, etc.)
