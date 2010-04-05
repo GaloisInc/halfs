@@ -87,7 +87,7 @@ qcProps quick =
 
 propM_initAndMountOK :: HalfsProp
 propM_initAndMountOK _g dev = do
-  esb <- runH (mkNewFS dev)
+  esb <- mkNewFS dev
   case esb of
     Left _   -> fail "Filesystem creation failed"
     Right sb -> do 
@@ -96,7 +96,7 @@ propM_initAndMountOK _g dev = do
       assert $ IN.nilInodeRef /= rootDir sb
     
       -- Mount the filesystem & ensure integrity with newfs contents
-      runH (mount dev defaultUser defaultGroup) >>= \efs -> case efs of 
+      runHNoEnv (mount dev defaultUser defaultGroup) >>= \efs -> case efs of 
         Left  err -> fail $ "Mount failed: " ++ show err
         Right fs  -> do
           sb'      <- sreadRef (hsSuperBlock fs)
@@ -106,20 +106,21 @@ propM_initAndMountOK _g dev = do
           assert $ freeBlocks sb' == freeBlks
     
       -- Mount the filesystem again and ensure "dirty unmount" failure
-      expectErr (== HE_MountFailed DirtyUnmount)
-                "Mount of unclean FS succeeded"
-                (mount dev defaultUser defaultGroup)
+      e0 <- runHNoEnv (mount dev defaultUser defaultGroup)
+      case e0 of
+        Left (HE_MountFailed DirtyUnmount) -> return ()
+        _                                  -> assert False
 
       -- Corrupt the superblock and ensure "bad superblock" failure
       run $ bdWriteBlock dev 0 $ BS.replicate (fromIntegral $ bdBlockSize dev) 0
-      expectErr pr "Mount of FS with corrupt SB succeeded"
-                (mount dev defaultUser defaultGroup)
-        where pr (HE_MountFailed BadSuperBlock{}) = True
-              pr _                                = False
-
+      e1 <- runHNoEnv (mount dev defaultUser defaultGroup)
+      case e1 of
+        Left (HE_MountFailed BadSuperBlock{}) -> return ()
+        _                                     -> assert False
+                                               
 propM_mountUnmountOK :: HalfsProp
 propM_mountUnmountOK _g dev = do
-  fs <- runH (mkNewFS dev) >> mountOK dev
+  fs <- mkNewFS dev >> mountOK dev
   let readSBRef = sreadRef $ hsSuperBlock fs
 
   assert =<< (not . unmountClean) `fmap` readSBRef
@@ -136,9 +137,10 @@ propM_mountUnmountOK _g dev = do
   -- Ensure that double unmount results in an error
   mountOK dev >>= \fs' -> do
     unmountOK fs'           -- Unmount #1
-    expectErr (== HE_UnmountFailed)
-              "Two successive unmounts succeeded"
-              (unmount fs') -- Unmount #2
+    e0 <- runHNoEnv (unmount fs')
+    case e0 of
+      Left HE_UnmountFailed -> return ()
+      _                     -> assert False     
 
 -- | Sanity check: unmount is mutex'd sensibly
 
@@ -153,7 +155,7 @@ propM_unmountMutexOK :: BDGeom
                      -> BlockDevice IO
                      -> PropertyM IO ()
 propM_unmountMutexOK _g dev = do
-  fs <- runH (mkNewFS dev) >> mountOK dev
+  fs <- mkNewFS dev >> mountOK dev
   ch <- run newChan
   run $ forkIO $ threadTest fs ch
   run $ threadTest fs ch
@@ -162,14 +164,23 @@ propM_unmountMutexOK _g dev = do
   assert $ (r1 || r2) && not (r1 && r2) -- r1 `xor` r2
   where
     threadTest fs ch =
-      runHalfs (unmount fs) >>=
+      runHalfs fs (unmount fs) >>=
         either (\_ -> writeChan ch False) (\_ -> writeChan ch True)
 
 -- | Ensure that a new filesystem has the expected root directory intact
 -- and that dirs and subdirs can be created and opened.
 propM_dirConstructionOK :: HalfsProp
 propM_dirConstructionOK _g dev = do
-  fs <- runH (mkNewFS dev) >> mountOK dev
+  fs <- mkNewFS dev >> mountOK dev
+  let exec = execH "propM_dirConstructionOK" fs
+      --
+      test p = do
+        exec ("mkdir " ++ p) (mkdir fs p defaultDirPerms)
+        isEmpty =<< exec ("openDir " ++ p) (openDir fs p)
+      -- 
+      isEmpty dh = 
+        assert =<< do dnames <- map fst `fmap` exec "readDir" (readDir fs dh)
+                      return $ L.sort dnames == L.sort initDirEntNames
 
   -- Check that the root directory is present and empty (. and .. are
   -- implicit via readDir)
@@ -185,63 +196,61 @@ propM_dirConstructionOK _g dev = do
       p4 = p0 </> "baz"
       p5 = p4 </> "zzz"
 
-  mapM_ (test fs) [p0,p1,p2,p3,p4,p5]
+  mapM_ test [p0,p1,p2,p3,p4,p5]
   quickRemountCheck fs
-
-  where
-    exec = execH "propM_dirConstructionOK"
-    --
-    test fs p = do
-      exec ("mkdir " ++ p) (mkdir fs p defaultDirPerms)
-      isEmpty fs =<< exec ("openDir " ++ p) (openDir fs p)
-    -- 
-    isEmpty fs dh = 
-      assert =<< do dnames <- map fst `fmap` exec "readDir" (readDir fs dh)
-                    return $ L.sort dnames == L.sort initDirEntNames
 
 -- | Ensure that a new filesystem populated with a handful of
 -- directories permits creation/open/close of a file; also checks open
 -- modes.
 propM_fileBasicsOK :: HalfsProp
 propM_fileBasicsOK _g dev = do
-  fs <- runH (mkNewFS dev) >> mountOK dev
-  
-  let fooPath = rootPath </> "foo"
-      fp      = fooPath </> "f1"
-      fp2     = fooPath </> "f2"
+  fs <- mkNewFS dev >> mountOK dev
+  let exec           = execH "propM_fileBasicsOK" fs
+      fooPath        = rootPath </> "foo"
+      fp             = fooPath </> "f1"
+      fp2            = fooPath </> "f2"
+
 
   exec "mkdir /foo"          $ mkdir fs fooPath defaultDirPerms
   exec "create /foo/f1"      $ createFile fs fp defaultFilePerms
   fh0 <- exec "open /foo/f1" $ openFile fs fp fofReadOnly
   exec "close /foo/f1"       $ closeFile fs fh0
 
-  expectErr (== HE_ObjectExists fp)
-            "createFile on existing file succeeded"
-            (createFile fs fp defaultFilePerms)
+  e0 <- runH fs $ createFile fs fp defaultFilePerms
+  case e0 of
+    Left (HE_ObjectExists fp') -> assert (fp == fp')
+    _                          -> assert False
 
   -- Check open mode read/write permissiveness: can't read write-only,
   -- can't write read-only.
   exec "create /foo/f2"             $ createFile fs fp2 defaultFilePerms
   fh1 <- exec "rdonly open /foo/f1" $ openFile fs fp2 fofReadOnly
-  expectErr (== HE_ErrnoAnnotated HE_BadFileHandleForWrite eBADF)
-            "Write to read-only file succeeded"
-            (write fs fh1 0 $ BS.singleton 0)
+
+  -- Expect a write to a read-only file to fail
+  e1 <- runH fs $ write fs fh1 0 $ BS.singleton 0
+  case e1 of
+    Left (HE_ErrnoAnnotated HE_BadFileHandleForWrite errno) ->
+      assert (errno == eBADF)
+    _ -> assert False
   exec "close /foo/f2" $ closeFile fs fh1
 
   fh2 <- exec "wronly open /foo/f1" $ openFile fs fp2 (fofWriteOnly False)
-  expectErr (== HE_ErrnoAnnotated HE_BadFileHandleForRead eBADF)
-            "Read from write-only file succeeded"
-            (read fs fh2 0 0)
+  -- Expect a read from a write-only file to fail
+  e2 <- runH fs $ read fs fh2 0 0
+  case e2 of
+    Left (HE_ErrnoAnnotated HE_BadFileHandleForRead errno) ->
+      assert (errno == eBADF)
+    _ -> assert False
 
   quickRemountCheck fs
-  where
-    exec = execH "propM_fileBasicsOK"
 
 -- | Ensure that simple write/readback works for a new file in a new
 -- filesystem
 propM_fileWROK :: FilePath -> HalfsProp
 propM_fileWROK pathFromRoot _g dev = do
-  fs <- runH (mkNewFS dev) >> mountOK dev
+  fs <- mkNewFS dev >> mountOK dev
+  let exec = execH "propM_fileWROK" fs
+      time = exec "obtain time" getTime
 
   assert (isRelative pathFromRoot)
   mapM_ (exec "making parent dir" . flip (mkdir fs) defaultDirPerms) mkdirs
@@ -285,8 +294,6 @@ propM_fileWROK pathFromRoot _g dev = do
     pathComps = splitDirectories $ fst $ splitFileName pathFromRoot
     mkdirs    = drop 1 $ scanl (\l r -> l ++ [pathSeparator] ++ r) "" pathComps
     thePath   = rootPath </> pathFromRoot
-    time      = exec "obtain time" getTime
-    exec      = execH "propM_fileWROK"
     assrt     = assertMsg "propM_fileWROK"
     maxBytes  = fromIntegral $ bdBlockSize dev * bdNumBlocks dev `div` 8
 
@@ -294,7 +301,9 @@ propM_fileWROK pathFromRoot _g dev = do
 -- working correctly.
 propM_simpleFileOpsOK :: HalfsProp
 propM_simpleFileOpsOK _g dev = do
-  fs <- runH (mkNewFS dev) >> mountOK dev
+  fs <- mkNewFS dev >> mountOK dev
+  let exec = execH "propM_simpleFileOpsOK" fs
+
   forAllM (choose (1, maxBytes))        $ \fileSz    -> do
   forAllM (choose (0::Int, 2 * fileSz)) $ \resizedSz -> do 
   forAllM (printableBytes fileSz)       $ \fileData  -> do
@@ -346,14 +355,15 @@ propM_simpleFileOpsOK _g dev = do
   quickRemountCheck fs
   where
     maxBytes = fromIntegral $ bdBlockSize dev * bdNumBlocks dev `div` 8
-    exec     = execH "propM_simpleFileOpsOK"
 
 -- | Ensure that simple file operations (e.g., setFileSize) are
 -- working correctly.
 propM_chmodchownOK :: HalfsProp
 propM_chmodchownOK _g dev = do
-  fs <- runH (mkNewFS dev) >> mountOK dev
-  let fp = rootPath </> "foo"
+  fs <- mkNewFS dev >> mountOK dev
+
+  let exec = execH "propM_chmodchownOK" fs
+      fp   = rootPath </> "foo"
 
   exec "create /foo" $ createFile fs fp defaultFilePerms
 
@@ -385,8 +395,6 @@ propM_chmodchownOK _g dev = do
   assert (fsGID st3 == grp2)
 
   quickRemountCheck fs
-  where
-    exec = execH "propM_chmodchownOK"
 
 -- | Sanity check: multiple threads making many new directories
 -- simultaneously are interleaved in a sensible manner.
@@ -394,7 +402,8 @@ propM_dirMutexOK :: BDGeom
                  -> BlockDevice IO
                  -> PropertyM IO ()
 propM_dirMutexOK _g dev = do
-  fs <- runH (mkNewFS dev) >> mountOK dev
+  fs <- mkNewFS dev >> mountOK dev
+  let exec = execH "propM_dirMutexOK" fs
 
   forAllM (DirMutexOk `fmap` choose (8, maxThreads)) $ \(DirMutexOk n) -> do
   forAllM (mapM genNm [1..n])                        $ \nmss           -> do
@@ -426,14 +435,13 @@ propM_dirMutexOK _g dev = do
     maxDirs    = 50 -- } v
     maxLen     = 40 -- } arbitrary name length, but fit into small devices
     maxThreads = 8
-    exec       = execH "propM_dirMutexOK"
     ng f       = L.nub `fmap` resize maxDirs (listOf1 $ f maxLen)
     -- 
     genNm :: Int -> Gen [String]
     genNm n = map ((++) ("f" ++ show n ++ "_")) `fmap` ng filename
     -- 
     threadTest fs ch nms _n = 
-      runHalfs (mapM_ (flip (mkdir fs) defaultDirPerms . (</>) rootPath) nms)
+      runHalfs fs (mapM_ (flip (mkdir fs) defaultDirPerms . (</>) rootPath) nms)
         >>= writeChan ch . either Just (const Nothing)
 
 propM_hardlinksOK :: HalfsProp
@@ -444,7 +452,8 @@ propM_hardlinksOK _g dev = do
   --     bar (directory)
   --       source (1 byte file)
   
-  fs <- runH (mkNewFS dev) >> mountOK dev
+  fs <- mkNewFS dev >> mountOK dev
+  let exec = execH "propM_hardlinksOK" fs
   exec "mkdir /foo"                 $ mkdir fs d0 defaultDirPerms
   exec "mkdir /foo/bar"             $ mkdir fs d1 defaultDirPerms
   exec "creat /foo/bar/source"      $ createFile fs src defaultFilePerms
@@ -455,17 +464,17 @@ propM_hardlinksOK _g dev = do
   exec "close /foo/bar/source"      $ closeFile fs fh
 
   -- Expected error: File named by path1 is a directory
-  expectErrno ePERM   =<< runH (mklink fs d1 dst1)
+  expectErrno ePERM   =<< runH fs (mklink fs d1 dst1)
   -- Expected error: A component of path1's prefix is not a directory
-  expectErrno eNOTDIR =<< runH (mklink fs (src </> "source") dst1)
+  expectErrno eNOTDIR =<< runH fs (mklink fs (src </> "source") dst1)
   -- Expected error: A component of path1's prefix does not exist
-  expectErrno eNOENT  =<< runH (mklink fs (d1 </> "bad" </> "source") dst1)
+  expectErrno eNOENT  =<< runH fs (mklink fs (d1 </> "bad" </> "source") dst1)
   -- Expected error: The file named by path1 does not exist
-  expectErrno eNOENT  =<< runH (mklink fs (d1 </> "src2") dst1)
+  expectErrno eNOENT  =<< runH fs (mklink fs (d1 </> "src2") dst1)
   -- Expected error: A component of path2's prefix is not a directory
-  expectErrno eNOTDIR =<< runH (mklink fs src (src </> "dst1"))
+  expectErrno eNOTDIR =<< runH fs (mklink fs src (src </> "dst1"))
   -- Expected error: A component of path 2's prefix does not exist
-  expectErrno eNOENT  =<< runH (mklink fs src (d0 </> "bad" </> "bar"))
+  expectErrno eNOENT  =<< runH fs (mklink fs src (d0 </> "bad" </> "bar"))
        
   mapM_ (\dst -> exec "mklink" $ mklink fs src dst) dests
 
@@ -480,7 +489,6 @@ propM_hardlinksOK _g dev = do
 
   quickRemountCheck fs
   where
-    exec           = execH "propM_hardlinksOK"
     d0             = rootPath </> "foo"
     d1             = d0 </> "bar"
     src            = d1 </> "source"
@@ -495,12 +503,22 @@ propM_hardlinksOK _g dev = do
 
 propM_simpleRmdirOK :: HalfsProp
 propM_simpleRmdirOK _g dev = do
-  fs <- runH (mkNewFS dev) >> mountOK dev
+  fs <- mkNewFS dev >> mountOK dev
+  let exec        = execH "propM_simpleRmdirOK" fs
+      getFree     = sreadRef . bmNumFree . hsBlockMap
+      d0          = rootPath </> "foo"
+      d1          = d0       </> "bar"
+      fp          = d0       </> "f1"
+      exists path =
+        (elem (takeFileName path) . map fst)
+          `fmap` exec ("readDir " ++ path)
+                      (withDir fs (takeDirectory path) $ readDir fs)
+
 
   -- Expected error: removal of non-empty directory
   exec "mkdir /foo"     $ mkdir fs d0 defaultDirPerms
   exec "create /foo/f1" $ createFile fs fp defaultFilePerms
-  e0 <- runH $ rmdir fs d0
+  e0 <- runH fs $ rmdir fs d0
   case e0 of
     Left (HE_ErrnoAnnotated HE_DirectoryNotEmpty errno) ->
       assert (errno == eNOTEMPTY)
@@ -510,26 +528,16 @@ propM_simpleRmdirOK _g dev = do
   freeBefore <- getFree fs
   exec "mkdir /foo/bar" $ mkdir fs d1 defaultDirPerms
   dh <- exec "openDir /foo/bar" $ openDir fs d1
-  assert =<< exists fs d1
+  assert =<< exists d1
   exec "rmdir /foo/bar" $ rmdir fs d1
   assert =<< liftM2 (==) (getFree fs) (return freeBefore)
-  assert =<< not `fmap` exists fs d1
+  assert =<< not `fmap` exists d1
 
   -- Expected error: access to invalidated directory handle
-  e1 <- runH $ readDir fs dh
+  e1 <- runH fs $ readDir fs dh
   case e1 of
     Left HE_InvalidDirHandle -> return ()
     _                        -> assert False
-
-  where
-    getFree        = sreadRef . bmNumFree . hsBlockMap
-    exec           = execH "propM_simpleRmdirOK"
-    d0             = rootPath </> "foo"
-    d1             = d0       </> "bar"
-    fp             = d0       </> "f1"
-    exists fs path = (elem (takeFileName path) . map fst)
-                     `fmap` exec ("readDir " ++ path)
-                                 (withDir fs (takeDirectory path) $ readDir fs)
 
 -- Simple sanity check for the mutex behavior rmdir is supposed to be enforcing.
 -- We have two threads, A and B.  Thread A repeatedly attempts to create a
@@ -550,7 +558,7 @@ propM_rmdirMutexOK :: BDGeom
                    -> BlockDevice IO
                    -> PropertyM IO ()
 propM_rmdirMutexOK _g dev = do
-  fs  <- runH (mkNewFS dev) >> mountOK dev
+  fs  <- mkNewFS dev >> mountOK dev
   chA <- run newChan
   chB <- run newChan
   forAllM (choose (100, 1000) :: Gen Int) $ \numTrials -> do
@@ -570,10 +578,10 @@ propM_rmdirMutexOK _g dev = do
       | n == 0    = return () -- writeChan ch ()
       | otherwise = do
           -- Thread A create directory, should never fail
-          e0 <- runHalfs $ mkdir fs dp defaultDirPerms
+          e0 <- runHalfs fs $ mkdir fs dp defaultDirPerms
           merr <- case e0 of
             Left e  -> return (Right e)
-            Right _ -> runHalfs (rmdir fs dp)
+            Right _ -> runHalfs fs (rmdir fs dp)
                          >>= either (return . Right)
                                     (const $ return $ Left "ok")
           writeChan ch merr            
@@ -583,7 +591,7 @@ propM_rmdirMutexOK _g dev = do
       | n == 0    = return ()
       | otherwise = do
           -- ThreadB readDir, should only fail if dir DNE or the DH is invalid
-          e0 <- runHalfs $ withDir fs dp $ readDir fs 
+          e0 <- runHalfs fs $ withDir fs dp $ readDir fs 
           merr <- case e0 of
             Left e@(HE_ErrnoAnnotated HE_PathComponentNotFound{} errno) -> 
               return $ if errno == eNOENT then Left "pcnf" else Right e
@@ -617,4 +625,6 @@ quickRemountCheck fs = do
   assert (dump0 == dump1)
   unmountOK fs'
   where
-    exec = execH "quickRemountCheck"
+    exec = execH "quickRemountCheck" fs
+
+

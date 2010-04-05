@@ -4,11 +4,11 @@
 module Halfs.Errors
 where
 
-import Control.Monad.Error (MonadError, throwError)
 import Data.Word
 import Foreign.C.Error
 import System.FilePath
 
+import Halfs.Monad
 import Halfs.Types
 
 data HalfsError =
@@ -43,6 +43,9 @@ data RsnHalfsMountFail =
            
 annErrno :: MonadError HalfsError m => HalfsError -> Errno -> m a
 e `annErrno` errno = throwError (e `HE_ErrnoAnnotated` errno)
+
+throwErrno :: Monad m => Errno -> HalfsError -> HalfsT HalfsError env m a
+throwErrno en = throwError . (`HE_ErrnoAnnotated` en)
 
 -- TODO: template haskell to make this a bit cleaner?
 instance Show Errno where

@@ -20,6 +20,8 @@ import Halfs.Types
 
 import System.Device.BlockDevice
 
+type HalfsM b r l m a = HalfsT HalfsError (Maybe (HalfsState b r l m)) m a
+
 --------------------------------------------------------------------------------
 -- Types
 
@@ -41,7 +43,7 @@ createFile :: HalfsCapable b t r l m =>
            -> UserID
            -> GroupID
            -> FileMode
-           -> HalfsM m InodeRef
+           -> HalfsM b r l m InodeRef
 createFile fs parentDH fname usr grp mode = do
   mfileIR <- fmap blockAddrToInodeRef `fmap` lift (alloc1 $ hsBlockMap fs)
   case mfileIR of
@@ -63,7 +65,8 @@ createFile fs parentDH fname usr grp mode = do
       atomicModifyLockedRscRef (hsNumFileNodes fs) (+1)
       return $ fileIR
 
-openFilePrim :: Monad m => FileOpenFlags -> InodeRef -> HalfsM m FileHandle
+openFilePrim :: Monad m =>
+                FileOpenFlags -> InodeRef -> HalfsM b r l m FileHandle
 openFilePrim oflags@FileOpenFlags{ openMode = omode } inr = 
   -- TODO: lock for writing / mutex access for deletion
   return $ FH (omode /= WriteOnly) (omode /= ReadOnly) oflags inr

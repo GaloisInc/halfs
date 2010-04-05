@@ -71,6 +71,8 @@ dbug :: String -> a -> a
 dbug _ = id
 --dbug = trace
 
+type HalfsM b r l m a = HalfsT HalfsError (Maybe (HalfsState b r l m)) m a
+
 
 --------------------------------------------------------------------------------
 -- Inode/Cont constructors, geometry calculation, and helpful constructors
@@ -332,13 +334,13 @@ emptyCont nAddrs me =
 -- continuations.  This function performs a write to update inode metadata
 -- (e.g., access time).
 readStream :: HalfsCapable b t r l m => 
-              HalfsState b r l m  -- ^ Filesystem state
-           -> InodeRef            -- ^ Starting inode reference
-           -> Word64              -- ^ Starting stream (byte) offset
-           -> Maybe Word64        -- ^ Stream length (Nothing => read
-                                  --   until end of stream, including
-                                  --   entire last block)
-           -> HalfsM m ByteString -- ^ Stream contents
+              HalfsState b r l m        -- ^ Filesystem state
+           -> InodeRef                  -- ^ Starting inode reference
+           -> Word64                    -- ^ Starting stream (byte) offset
+           -> Maybe Word64              -- ^ Stream length (Nothing => read
+                                        --   until end of stream, including
+                                        --   entire last block)
+           -> HalfsM b r l m ByteString -- ^ Stream contents
 readStream fs startIR start mlen = 
   withLockedInode fs startIR $ do  
   -- ====================== Begin inode critical section ======================
@@ -417,7 +419,7 @@ writeStream :: HalfsCapable b t r l m =>
             -> Word64             -- ^ Starting stream (byte) offset
             -> Bool               -- ^ Truncating write?
             -> ByteString         -- ^ Data to write
-            -> HalfsM m ()
+            -> HalfsM b r l m ()
 writeStream _ _ _ False bytes | 0 == BS.length bytes = return ()
 writeStream fs startIR start trunc bytes             =
   withLockedInode fs startIR $
@@ -430,7 +432,7 @@ writeStream_lckd :: HalfsCapable b t r l m =>
                  -> Word64             -- ^ Starting stream (byte) offset
                  -> Bool               -- ^ Truncating write?
                  -> ByteString         -- ^ Data to write
-                 -> HalfsM m ()
+                 -> HalfsM b r l m ()
 writeStream_lckd _ _ _ _ False bytes | 0 == BS.length bytes = return ()
 writeStream_lckd dev bm startIR start trunc bytes           = do
   -- ====================== Begin inode critical section ======================
@@ -563,7 +565,7 @@ writeStream_lckd dev bm startIR start trunc bytes           = do
 incLinkCount :: HalfsCapable b t r l m =>
                 HalfsState b r l m
              -> InodeRef -- ^ Source inode ref
-             -> HalfsM m ()
+             -> HalfsM b r l m ()
 incLinkCount fs inr =
   atomicModifyInode fs inr $ \nd ->
     return $ nd{ inoNumLinks = inoNumLinks nd + 1 }
@@ -571,7 +573,7 @@ incLinkCount fs inr =
 decLinkCount :: HalfsCapable b t r l m =>
                 HalfsState b r l m
              -> InodeRef -- ^ Source inode ref
-             -> HalfsM m ()
+             -> HalfsM b r l m ()
 decLinkCount fs inr =
   atomicModifyInode fs inr $ \nd ->
     return $ nd{ inoNumLinks = inoNumLinks nd - 1 }
@@ -581,8 +583,8 @@ decLinkCount fs inr =
 atomicModifyInode :: HalfsCapable b t r l m =>
                      HalfsState b r l m
                   -> InodeRef
-                  -> (Inode t -> HalfsM m (Inode t))
-                  -> HalfsM m ()
+                  -> (Inode t -> HalfsM b r l m (Inode t))
+                  -> HalfsM b r l m ()
 atomicModifyInode fs inr f = 
   withLockedInode fs inr $ do
     inode  <- drefInode (hsBlockDev fs) inr
@@ -594,20 +596,20 @@ atomicReadInode :: HalfsCapable b t r l m =>
                    HalfsState b r l m
                 -> InodeRef
                 -> (Inode t -> a)
-                -> HalfsM m a
+                -> HalfsM b r l m a
 atomicReadInode fs inr f = do
   withLockedInode fs inr $ f `fmap` drefInode (hsBlockDev fs) inr
 
 fileStat :: HalfsCapable b t r l m =>
             HalfsState b r l m
          -> InodeRef
-         -> HalfsM m (FileStat t)
+         -> HalfsM b r l m (FileStat t)
 fileStat fs inr = withLockedInode fs inr $ fileStat_lckd (hsBlockDev fs) inr
 
 fileStat_lckd :: HalfsCapable b t r l m =>
                  BlockDevice m
               -> InodeRef
-              -> HalfsM m (FileStat t)
+              -> HalfsM b r l m (FileStat t)
 fileStat_lckd dev inr = do
   inode <- drefInode dev inr
   return $ FileStat
@@ -631,7 +633,7 @@ fileStat_lckd dev inr = do
 freeInode :: HalfsCapable b t r l m =>
              HalfsState b r l m
           -> InodeRef -- ^ reference to the inode to remove
-          -> HalfsM m ()
+          -> HalfsM b r l m ()
 freeInode fs@HalfsState{ hsBlockDev = dev, hsBlockMap = bm } inr@(IR addr) = 
   withLockedInode fs inr $ do
     conts <- expandConts dev =<< inoCont `fmap` drefInode dev inr
@@ -642,9 +644,9 @@ freeInode fs@HalfsState{ hsBlockDev = dev, hsBlockMap = bm } inr@(IR addr) =
 
 withLockedInode :: HalfsCapable b t r l m =>
                    HalfsState b r l m
-                -> InodeRef   -- ^ reference to inode to lock
-                -> HalfsM m a -- ^ action to take while holding lock
-                -> HalfsM m a
+                -> InodeRef         -- ^ reference to inode to lock
+                -> HalfsM b r l m a -- ^ action to take while holding lock
+                -> HalfsM b r l m a
 withLockedInode fs inr act =
   -- Inode locking: We currently use a single reader/writer lock tracked by the
   -- InodeRef -> (lock, ref count) map in HalfsState. Reference counting is used
@@ -694,7 +696,7 @@ withLockedInode fs inr act =
 decodeInode :: HalfsCapable b t r l m =>
                Word64
             -> ByteString
-            -> HalfsM m (Inode t)
+            -> HalfsM b r l m (Inode t)
 decodeInode blkSz bs = do
   numAddrs' <- computeNumInodeAddrsM blkSz
   case decode bs of
@@ -708,7 +710,7 @@ decodeInode blkSz bs = do
 decodeCont :: HalfsCapable b t r l m =>
               Word64
            -> ByteString
-           -> HalfsM m Cont
+           -> HalfsM b r l m Cont
 decodeCont blkSz bs = do
   numAddrs' <- computeNumContAddrsM blkSz
   case decode bs of
@@ -721,14 +723,15 @@ decodeCont blkSz bs = do
 -- into.
 allocFill ::
   HalfsCapable b t r l m => 
-     BlockDevice m              -- ^ The block device
-  -> BlockMap b r l             -- ^ The block map to use for allocation
-  -> (Cont -> Word64)           -- ^ Available blocks function
-  -> Word64                     -- ^ Number of blocks to allocate
-  -> Word64                     -- ^ Number of conts to allocate
-  -> [Cont]                     -- ^ Chain to extend and fill
-  -> HalfsM m ([Cont], [Cont])  -- ^ Extended cont chain, terminating subchain
-                                -- of dirty conts, number of blocks allocated
+     BlockDevice m                    -- ^ The block device
+  -> BlockMap b r l                   -- ^ The block map to use for allocation
+  -> (Cont -> Word64)                 -- ^ Available blocks function
+  -> Word64                           -- ^ Number of blocks to allocate
+  -> Word64                           -- ^ Number of conts to allocate
+  -> [Cont]                           -- ^ Chain to extend and fill
+  -> HalfsM b r l m ([Cont], [Cont])  -- ^ Extended cont chain, terminating
+                                      -- subchain of dirty conts, number of
+                                      -- blocks allocated
 allocFill _   _  _     0           _            existing = return (existing, [])
 allocFill dev bm avail blksToAlloc contsToAlloc existing = do
   newConts <- allocConts 
@@ -783,14 +786,14 @@ allocFill dev bm avail blksToAlloc contsToAlloc existing = do
 -- unallocates all resources in the corresponding free region
 truncUnalloc ::
   HalfsCapable b t r l m =>
-     BlockDevice m                     -- ^ the block device
-  -> BlockMap b r l                    -- ^ the block map
-  -> Word64                            -- ^ starting stream byte index
-  -> Word64                            -- ^ length from start at which to
-                                       -- truncate
-  -> [Cont]                            -- ^ current chain
-  -> HalfsM m ([Cont], [Cont], Word64) -- ^ truncated chain, dirty conts, number
-                                       -- of blocks freed
+     BlockDevice m                           -- ^ the block device
+  -> BlockMap b r l                          -- ^ the block map
+  -> Word64                                  -- ^ starting stream byte index
+  -> Word64                                  -- ^ length from start at which to
+                                             -- truncate
+  -> [Cont]                                  -- ^ current chain
+  -> HalfsM b r l m ([Cont], [Cont], Word64) -- ^ truncated chain, dirty conts,
+                                             -- number of blocks freed
 truncUnalloc dev bm start len conts = do
   let truncToZero = start + len == 0
   eIdx@(eContIdx, eBlkOff, _) <- decompStreamOffset (bdBlockSize dev) 
@@ -896,18 +899,18 @@ writeInode dev n = bdWriteBlock dev (unIR $ inoAddress n) (encode n)
 -- stream from the start to end offsets would be sufficient.
 
 expandConts :: HalfsCapable b t r l m =>
-               BlockDevice m -> Cont -> HalfsM m [Cont]
+               BlockDevice m -> Cont -> HalfsM b r l m [Cont]
 expandConts dev start@Cont{ continuation = cr }
   | cr == nilContRef = return [start]
   | otherwise        = (start:) `fmap` (drefCont dev cr >>= expandConts dev)
 
 drefCont :: HalfsCapable b t r l m =>
-            BlockDevice m -> ContRef -> HalfsM m Cont
+            BlockDevice m -> ContRef -> HalfsM b r l m Cont
 drefCont dev (CR addr) =
   lift (bdReadBlock dev addr) >>= decodeCont (bdBlockSize dev)
 
 drefInode :: HalfsCapable b t r l m => 
-             BlockDevice m -> InodeRef -> HalfsM m (Inode t)
+             BlockDevice m -> InodeRef -> HalfsM b r l m (Inode t)
 drefInode dev (IR addr) = do 
   lift (bdReadBlock dev addr) >>= decodeInode (bdBlockSize dev) 
 
@@ -918,9 +921,9 @@ setChangeTime t nd = nd{ inoChangeTime = t }
 -- Cont index (i.e., 0-based index into the cont chain), a block offset within
 -- that Cont, and a byte offset within that block.  
 decompStreamOffset :: (Serialize t, Timed t m, Monad m, Show t) => 
-                      Word64           -- ^ Block size, in bytes
-                   -> Word64           -- ^ Offset into the data stream
-                   -> HalfsM m StreamIdx
+                      Word64 -- ^ Block size, in bytes
+                   -> Word64 -- ^ Offset into the data stream
+                   -> HalfsM b r l m StreamIdx
 decompStreamOffset blkSz streamOff = do
   -- Note that the first Cont in a Cont chain always gets embedded in an Inode,
   -- and thus has differing capacity than the rest of the Conts, which are of
@@ -937,7 +940,7 @@ getStreamIdx :: HalfsCapable b t r l m =>
                 Word64 -- block size in bytse
              -> Word64 -- file size in bytes
              -> Word64 -- start byte index
-             -> HalfsM m StreamIdx
+             -> HalfsM b r l m StreamIdx
 getStreamIdx blkSz fileSz start = do
   when (start > fileSz) $ throwError $ HE_InvalidStreamIndex start
   decompStreamOffset blkSz start

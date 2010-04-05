@@ -23,7 +23,8 @@ import Halfs.HalfsState
 import Halfs.Monad
 import Halfs.Protection
 import Halfs.SuperBlock
-import Halfs.Utils (divCeil)
+import Halfs.Utils   (divCeil)
+
 import System.Device.BlockDevice
 import System.Device.File
 import System.Device.Memory
@@ -34,7 +35,8 @@ import Tests.Types
 
 -- import Debug.Trace
 
-type DevCtor = BDGeom -> IO (Maybe (BlockDevice IO))
+type DevCtor          = BDGeom -> IO (Maybe (BlockDevice IO))
+type HalfsM b r l m a = HalfsT HalfsError (Maybe (HalfsState b r l m)) m a
 
 --------------------------------------------------------------------------------
 -- Utility functions
@@ -118,20 +120,20 @@ mkMemDevExec quick pfx =
           run (memDev g) >>= doProp (pr g)
 
 mkNewFS :: HalfsCapable b t r l m =>
-           BlockDevice m -> HalfsM m SuperBlock
-mkNewFS dev = newfs dev rootUser rootGroup rootDirPerms
+           BlockDevice m -> PropertyM m (Either HalfsError SuperBlock)
+mkNewFS dev = runHNoEnv $ newfs dev rootUser rootGroup rootDirPerms
 
 mountOK :: HalfsCapable b t r l m =>
            BlockDevice m
         -> PropertyM m (HalfsState b r l m)
 mountOK dev =
-  runH (mount dev defaultUser defaultGroup) >>=
+  runHNoEnv (mount dev defaultUser defaultGroup) >>=
     either (fail . (++) "Unexpected mount failure: " . show) return
 
 unmountOK :: HalfsCapable b t r l m =>
              HalfsState b r l m -> PropertyM m ()
 unmountOK fs =
-  runH (unmount fs) >>=
+  runH fs (unmount fs) >>=
     either (fail . (++) "Unxpected unmount failure: " . show)
            (const $ return ())
          
@@ -139,8 +141,15 @@ sreadRef :: HalfsCapable b t r l m => r a -> PropertyM m a
 sreadRef = ($!) (run . readRef)
 
 runH :: HalfsCapable b t r l m =>
-        HalfsM m a -> PropertyM m (Either HalfsError a)
-runH = run . runHalfs
+        HalfsState b r l m
+     -> HalfsM b r l m a
+     -> PropertyM m (Either HalfsError a)
+runH fs = run . runHalfs fs
+
+runHNoEnv :: HalfsCapable b t r l m =>
+             HalfsM b r l m a
+          -> PropertyM m (Either HalfsError a)
+runHNoEnv = run . runHalfsNoEnv
 
 execE :: (Monad m ,Show a) =>
          String -> String -> m (Either a b) -> PropertyM m b
@@ -151,13 +160,29 @@ execE nm descrip act =
            ++ descrip ++ "): " ++ show e
     Right x -> return x
 
-execH :: (Monad m) => String -> String -> HalfsT m b -> PropertyM m b
-execH nm descrip = execE nm descrip . runHalfs
+execH :: Monad m =>
+         String
+      -> env
+      -> String
+      -> HalfsT HalfsError (Maybe env) m b
+      -> PropertyM m b
+execH nm env descrip = execE nm descrip . runHalfs env
+
+execHNoEnv :: Monad m =>
+              String
+           -> String
+           -> HalfsT HalfsError (Maybe env) m b
+           -> PropertyM m b
+execHNoEnv nm descrip = execE nm descrip . runHalfsNoEnv
 
 expectErr :: HalfsCapable b t r l m =>
-             (HalfsError -> Bool) -> String -> HalfsM m a -> PropertyM m () 
-expectErr expectedP rsn act =
-  runH act >>= \e -> case e of
+             (HalfsError -> Bool)
+          -> String
+          -> HalfsM b r l m a
+          -> HalfsState b r l m
+          -> PropertyM m () 
+expectErr expectedP rsn act fs =
+  runH fs act >>= \e -> case e of
     Left err | expectedP err -> return ()
     Left err                 -> unexpectedErr err
     Right _                  -> fail rsn
@@ -234,7 +259,7 @@ defaultFilePerms = FileMode [Read,Write] [Read] [Read]
 -- Debugging helpers
 
 dumpfs :: HalfsCapable b t r l m =>
-          HalfsState b r l m -> HalfsM m String
+          HalfsState b r l m -> HalfsM b r l m String
 dumpfs fs = do
   dump <- dumpfs' 2 "/\n" =<< rootDir `fmap` readRef (hsSuperBlock fs)
   return $ "=== fs dump begin ===\n"

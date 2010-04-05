@@ -27,6 +27,6 @@ lookupM = liftM . M.lookup
 lookupRM :: (Ord k, Reffable r m) => k -> r (M.Map k v) -> m (Maybe v)
 lookupRM k = lookupM k . readRef
 
-logMsg :: Monad m => Maybe (String -> m ()) -> String -> HalfsM m ()
+logMsg :: Monad m => Maybe (String -> m ()) -> String -> HalfsT err env m ()
 logMsg (Just logger) = lift . logger
 logMsg _             = const $ return ()

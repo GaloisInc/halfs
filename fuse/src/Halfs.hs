@@ -37,16 +37,16 @@ import Halfs.Utils
 import System.Device.BlockDevice
 import System.Device.File
 import System.Device.Memory
-import Tests.Utils
 
 import qualified Data.ByteString  as BS
 import qualified Data.Map         as M
 import qualified Halfs.Protection as HP
 import qualified Halfs.Types      as H
+import qualified Tests.Utils      as TU
 import qualified Prelude
 import Prelude hiding (catch, log, read)
 
-import Debug.Trace
+-- import Debug.Trace
 
 -- Halfs-specific stuff we carry around in our FUSE functions; note that the
 -- FUSE library does this via opaque ptr to user data, but since hFUSE
@@ -94,21 +94,21 @@ main = do
                 if exists
                  then newFileBlockDevice fp sz 
                         <* putStrLn "Created filedev from existing file."
-                 else withFileStore False fp sz n (`newFileBlockDevice` sz)
+                 else TU.withFileStore False fp sz n (`newFileBlockDevice` sz)
                         <* putStrLn "Created filedev from new file."  
 
   uid <- (HP.UID . fromIntegral) `fmap` getRealUserID
   gid <- (HP.GID . fromIntegral) `fmap` getRealGroupID
 
   when (not exists) $ do
-    exec $ newfs dev uid gid $
+    execNoEnv $ newfs dev uid gid $
       H.FileMode
         [H.Read, H.Write, H.Execute]
         [H.Read,          H.Execute]
         [                          ]
     return ()
 
-  fs <- exec $ mount dev uid gid
+  fs <- execNoEnv $ mount dev uid gid
 
   System.IO.withFile (optLogFile opts) WriteMode $ \h -> do
 
@@ -159,9 +159,9 @@ halfsGetFileStat :: HalfsCapable b t r l m =>
                     HalfsSpecific b r l m
                  -> FilePath
                  -> m (Either Errno FileStat)
-halfsGetFileStat HS{ hspLogger = log, hspState = fs} fp = do
+halfsGetFileStat hsp@HS{ hspLogger = log, hspState = fs} fp = do
   log $ "halfsGetFileStat: fp = " ++ show fp
-  eestat <- execOrErrno log eINVAL id (fstat fs fp)
+  eestat <- execOrErrno hsp eINVAL id (fstat fs fp)
   case eestat of
     Left en -> do
       log $ "  (fstat failed w/ " ++ show en ++ ")"
@@ -181,13 +181,13 @@ halfsCreateDevice :: HalfsCapable b t r l m =>
                      HalfsSpecific b r l m
                   -> FilePath -> EntryType -> FileMode -> DeviceID
                   -> m Errno
-halfsCreateDevice HS{ hspLogger = log, hspState = fs } fp etype mode _devID = do
+halfsCreateDevice hsp@HS{ hspLogger = log, hspState = fs } fp etype mode _devID = do
   log $ "halfsCreateDevice: fp = " ++ show fp ++ ", etype = " ++ show etype ++
         ", mode = " ++ show mode
   case etype of
     RegularFile -> do
       log $ "halfsCreateDevice: Regular file w/ " ++ show hmode
-      execDefault log $ createFile (withLogger log fs) fp hmode
+      execDefault hsp $ createFile (withLogger log fs) fp hmode
     _ -> do
       log $ "halfsCreateDevice: Error: Unsupported EntryType encountered."
       return eINVAL
@@ -197,9 +197,9 @@ halfsCreateDirectory :: HalfsCapable b t r l m =>
                         HalfsSpecific b r l m
                      -> FilePath -> FileMode
                      -> m Errno
-halfsCreateDirectory HS{ hspLogger = log, hspState = fs } fp mode = do
+halfsCreateDirectory hsp@HS{ hspLogger = log, hspState = fs } fp mode = do
   log $ "halfsCreateDirectory: fp = " ++ show fp
-  execDefault log $ mkdir fs fp (mode2hmode mode)
+  execDefault hsp $ mkdir fs fp (mode2hmode mode)
          
 halfsRemoveLink :: HalfsCapable b t r l m =>
                    HalfsSpecific b r l m
@@ -213,9 +213,9 @@ halfsRemoveDirectory :: HalfsCapable b t r l m =>
                         HalfsSpecific b r l m
                      -> FilePath
                      -> m Errno
-halfsRemoveDirectory HS{ hspLogger = log, hspState = fs } fp = do
+halfsRemoveDirectory hsp@HS{ hspLogger = log, hspState = fs } fp = do
   log $ "halfsRemoveDirectory: removing " ++ show fp
-  execDefault log $ rmdir fs fp
+  execDefault hsp $ rmdir fs fp
 
          
 halfsCreateSymbolicLink :: HalfsCapable b t r l m =>
@@ -238,24 +238,24 @@ halfsCreateLink :: HalfsCapable b t r l m =>
                    HalfsSpecific b r l m
                 -> FilePath -> FilePath
                 -> m Errno
-halfsCreateLink HS{ hspLogger = log, hspState = fs } src dst = do
+halfsCreateLink hsp@HS{ hspLogger = log, hspState = fs } src dst = do
   log $ "halfsCreateLink: creating hard link from '" ++ src
         ++ "' to '" ++ dst ++ "'"
-  execDefault log $ mklink fs src dst
+  execDefault hsp $ mklink fs src dst
          
 halfsSetFileMode :: HalfsCapable b t r l m =>
                     HalfsSpecific b r l m
                  -> FilePath -> FileMode
                  -> m Errno
-halfsSetFileMode HS{ hspLogger = log, hspState = fs } fp mode = do
+halfsSetFileMode hsp@HS{ hspLogger = log, hspState = fs } fp mode = do
   log $ "halfsSetFileMode: setting " ++ show fp ++ " to mode " ++ show mode
-  execDefault log $ chmod fs fp (mode2hmode mode)
+  execDefault hsp $ chmod fs fp (mode2hmode mode)
          
 halfsSetOwnerAndGroup :: HalfsCapable b t r l m =>
                          HalfsSpecific b r l m
                       -> FilePath -> UserID -> GroupID
                       -> m Errno
-halfsSetOwnerAndGroup HS{ hspLogger = log, hspState = fs } fp uid' gid' = do
+halfsSetOwnerAndGroup hsp@HS{ hspLogger = log, hspState = fs } fp uid' gid' = do
   -- uid and gid get passed as System.Posix.Types.C[UG]id which are newtype'd
   -- Word32s.  Unfortunately, this means that a user or group argument of -1
   -- (which means "unchanged" according to the man page for chown(2)) is only
@@ -269,37 +269,37 @@ halfsSetOwnerAndGroup HS{ hspLogger = log, hspState = fs } fp uid' gid' = do
 
   log $ "halfsSetOwnerAndGroup: setting " ++ show fp ++ " to user = "
         ++ show uid ++ ", group = " ++ show gid
-  execDefault log $ chown fs fp uid gid
+  execDefault hsp $ chown fs fp uid gid
          
 halfsSetFileSize :: HalfsCapable b t r l m =>
                     HalfsSpecific b r l m
                  -> FilePath -> FileOffset
                  -> m Errno
-halfsSetFileSize HS{ hspLogger = log, hspState = fs } fp offset = do
+halfsSetFileSize hsp@HS{ hspLogger = log, hspState = fs } fp offset = do
   log $ "halfsSetFileSize: setting " ++ show fp ++ " to size " ++ show offset
-  execDefault log $ setFileSize fs fp (fromIntegral offset)
+  execDefault hsp $ setFileSize fs fp (fromIntegral offset)
          
 halfsSetFileTimes :: HalfsCapable b t r l m =>
                      HalfsSpecific b r l m
                   -> FilePath -> EpochTime -> EpochTime
                   -> m Errno
-halfsSetFileTimes HS{ hspLogger = log, hspState = fs } fp accTm modTm = do
+halfsSetFileTimes hsp@HS{ hspLogger = log, hspState = fs } fp accTm modTm = do
   -- TODO: Check perms: caller must be file owner w/ write access or
   -- superuser.
   accTm' <- fromCTime accTm
   modTm' <- fromCTime modTm
   log $ "halfsSetFileTimes fp = " ++ show fp ++ ", accTm = " ++ show accTm' ++
         ", modTm = " ++ show modTm'
-  execDefault log $ setFileTimes fs fp accTm' modTm'     
+  execDefault hsp $ setFileTimes fs fp accTm' modTm'     
          
 halfsOpen :: HalfsCapable b t r l m =>
              HalfsSpecific b r l m             
           -> FilePath -> OpenMode -> OpenFileFlags
           -> m (Either Errno FileHandle)
-halfsOpen HS{ hspLogger = log, hspState = fs } fp omode flags = do
+halfsOpen hsp@HS{ hspLogger = log, hspState = fs } fp omode flags = do
   log $ "halfsOpen: fp = " ++ show fp ++ ", omode = " ++ show omode ++ 
         ", flags = " ++ show flags
-  rslt <- execOrErrno log eINVAL id $ openFile fs fp halfsFlags
+  rslt <- execOrErrno hsp eINVAL id $ openFile fs fp halfsFlags
   log $ "halfsOpen: CoreAPI.openFile completed: rslt = " ++ show rslt
   return rslt
   where
@@ -319,20 +319,20 @@ halfsRead :: HalfsCapable b t r l m =>
              HalfsSpecific b r l m
           -> FilePath -> FileHandle -> ByteCount -> FileOffset
           -> m (Either Errno BS.ByteString)
-halfsRead HS{ hspLogger = log, hspState = fs } fp fh byteCnt offset = do
+halfsRead hsp@HS{ hspLogger = log, hspState = fs } fp fh byteCnt offset = do
   log $ "halfsRead: Reading " ++ show byteCnt ++ " bytes from " ++
         show fp ++ " at offset " ++ show offset
-  execOrErrno log eINVAL id $ 
+  execOrErrno hsp eINVAL id $ 
     read fs fh (fromIntegral offset) (fromIntegral byteCnt)
 
 halfsWrite :: HalfsCapable b t r l m =>
               HalfsSpecific b r l m
            -> FilePath -> FileHandle -> BS.ByteString -> FileOffset
            -> m (Either Errno ByteCount)
-halfsWrite HS{ hspLogger = log, hspState = fs } fp fh bytes offset = do
+halfsWrite hsp@HS{ hspLogger = log, hspState = fs } fp fh bytes offset = do
   log $ "halfsWrite: Writing " ++ show (BS.length bytes) ++ " bytes to " ++ 
         show fp ++ " at offset " ++ show offset
-  execOrErrno log eINVAL id $ do
+  execOrErrno hsp eINVAL id $ do
     write fs fh (fromIntegral offset) bytes
     return (fromIntegral $ BS.length bytes)
 
@@ -340,8 +340,8 @@ halfsGetFileSystemStats :: HalfsCapable b t r l m =>
                            HalfsSpecific b r l m
                         -> FilePath
                         -> m (Either Errno System.Fuse.FileSystemStats)
-halfsGetFileSystemStats HS{ hspLogger = log, hspState = fs } _fp = do
-  execOrErrno log eINVAL fss2fss (fsstat fs)
+halfsGetFileSystemStats hsp@HS{ hspState = fs } _fp = do
+  execOrErrno hsp eINVAL fss2fss (fsstat fs)
   where
     fss2fss (FSS bs bc bf ba fc ff fa) = System.Fuse.FileSystemStats
       { fsStatBlockSize     = bs
@@ -358,9 +358,9 @@ halfsFlush :: HalfsCapable b t r l m =>
               HalfsSpecific b r l m
            -> FilePath -> FileHandle
            -> m Errno
-halfsFlush HS{ hspLogger = log, hspState = fs } fp fh = do
+halfsFlush hsp@HS{ hspLogger = log, hspState = fs } fp fh = do
   log $ "halfsFlush: Flushing " ++ show fp
-  execDefault log $ flush fs fh
+  execDefault hsp $ flush fs fh
          
 halfsRelease :: HalfsCapable b t r l m =>
                 HalfsSpecific b r l m
@@ -368,7 +368,7 @@ halfsRelease :: HalfsCapable b t r l m =>
              -> m ()
 halfsRelease HS{ hspLogger = log, hspState = fs } fp fh = do
   log $ "halfsRelease: Releasing " ++ show fp
-  exec $ closeFile fs fh
+  exec fs $ closeFile fs fh
          
 halfsSyncFile :: HalfsCapable b t r l m =>
                  HalfsSpecific b r l m
@@ -382,9 +382,9 @@ halfsOpenDirectory :: HalfsCapable b t r l m =>
                       HalfsSpecific b r l m
                    -> FilePath
                    -> m Errno
-halfsOpenDirectory (HS log fs fpdhMap) fp = do
+halfsOpenDirectory hsp@(HS log fs fpdhMap) fp = do
   log $ "halfsOpenDirectory: fp = " ++ show fp
-  execDefault log $ 
+  execDefault hsp $ 
     withLockedRscRef fpdhMap $ \ref -> do
       mdh <- lookupRM fp ref
       case mdh of
@@ -395,9 +395,9 @@ halfsReadDirectory :: HalfsCapable b t r l m =>
                       HalfsSpecific b r l m
                    -> FilePath
                    -> m (Either Errno [(FilePath, FileStat)])
-halfsReadDirectory (HS log fs fpdhMap) fp = do
+halfsReadDirectory hsp@(HS log fs fpdhMap) fp = do
   log $ "halfsReadDirectory: fp = " ++ show fp
-  rslt <- execOrErrno log eINVAL id $ 
+  rslt <- execOrErrno hsp eINVAL id $ 
     withLockedRscRef fpdhMap $ \ref -> do
       mdh <- lookupRM fp ref
       case mdh of
@@ -411,9 +411,9 @@ halfsReleaseDirectory :: HalfsCapable b t r l m =>
                          HalfsSpecific b r l m
                       -> FilePath
                       -> m Errno
-halfsReleaseDirectory (HS log fs fpdhMap) fp = do
+halfsReleaseDirectory hsp@(HS log fs fpdhMap) fp = do
   log $ "halfsReleaseDirectory: fp = " ++ show fp
-  execDefault log $ 
+  execDefault hsp $ 
     withLockedRscRef fpdhMap $ \ref -> do
       mdh <- lookupRM fp ref
       case mdh of
@@ -448,9 +448,9 @@ halfsDestroy :: HalfsCapable b t r l m =>
              -> m ()
 halfsDestroy HS{ hspLogger = log, hspState = fs } = do
   log $ "halfsDestroy: Unmounting..." 
-  exec $ unmount fs
+  exec fs $ unmount fs
   log "halfsDestroy: Shutting block device down..."        
-  exec $ lift $ bdShutdown (hsBlockDev fs)
+  exec fs $ lift $ bdShutdown (hsBlockDev fs)
   log $ "halfsDestroy: Done."
   return ()
 
@@ -505,9 +505,16 @@ mode2hmode mode = H.FileMode (perms 6) (perms 3) (perms 0)
 --------------------------------------------------------------------------------
 -- Misc
 
-exec :: Monad m => HalfsT m a -> m a
-exec act =
-  runHalfs act >>= \ea -> case ea of
+exec :: HalfsCapable b t r l m =>
+        HalfsState b r l m -> HalfsM b r l m a -> m a
+exec fs act =
+  runHalfs fs act >>= \ea -> case ea of
+    Left e  -> fail $ show e
+    Right x -> return x
+
+execNoEnv :: Monad m => HalfsM b r l m a -> m a
+execNoEnv act =
+  runHalfsNoEnv act >>= \ea -> case ea of
     Left e  -> fail $ show e
     Right x -> return x
 
@@ -515,10 +522,15 @@ exec act =
 -- Errno for the failed operation.  The Errno comes from either a HalfsM
 -- exception signifying it holds an Errno, or the default provided as the first
 -- argument.
-execOrErrno :: (Monad m) => 
-               Logger m -> Errno -> (a -> b) -> HalfsT m a -> m (Either Errno b)
-execOrErrno log defaultEn f act = do
- runHalfs act >>= \ea -> case ea of
+
+execOrErrno :: Monad m =>
+               HalfsSpecific b r l m
+            -> Errno
+            -> (a -> rslt)
+            -> HalfsM b r l m a
+            -> m (Either Errno rslt)
+execOrErrno HS{ hspLogger = log, hspState = fs } defaultEn f act = do
+ runHalfs fs act >>= \ea -> case ea of
    Left (HE_ErrnoAnnotated e en) -> do
      log ("execOrErrno: e = " ++ show e)
      return $ Left en
@@ -527,11 +539,17 @@ execOrErrno log defaultEn f act = do
      return $ Left defaultEn
    Right x                       -> return $ Right (f x)
 
-execToErrno :: (Monad m) => Logger m -> Errno -> (a -> Errno) -> HalfsT m a -> m Errno
-execToErrno log defaultEn f = liftM (either id id) . execOrErrno log defaultEn f
+execToErrno :: HalfsCapable b t r l m =>
+               HalfsSpecific b r l m 
+            -> Errno
+            -> (a -> Errno)
+            -> HalfsM b r l m a
+            -> m Errno
+execToErrno hsp defaultEn f = liftM (either id id) . execOrErrno hsp defaultEn f
 
-execDefault :: (Monad m) => Logger m -> HalfsT m a -> m Errno
-execDefault log = execToErrno log eINVAL (const eOK)
+execDefault :: HalfsCapable b t r l m =>
+               HalfsSpecific b r l m -> HalfsM b r l m a -> m Errno
+execDefault hsp = execToErrno hsp eINVAL (const eOK)
 
 withLogger :: HalfsCapable b t r l m =>
               Logger m -> HalfsState b r l m -> HalfsState b r l m 

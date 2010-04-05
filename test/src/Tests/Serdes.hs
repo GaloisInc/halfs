@@ -57,7 +57,7 @@ propM_inodeSerdes _g dev =
   -- arbitrary.
   nAddrs <- computeNumAddrs (bdBlockSize dev) minInodeBlocks
               =<< minimalInodeSize (inoCreateTime inode)
-  runH (decodeInode (bdBlockSize dev) (encode inode))
+  runHNoEnv (decodeInode (bdBlockSize dev) (encode inode))
     >>= assert . either (const False) (eq inode nAddrs)
   where
     eq inode na = (==) inode{ inoCont = (inoCont inode){ numAddrs = na } }
@@ -72,5 +72,5 @@ propM_contSerdes _g dev =
   -- dev's geometry instead of the one the cont generator uses, which is
   -- arbitrary.
   nAddrs <- computeNumAddrs (bdBlockSize dev) minContBlocks =<< minimalContSize
-  runH (decodeCont (bdBlockSize dev) (encode cont))
+  runHNoEnv (decodeCont (bdBlockSize dev) (encode cont))
     >>= assert . either (const False) (== cont{ numAddrs = nAddrs })

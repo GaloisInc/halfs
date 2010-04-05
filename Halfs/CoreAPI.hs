@@ -1,4 +1,4 @@
-{-# LANGUAGE FlexibleContexts, ScopedTypeVariables #-}
+{-# LANGUAGE FlexibleContexts, ScopedTypeVariables, RankNTypes #-}
 module Halfs.CoreAPI where
 
 import Control.Exception (assert)
@@ -26,6 +26,8 @@ import Halfs.Types
 import Halfs.Utils
 
 import System.Device.BlockDevice
+
+type HalfsM b r l m a = HalfsT HalfsError (Maybe (HalfsState b r l m)) m a
 
 data SyncType = Data | Everything
 
@@ -60,7 +62,7 @@ newfs :: (HalfsCapable b t r l m) =>
       -> UserID
       -> GroupID
       -> FileMode
-      -> HalfsM m SuperBlock
+      -> HalfsM b r l m SuperBlock
 newfs dev uid gid rdirPerms = do
   when (superBlockSize > bdBlockSize dev) $
     fail "The device's block size is insufficiently large!"
@@ -107,7 +109,7 @@ mount :: (HalfsCapable b t r l m) =>
          BlockDevice m
       -> UserID
       -> GroupID
-      -> HalfsM m (HalfsState b r l m)
+      -> HalfsM b r l m (HalfsState b r l m)
 mount dev usr grp = do
   esb <- decode `fmap` lift (bdReadBlock dev 0)
   case esb of
@@ -128,7 +130,7 @@ mount dev usr grp = do
 -- | Unmounts the given filesystem.  After this operation completes, the
 -- superblock will have its unmountClean flag set to True.
 unmount :: (HalfsCapable b t r l m) =>
-           HalfsState b r l m -> HalfsM m ()
+           HalfsState b r l m -> HalfsM b r l m ()
 unmount fs@HalfsState{hsBlockDev = dev, hsSuperBlock = sbRef} = 
   withLock (hsLock fs)          $ do 
   withLockedRscRef (hsDHMap fs) $ \dhMapRef -> do 
@@ -171,7 +173,7 @@ mkdir :: (HalfsCapable b t r l m) =>
          HalfsState b r l m
       -> FilePath
       -> FileMode
-      -> HalfsM m ()
+      -> HalfsM b r l m ()
 mkdir fs fp fm = do
   parentIR <- absPathIR fs path Directory 
   usr <- getUser fs
@@ -182,21 +184,21 @@ mkdir fs fp fm = do
     (path, dirName) = splitFileName fp
 
 rmdir :: (HalfsCapable b t r l m) =>
-         HalfsState b r l m -> FilePath -> HalfsM m ()
+         HalfsState b r l m -> FilePath -> HalfsM b r l m ()
 rmdir fs fp = absPathIR fs fp Directory >>= removeDirectory fs (takeBaseName fp)
 
 openDir :: (HalfsCapable b t r l m) =>
-           HalfsState b r l m -> FilePath -> HalfsM m (DirHandle r l)
+           HalfsState b r l m -> FilePath -> HalfsM b r l m (DirHandle r l)
 openDir fs fp = absPathIR fs fp Directory >>= openDirectory fs
 
 closeDir :: (HalfsCapable b t r l m) =>
-            HalfsState b r l m -> DirHandle r l -> HalfsM m ()
+            HalfsState b r l m -> DirHandle r l -> HalfsM b r l m ()
 closeDir fs dh = closeDirectory fs dh
 
 readDir :: (HalfsCapable b t r l m) =>
            HalfsState b r l m
         -> DirHandle r l
-        -> HalfsM m [(FilePath, FileStat t)]
+        -> HalfsM b r l m [(FilePath, FileStat t)]
 readDir fs dh =
   withLock (dhLock dh) $ do
     inr      <- getDHINR_lckd dh
@@ -213,7 +215,7 @@ readDir fs dh =
  
 -- | Synchronize the given directory to disk.
 syncDir :: (HalfsCapable b t r l m) =>
-           HalfsState b r l m -> FilePath -> SyncType -> HalfsM m ()
+           HalfsState b r l m -> FilePath -> SyncType -> HalfsM b r l m ()
 syncDir = undefined
 
 --------------------------------------------------------------------------------
@@ -225,7 +227,7 @@ createFile :: (HalfsCapable b t r l m ) =>
               HalfsState b r l m
            -> FilePath
            -> FileMode
-           -> HalfsM m ()
+           -> HalfsM b r l m ()
 createFile fs fp mode = do
   -- TODO: permissions
   withDir fs ppath $ \pdh -> do
@@ -251,7 +253,7 @@ openFile :: (HalfsCapable b t r l m) =>
             HalfsState b r l m  -- ^ The FS
          -> FilePath            -- ^ The absolute path of the file
          -> FileOpenFlags       -- ^ open flags / open mode (ronly, wonly, wr)
-         -> HalfsM m FileHandle 
+         -> HalfsM b r l m FileHandle 
 openFile fs fp oflags = do
   -- TODO: check perms
   logMsg (hsLogger fs) $ "CoreAPI.openFile entry: fp = " ++ show fp ++ ", oflags = " ++ show oflags
@@ -271,11 +273,11 @@ openFile fs fp oflags = do
     foundFile      = openFilePrim oflags
                     
 read :: (HalfsCapable b t r l m) =>
-        HalfsState b r l m  -- ^ the filesystem
-     -> FileHandle          -- ^ the handle for the open file to read
-     -> Word64              -- ^ the byte offset into the file
-     -> Word64              -- ^ the number of bytes to read
-     -> HalfsM m ByteString -- ^ the data read
+        HalfsState b r l m        -- ^ the filesystem
+     -> FileHandle                -- ^ the handle for the open file to read
+     -> Word64                    -- ^ the byte offset into the file
+     -> Word64                    -- ^ the number of bytes to read
+     -> HalfsM b r l m ByteString -- ^ the data read
 read fs fh byteOff len = do
   -- TODO: Check perms
   unless (fhReadable fh) $ HE_BadFileHandleForRead `annErrno` eBADF
@@ -286,33 +288,33 @@ write :: (HalfsCapable b t r l m) =>
       -> FileHandle         -- ^ the handle for the open file to write
       -> Word64             -- ^ the byte offset into the file
       -> ByteString         -- ^ the data to write
-      -> HalfsM m ()
+      -> HalfsM b r l m ()
 write fs fh byteOff bytes = do
   -- TODO: Check perms
   unless (fhWritable fh) $ HE_BadFileHandleForWrite `annErrno` eBADF
   writeStream fs (fhInode fh) byteOff False bytes
 
 flush :: (HalfsCapable b t r l m) =>
-         HalfsState b r l m -> FileHandle -> HalfsM m ()
+         HalfsState b r l m -> FileHandle -> HalfsM b r l m ()
 flush fs _fh = do
   -- TODO: handle buffer flush if FH denotes buffering is being used
   lift $ bdFlush $ hsBlockDev fs
 
 syncFile :: (HalfsCapable b t r l m) =>
-            HalfsState b r l m -> FilePath -> SyncType ->HalfsM m ()
+            HalfsState b r l m -> FilePath -> SyncType ->HalfsM b r l m ()
 syncFile = undefined
 
 closeFile :: (HalfsCapable b t r l m) =>
              HalfsState b r l m -- ^ the filesystem
           -> FileHandle         -- ^ the handle to the open file to close
-          -> HalfsM m ()
+          -> HalfsM b r l m ()
 closeFile _fs _fh = do
   -- TODO/FIXME: sync & synchronously mark fh closed so other ops can't
   -- continue writing (FHs must track open/closed state first).
   return ()
 
 setFileSize :: (HalfsCapable b t r l m) =>
-               HalfsState b r l m -> FilePath -> Word64 -> HalfsM m ()
+               HalfsState b r l m -> FilePath -> Word64 -> HalfsM b r l m ()
 setFileSize fs fp len = 
   withFile fs fp (fofWriteOnly True) $ \fh -> do 
     let inr = fhInode fh
@@ -328,13 +330,13 @@ setFileTimes :: (HalfsCapable b t r l m) =>
              -> FilePath            
              -> t                  -- ^ access time
              -> t                  -- ^ modification time  
-             -> HalfsM m ()
+             -> HalfsM b r l m ()
 setFileTimes fs fp accTm modTm = do
   -- TODO: Check permissions
   modifyInode fs fp $ \nd -> nd{ inoModifyTime = modTm, inoAccessTime = accTm }
 
 rename :: (HalfsCapable b t r l m) =>
-          HalfsState b r l m -> FilePath -> FilePath -> HalfsM m ()
+          HalfsState b r l m -> FilePath -> FilePath -> HalfsM b r l m ()
 rename = undefined
 
 
@@ -342,7 +344,7 @@ rename = undefined
 -- Access control
 
 chmod :: (HalfsCapable b t r l m) =>
-         HalfsState b r l m -> FilePath -> FileMode -> HalfsM m ()
+         HalfsState b r l m -> FilePath -> FileMode -> HalfsM b r l m ()
 chmod fs fp mode = do
   -- TODO: Check perms
   modifyInode fs fp $ \nd -> nd{ inoMode = mode }
@@ -352,7 +354,7 @@ chown :: (HalfsCapable b t r l m) =>
       -> FilePath
       -> Maybe UserID  -- ^ Nothing indicates no change to user
       -> Maybe GroupID -- ^ Nothing indicates no change to group
-      -> HalfsM m ()
+      -> HalfsM b r l m ()
 chown fs fp musr mgrp = do
   -- TODO: Check perms
   modifyInode fs fp $ \nd ->
@@ -361,7 +363,7 @@ chown fs fp musr mgrp = do
       }
 
 access :: (HalfsCapable b t r l m) =>
-          HalfsState b r l m -> FilePath -> [AccessRight] -> HalfsM m ()
+          HalfsState b r l m -> FilePath -> [AccessRight] -> HalfsM b r l m ()
 access = undefined
 
 
@@ -370,7 +372,7 @@ access = undefined
 
 -- | A POSIX link(2)-like operation: makes a hard file link.
 mklink :: (HalfsCapable b t r l m) =>
-          HalfsState b r l m -> FilePath -> FilePath -> HalfsM m ()
+          HalfsState b r l m -> FilePath -> FilePath -> HalfsM b r l m ()
 mklink fs path1 {-src-} path2 {-dst-} = do
   {- Currently status of POSIX error behaviors:
 
@@ -478,15 +480,15 @@ mklink fs path1 {-src-} path2 {-dst-} = do
   closeDir fs p2pfxdh
 
 rmlink :: (HalfsCapable b t r l m) =>
-          HalfsState b r l m -> FilePath -> HalfsM m ()
+          HalfsState b r l m -> FilePath -> HalfsM b r l m ()
 rmlink = undefined
 
 createSymLink :: (HalfsCapable b t r l m) =>
-                 HalfsState b r l m -> FilePath -> FilePath -> HalfsM m ()
+                 HalfsState b r l m -> FilePath -> FilePath -> HalfsM b r l m ()
 createSymLink = undefined
 
 readSymLink :: (HalfsCapable b t r l m) =>
-               HalfsState b r l m -> FilePath -> HalfsM m FilePath
+               HalfsState b r l m -> FilePath -> HalfsM b r l m FilePath
 readSymLink = undefined
 
 
@@ -494,7 +496,7 @@ readSymLink = undefined
 -- Filesystem stats
 
 fstat :: (HalfsCapable b t r l m) =>
-         HalfsState b r l m -> FilePath -> HalfsM m (FileStat t)
+         HalfsState b r l m -> FilePath -> HalfsM b r l m (FileStat t)
 fstat fs fp = do 
   logMsg (hsLogger fs) $ "CoreAPI.fstat: entry"
   ir <- absPathIR fs fp AnyFileType 
@@ -502,7 +504,7 @@ fstat fs fp = do
   fileStat fs ir
 
 fsstat :: (HalfsCapable b t r l m) =>
-          HalfsState b r l m -> HalfsM m FileSystemStats
+          HalfsState b r l m -> HalfsM b r l m FileSystemStats
 fsstat fs = do
   fileCnt <- fromIntegral `fmap` withLockedRscRef (hsNumFileNodes fs) readRef
   freeCnt <- fromIntegral `fmap` numFreeBlocks bm
@@ -527,7 +529,7 @@ modifyInode :: HalfsCapable b t r l m =>
                HalfsState b r l m
             -> FilePath
             -> (Inode t -> Inode t)
-            -> HalfsM m ()
+            -> HalfsM b r l m ()
 modifyInode fs fp f = 
   withFile fs fp (fofReadWrite True) $ \fh -> 
     atomicModifyInode fs (fhInode fh) (return . f)
@@ -539,7 +541,7 @@ absPathIR :: HalfsCapable b t r l m =>
              HalfsState b r l m
           -> FilePath
           -> FileType
-          -> HalfsM m InodeRef
+          -> HalfsM b r l m InodeRef
 absPathIR fs fp ftype = do
   if isAbsolute fp
    then do
@@ -555,8 +557,8 @@ absPathIR fs fp ftype = do
 withDir :: HalfsCapable b t r l m =>
            HalfsState b r l m
         -> FilePath
-        -> (DirHandle r l -> HalfsM m a)
-        -> HalfsM m a
+        -> (DirHandle r l -> HalfsM b r l m a)
+        -> HalfsM b r l m a
 withDir fs fp = hbracket (openDir fs fp) (closeDir fs) 
 {-
   dh   <- openDir fs fp
@@ -569,8 +571,8 @@ withFile :: (HalfsCapable b t r l m) =>
             HalfsState b r l m
          -> FilePath
          -> FileOpenFlags
-         -> (FileHandle -> HalfsM m a)
-         -> HalfsM m a
+         -> (FileHandle -> HalfsM b r l m a)
+         -> HalfsM b r l m a
 withFile fs fp oflags = 
   hbracket (openFile fs fp oflags) (\fh -> {- TODO: sync? -} closeFile fs fh)
 
@@ -583,9 +585,11 @@ writeSB dev sb = do
   bdFlush dev
   return sb
 
-getUser :: HalfsCapable b t r l m => HalfsState b r l m -> HalfsM m UserID
+getUser :: HalfsCapable b t r l m =>
+           HalfsState b r l m -> HalfsM b r l m UserID
 getUser = return . hsUserID
 
-getGroup :: HalfsCapable b t r l m => HalfsState b r l m -> HalfsM m GroupID
+getGroup :: HalfsCapable b t r l m =>
+            HalfsState b r l m -> HalfsM b r l m GroupID
 getGroup = return . hsGroupID
 

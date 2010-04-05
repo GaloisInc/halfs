@@ -65,8 +65,8 @@ propM_inodeModuleInvs :: HalfsCapable b t r l m =>
                       -> PropertyM m ()
 propM_inodeModuleInvs _g _dev = do
   -- Check geometry/padding invariants
-  minInodeSz <- runH $ minimalInodeSize =<< getTime
-  minContSz  <- runH $ minimalContSize
+  minInodeSz <- run $ minimalInodeSize =<< getTime
+  minContSz  <- run $ minimalContSize
   assert (minInodeSz == minContSz)
 
 -- | Tests basic write/reads & overwrites
@@ -76,11 +76,13 @@ propM_basicWRWR :: HalfsCapable b t r l m =>
                 -> PropertyM m ()
 propM_basicWRWR _g dev = do
   withFSData dev $ \fs rdirIR dataSz testData -> do
-  let dataSzI      = fromIntegral dataSz
+  let exec           = execH "propM_basicWRWR" fs
+      time           = exec "obtain time" getTime
+      dataSzI        = fromIntegral dataSz
       checkWriteMD t = \sz eb -> chk sz eb (t <=) (t <=) (t <=)
       checkReadMD  t = \sz eb -> chk sz eb (t <=) (t >=) (t <=)
-      chk          = checkInodeMetadata fs rdirIR Directory rootDirPerms
-                                        rootUser rootGroup
+      chk            = checkInodeMetadata fs rdirIR Directory rootDirPerms
+                                          rootUser rootGroup
 
   -- Check truncation of initial data (the root dir cruft) to a single byte
   t0 <- time
@@ -88,13 +90,13 @@ propM_basicWRWR _g dev = do
   checkWriteMD t0 1 2 -- expecting 1 inode block and 1 data block
  
   -- Expected error: write past end of 1-byte stream (beyond block boundary)
-  e0 <- runH $ writeStream fs rdirIR (bdBlockSize dev) False testData
+  e0 <- runH fs $ writeStream fs rdirIR (bdBlockSize dev) False testData
   case e0 of
     Left (HE_InvalidStreamIndex idx) -> assert (idx == bdBlockSize dev)
     _                                -> assert False
                                         
   -- Expected error: write past end of 1-byte stream (beyond byte boundary)
-  e0' <- runH $ writeStream fs rdirIR 2 False testData
+  e0' <- runH fs $ writeStream fs rdirIR 2 False testData
   case e0' of
     Left (HE_InvalidStreamIndex idx) -> assert (idx == 2)
     _                                -> assert False
@@ -156,8 +158,6 @@ propM_basicWRWR _g dev = do
   assert (bs3 == dummyByte)
   where
     dummyByte = BS.singleton 0
-    time      = exec "obtain time" getTime
-    exec      = execH "propM_basicWRWR"
 
 -- | Tests truncate writes and read-backs of random size
 propM_truncWRWR :: HalfsCapable b t r l m =>
@@ -166,11 +166,13 @@ propM_truncWRWR :: HalfsCapable b t r l m =>
                 -> PropertyM m ()
 propM_truncWRWR _g dev = do
   withFSData dev $ \fs rdirIR dataSz testData -> do
-  let numFree      = sreadRef $ bmNumFree $ hsBlockMap fs
+  let exec           = execH "propM_truncWRWR" fs
+      time           = exec "obtain time" getTime
+      numFree        = sreadRef $ bmNumFree $ hsBlockMap fs
       checkWriteMD t = \sz eb -> chk sz eb (t <=) (t <=) (t <=)
       checkReadMD  t = \sz eb -> chk sz eb (t <=) (t >=) (t <=)
-      chk          = checkInodeMetadata fs rdirIR Directory rootDirPerms
-                                        rootUser rootGroup
+      chk            = checkInodeMetadata fs rdirIR Directory rootDirPerms
+                                          rootUser rootGroup
 
   (_, _, api, apc) <- exec "Obtaining sizes" $ getSizes (bdBlockSize dev)
   let expBlks = calcExpBlockCount (bdBlockSize dev) api apc
@@ -205,9 +207,6 @@ propM_truncWRWR _g dev = do
                         -- is just a lower bound
         (dataSz - dataSz'') `div` (fromIntegral $ bdBlockSize dev)
   assert $ minExpectedFree <= fromIntegral (freeBlks' - freeBlks)
-  where
-    time = exec "obtain time" getTime
-    exec = execH "propM_truncWRWR"
 
 -- | Tests bounded reads of random offset and length
 propM_lengthWR :: HalfsCapable b t r l m =>
@@ -216,7 +215,9 @@ propM_lengthWR :: HalfsCapable b t r l m =>
                -> PropertyM m ()
 propM_lengthWR _g dev = do
   withFSData dev $ \fs rdirIR dataSz testData -> do 
-  let blkSz          = bdBlockSize dev
+  let exec           = execH "propM_lengthWR" fs
+      time           = exec "obtain time" getTime
+      blkSz          = bdBlockSize dev
       checkWriteMD t = \sz eb -> chk sz eb (t <=) (t <=) (t <=)
       checkReadMD  t = \sz eb -> chk sz eb (t <=) (t >=) (t <=)
       chk            = checkInodeMetadata fs rdirIR Directory rootDirPerms
@@ -249,16 +250,13 @@ propM_lengthWR _g dev = do
           readStream fs rdirIR stIdxW64 (Just $ fromIntegral readLen')
   assert (bs == bsTake readLen' (bsDrop startIdx testData))
   checkReadMD t2 dataSz expBlks 
-  where
-    time = exec "obtain time" getTime
-    exec = execH "propM_lengthWR"
 
 -- | Sanity check: reads/write operations to inode streams are atomic
 propM_inodeMutexOK :: BDGeom
                    -> BlockDevice IO
                    -> PropertyM IO ()
 propM_inodeMutexOK _g dev = do
-  fs <- runH (newfs dev rootUser rootGroup rootDirPerms) >> mountOK dev
+  fs <- runHNoEnv (newfs dev rootUser rootGroup rootDirPerms) >> mountOK dev
   rdirIR <- rootDir `fmap` sreadRef (hsSuperBlock fs)
 
   -- 1) Choose a random number n s.t. 8 <= n <= 32
@@ -310,8 +308,8 @@ propM_inodeMutexOK _g dev = do
       (:acc) `fmap` (printableBytes sz `suchThat` (not . (`elem` acc)))
     --
     test fs ch inr sz bstrings bs = do
-      _   <- runHalfs $ writeStream fs inr 0 False bs
-      eeb <- runHalfs $ readStream fs inr 0 Nothing
+      _   <- runHalfs fs $ writeStream fs inr 0 False bs
+      eeb <- runHalfs fs $ readStream fs inr 0 Nothing
       case eeb of
         Left _err -> writeChan ch (False, error "interleaved not computed")
         Right rb  -> writeChan ch (rb' `elem` bstrings, rb' /= bs)
@@ -327,7 +325,7 @@ withFSData :: HalfsCapable b t r l m =>
            -> (HalfsState b r l m -> InodeRef -> Int -> ByteString -> PropertyM m ())
            -> PropertyM m ()
 withFSData dev f = do
-  fs <- runH (newfs dev rootUser rootGroup rootDirPerms) >> mountOK dev
+  fs <- runHNoEnv (newfs dev rootUser rootGroup rootDirPerms) >> mountOK dev
   rdirIR <- rootDir `fmap` sreadRef (hsSuperBlock fs)
   withData dev $ f fs rdirIR 
 
@@ -368,6 +366,6 @@ checkInodeMetadata :: (HalfsCapable b t r l m, Integral a) =>
                    -> PropertyM m ()
 checkInodeMetadata fs inr expFileTy expMode expUsr expGrp
                    expFileSz expNumBlocks accessp modifyp changep = do
-  st <- execH "checkInodeMetadata" "filestat" $ fileStat fs inr
+  st <- execH "checkInodeMetadata" fs "filestat" $ fileStat fs inr
   checkFileStat st expFileSz expFileTy expMode
                 expUsr expGrp expNumBlocks accessp modifyp changep
