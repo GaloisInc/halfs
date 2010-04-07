@@ -7,6 +7,7 @@ module Halfs.File
   , getFHINR_lckd
   , openFilePrim
   , closeFilePrim
+  , removeFile
   )
  where
 
@@ -65,8 +66,32 @@ removeFile :: HalfsCapable b t r l m =>
               String   -- ^ name of file to remove from parent directory
            -> InodeRef -- ^ inr of file to remove
            -> HalfsM b r l m ()
-removeFile = error "removeFile NYI" -- HERE!
-
+removeFile fname inr = do
+  -- Purge the filename from the parent directory
+  dhMap <- hasks hsDHMap
+  withLockedRscRef dhMap $ \dhMapRef -> do
+    pinr <- atomicReadInode inr inoParent
+    pdh  <- lookupRM pinr dhMapRef >>= maybe (newDirHandle pinr) return
+    rmDirEnt pdh fname
+    
+  -- Decrement the link count
+  atomicModifyInode inr $ \nd -> do
+    when (inoNumLinks nd == 1) $ do
+      -- We're removing the last link, so we need to inject a callback into the
+      -- fhmap so that when all processes have closed the filehandle associated
+      -- with inr, the filehandle will be invalidated and the file resources
+      -- released. NB: The callback must assume that both the fhmap and fh locks
+      -- are held when it is executed.
+      fhMap <- hasks hsFHMap
+      hbracket (openFilePrim fofReadOnly inr) closeFilePrim $ \fh ->
+        withLockedRscRef fhMap $ \fhMapRef -> do
+          let cb = writeRef (fhInode fh) Nothing >> freeInode inr
+          mfhData <- lookupRM inr fhMapRef
+          case mfhData of 
+            Just (_, c, _) -> modifyRef fhMapRef $ M.insert inr (fh, c, cb)
+            Nothing        -> error "fh not found for open file, cannot happen"
+    return nd{ inoNumLinks = inoNumLinks nd - 1 }
+                         
 -- Get file handle's inode reference
 getFHINR_lckd :: HalfsCapable b t r l m =>
                  FileHandle r l
@@ -85,7 +110,7 @@ openFilePrim oflags@FileOpenFlags{ openMode = omode } inr = do
       Just (fh, c, onFinalClose) -> do
         modifyRef fhMapRef (M.insert inr (fh, c + 1, onFinalClose))
         return fh
-      Nothing         -> do
+      Nothing -> do
         fh <- FH (omode /= WriteOnly) (omode /= ReadOnly) oflags
                 `fmap` newRef (Just inr)
                 `ap`   newLock
@@ -102,21 +127,25 @@ closeFilePrim fh = do
     inr <- getFHINR_lckd fh 
     mfh <- lookupRM inr fhMapRef
     case mfh of
-      -- If the FH isn't in the fhmap, we don't have to do
-      -- anything (e.g., it has already been closed.)
-      Nothing                  -> return ()
+      Nothing -> return ()
 
       -- Remove FH from the map when the current open count is 1, otherwise just
       -- decrement it.  When FH is removed from the map, execute the
-      -- 'onFinalClose' hook from the fhmap (which, e.g., may deallocate
+      -- 'onFinalClose' callback from the fhmap (which, e.g., may deallocate
       -- resources for the file if a function like rmlink needed to defer
-      -- deallocation).
+      -- deallocation).  NB: onFinalClose may assume that both fh and fhmap
+      -- locks are held!
       --
-      -- TODO: Note that we may want to do this on a per-process basis (e.g., by
-      -- mapping an inr to a pid -> open count map) to disallow accidental
-      -- multiple closes across multiple processes resulting in incorrect open
-      -- counts.  At the very least, we should work through the ramifications
-      -- should this multiple-close scenario occur.
+      -- TODO: We may want to do this on a per-process basis (e.g., by mapping
+      -- an inr to a pid -> open count map) to disallow accidental multiple
+      -- closes across multiple processes resulting in incorrect open counts.
+      -- At the very least, we should work through the ramifications should this
+      -- multiple-close scenario occur. This includes dealing with per-process
+      -- FH invalidation as well.  E.g., in the current scheme, if two processes
+      -- p1 and p2 have the FH and p1 closes it, FH invalidation does not occur
+      -- (it would occur only after p1 and p2 closed the FH) and so p1 can still
+      -- use the FH which is not intended.
+      --
       Just (_, c, onFinalClose)
         | c == 1    ->
             modifyRef fhMapRef (M.delete inr) >> onFinalClose

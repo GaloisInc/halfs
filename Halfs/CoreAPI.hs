@@ -487,7 +487,7 @@ mklink path1 {-src-} path2 {-dst-} = do
 
 rmlink :: (HalfsCapable b t r l m) =>
           FilePath -> HalfsM b r l m ()
-rmlink = undefined
+rmlink fp = absPathIR fp RegularFile >>= removeFile (takeFileName fp)
 
 createSymLink :: (HalfsCapable b t r l m) =>
                  FilePath -> FilePath -> HalfsM b r l m ()
@@ -503,11 +503,7 @@ readSymLink = undefined
 
 fstat :: (HalfsCapable b t r l m) =>
          FilePath -> HalfsM b r l m (FileStat t)
-fstat fp = do 
-  logMsg $ "CoreAPI.fstat: entry"
-  ir <- absPathIR fp AnyFileType 
-  logMsg $ "CoreAPI.fstat: fstat on ir = " ++ show ir
-  fileStat ir
+fstat fp = absPathIR fp AnyFileType >>= fileStat
 
 fsstat :: (HalfsCapable b t r l m) =>
           HalfsM b r l m FileSystemStats

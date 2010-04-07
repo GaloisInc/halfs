@@ -5,17 +5,18 @@ module Halfs.Directory
   , AccessRight(..)
   , FileType(..)
   , addDirEnt
+  , addDirEnt_lckd
   , closeDirectory
   , find
   , findInDir
+  , getDHINR_lckd
   , makeDirectory
+  , newDirHandle
   , openDirectory
   , removeDirectory
+  , rmDirEnt
   , syncDirectory
   , withDirectory
-  -- * for internal use only
-  , addDirEnt_lckd
-  , getDHINR_lckd
   -- * for testing
   , DirectoryEntry(..)
   , DirectoryState(..)
