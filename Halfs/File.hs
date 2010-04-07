@@ -27,6 +27,8 @@ import Halfs.Utils
 
 import System.Device.BlockDevice
 
+import Debug.Trace
+
 type HalfsM b r l m a = HalfsT HalfsError (Maybe (HalfsState b r l m)) m a
 
 --------------------------------------------------------------------------------
@@ -69,28 +71,32 @@ removeFile :: HalfsCapable b t r l m =>
 removeFile fname inr = do
   -- Purge the filename from the parent directory
   dhMap <- hasks hsDHMap
+  trace ("removeFile entry, inr = " ++ show inr) $ do
   withLockedRscRef dhMap $ \dhMapRef -> do
     pinr <- atomicReadInode inr inoParent
     pdh  <- lookupRM pinr dhMapRef >>= maybe (newDirHandle pinr) return
     rmDirEnt pdh fname
     
-  -- Decrement the link count
-  atomicModifyInode inr $ \nd -> do
-    when (inoNumLinks nd == 1) $ do
-      -- We're removing the last link, so we need to inject a callback into the
-      -- fhmap so that when all processes have closed the filehandle associated
-      -- with inr, the filehandle will be invalidated and the file resources
-      -- released. NB: The callback must assume that both the fhmap and fh locks
-      -- are held when it is executed.
-      fhMap <- hasks hsFHMap
-      hbracket (openFilePrim fofReadOnly inr) closeFilePrim $ \fh ->
-        withLockedRscRef fhMap $ \fhMapRef -> do
-          let cb = writeRef (fhInode fh) Nothing >> freeInode inr
-          mfhData <- lookupRM inr fhMapRef
-          case mfhData of 
-            Just (_, c, _) -> modifyRef fhMapRef $ M.insert inr (fh, c, cb)
-            Nothing        -> error "fh not found for open file, cannot happen"
-    return nd{ inoNumLinks = inoNumLinks nd - 1 }
+  hbracket (openFilePrim fofReadOnly inr) closeFilePrim $ \fh -> do
+    fhMap <- hasks hsFHMap
+    withLockedRscRef fhMap $ \fhMapRef -> do
+    atomicModifyInode inr  $ \nd       -> do
+      trace ("In guts of removeFile " ++ show fname ++ ", numLinks = " ++ show (inoNumLinks nd)) $ do
+      when (inoNumLinks nd == 1) $ do
+        -- We're removing the last link, so we need to inject a callback into the
+        -- fhmap so that when all processes have closed the filehandle associated
+        -- with inr, the filehandle will be invalidated and the file resources
+        -- released. NB: The callback must assume that both the fhmap and fh locks
+        -- are held when it is executed.
+        let cb = do
+              trace ("*** in invalidation/release callback!") $ do
+              writeRef (fhInode fh) Nothing
+              freeInode inr
+        mfhData <- lookupRM inr fhMapRef
+        case mfhData of 
+          Just (_, c, _) -> modifyRef fhMapRef $ M.insert inr (fh, c, cb)
+          Nothing        -> error "fh not found for open file, cannot happen"
+      return nd{ inoNumLinks = inoNumLinks nd - 1 }
                          
 -- Get file handle's inode reference
 getFHINR_lckd :: HalfsCapable b t r l m =>
@@ -108,12 +114,14 @@ openFilePrim oflags@FileOpenFlags{ openMode = omode } inr = do
     mfh <- lookupRM inr fhMapRef
     case mfh of
       Just (fh, c, onFinalClose) -> do
+        trace ("openFilePrim: adding 1 to open count") $ do
         modifyRef fhMapRef (M.insert inr (fh, c + 1, onFinalClose))
         return fh
       Nothing -> do
         fh <- FH (omode /= WriteOnly) (omode /= ReadOnly) oflags
                 `fmap` newRef (Just inr)
                 `ap`   newLock
+        trace ("openFilePrim: setting open count to 1") $ do
         modifyRef fhMapRef $ M.insert inr (fh, 1, return ())
         return fh
 
@@ -121,6 +129,7 @@ closeFilePrim :: HalfsCapable b t r l m =>
                  FileHandle r l
               -> HalfsM b r l m ()
 closeFilePrim fh = do
+  trace ("closeFilePrim entry") $ do
   fhMap <- hasks hsFHMap
   withLock (fhLock fh) $ do 
   withLockedRscRef fhMap $ \fhMapRef -> do
@@ -147,9 +156,13 @@ closeFilePrim fh = do
       -- use the FH which is not intended.
       --
       Just (_, c, onFinalClose)
-        | c == 1    ->
+        | c == 1    -> do
+            trace ("closeFilePrim: c = " ++ show c) $ do 
+            trace ("c == 1 case, about to invoke onFinalClose") $ do          
             modifyRef fhMapRef (M.delete inr) >> onFinalClose
-        | otherwise ->
+        | otherwise -> do 
+            trace ("closeFilePrim: c = " ++ show c) $ do 
+            trace ("c > 1 case, just decrementing open count") $ do
             modifyRef fhMapRef $ M.insert inr (fh, c - 1, onFinalClose)
 
 fofReadOnly :: FileOpenFlags

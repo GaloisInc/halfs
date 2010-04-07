@@ -36,7 +36,7 @@ import Tests.Instances (printableBytes, filename)
 import Tests.Types
 import Tests.Utils
 
---import Debug.Trace
+import Debug.Trace
 
 
 --------------------------------------------------------------------------------
@@ -52,6 +52,7 @@ type HalfsProp =
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [
+{-
     exec 10 "Init and mount"         propM_initAndMountOK
   ,
     exec 10 "Mount/unmount"          propM_mountUnmountOK
@@ -77,6 +78,9 @@ qcProps quick =
     exec 10 "Simple rmdir"           propM_simpleRmdirOK
   ,
     exec 10 "rmdir mutex"            propM_rmdirMutexOK
+  ,
+-}
+    exec 1  "Simple rmlink"          propM_simpleRmlinkOK
   ]
   where
     exec = mkMemDevExec quick "CoreAPI"
@@ -538,6 +542,7 @@ propM_simpleRmdirOK _g dev = do
   case e1 of
     Left HE_InvalidDirHandle -> return ()
     _                        -> assert False
+  quickRemountCheck fs 
 
 -- Simple sanity check for the mutex behavior rmdir is supposed to be enforcing.
 -- We have two threads, A and B.  Thread A repeatedly attempts to create a
@@ -601,6 +606,79 @@ propM_rmdirMutexOK _g dev = do
           writeChan ch merr
           threadB fs ch (n-1)
 
+propM_simpleRmlinkOK :: HalfsProp
+propM_simpleRmlinkOK _g dev = do
+  trace ("filesystem setup") $ do
+  fs <- mkNewFS dev >> mountOK dev
+  let exec        = execH "propM_simpleRmlinkOK" fs
+      getFree     = sreadRef . bmNumFree . hsBlockMap
+      f1          = rootPath </> "f1"
+      f2          = rootPath </> "f2"
+      exists path =
+        (elem (takeFileName path) . map fst)
+          `fmap` exec ("readDir " ++ path)
+                      (withDir (takeDirectory path) readDir)
+
+  freeBefore <- getFree fs
+  trace ("--- create /f1") $ do
+  exec "create /f1" $ createFile f1 defaultFilePerms
+  assert =<< exists f1
+  freeMid1 <- getFree fs
+
+  trace ("--- mklink /f1 /f2") $ do
+  exec "mklink /f1 /f2" $ mklink f1 f2
+  assert =<< liftM2 (&&) (exists f1) (exists f2)
+
+  freeMid2 <- getFree fs
+
+  trace ("--- rmlink /f1") $ do
+  exec "rmlink /f1" $ rmlink f1
+  assert =<< not `fmap` exists f1
+  assert =<< exists f2
+  freeMid3 <- getFree fs
+
+  trace ("--- rmlink /f2") $ do
+  exec "rmlink /f2" $ rmlink f2
+  assert =<< not `fmap` exists f2
+
+  freeAfter <- getFree fs
+  trace ("freeBefore = " ++ show freeBefore) $ do
+  trace ("freeMid1 = " ++ show freeMid1) $ do
+  trace ("freeMid2 = " ++ show freeMid2) $ do
+  trace ("freeMid3 = " ++ show freeMid3) $ do
+  trace ("freeAfter = " ++ show freeAfter) $ do
+
+--  assert (freeBefore >= freeAfter && freeBefore - freeAfter == 1)
+  -- ^ 1 extra block still claimed for root directory contents
+
+  quickRemountCheck fs         
+
+{-
+  -- Expected error: removal of non-empty directory
+  exec "mkdir /foo"     $ mkdir d0 defaultDirPerms
+  exec "create /foo/f1" $ createFile fp defaultFilePerms
+  e0 <- runH fs $ rmdir d0
+  case e0 of
+    Left (HE_ErrnoAnnotated HE_DirectoryNotEmpty errno) ->
+      assert (errno == eNOTEMPTY)
+    _ -> assert False
+
+  -- simple mkdir/rmdir check
+  freeBefore <- getFree fs
+  exec "mkdir /foo/bar" $ mkdir d1 defaultDirPerms
+  dh <- exec "openDir /foo/bar" $ openDir d1
+  assert =<< exists d1
+  exec "rmdir /foo/bar" $ rmdir d1
+  assert =<< liftM2 (==) (getFree fs) (return freeBefore)
+  assert =<< not `fmap` exists d1
+
+  -- Expected error: access to invalidated directory handle
+  e1 <- runH fs $ readDir dh
+  case e1 of
+    Left HE_InvalidDirHandle -> return ()
+    _                        -> assert False
+-}
+
 
 --------------------------------------------------------------------------------
 -- Misc
@@ -619,6 +697,7 @@ quickRemountCheck :: HalfsCapable b t r l m =>
                   -> PropertyM m ()
 quickRemountCheck fs = do
   dump0 <- exec "Get dump0" dumpfs
+  trace ("dump0 = " ++ dump0) $ do
   unmountOK fs
   fs'   <- mountOK (hsBlockDev fs)
   dump1 <- exec "Get dump1" dumpfs
