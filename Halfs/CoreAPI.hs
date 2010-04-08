@@ -301,22 +301,16 @@ write fh byteOff bytes = do
 
 flush :: (HalfsCapable b t r l m) =>
          FileHandle r l -> HalfsM b r l m ()
-flush _fh = do
-  -- TODO: handle buffer flush if FH denotes buffering is being used
-  dev <- hasks hsBlockDev
-  lift $ bdFlush dev
+flush _fh = lift . bdFlush =<< hasks hsBlockDev
 
 syncFile :: (HalfsCapable b t r l m) =>
-            FilePath -> SyncType ->HalfsM b r l m ()
-syncFile = undefined
+            FilePath -> SyncType -> HalfsM b r l m ()
+syncFile _fp _st = lift . bdFlush =<< hasks hsBlockDev
 
 closeFile :: (HalfsCapable b t r l m) =>
              FileHandle r l -- ^ the handle to the open file to close
           -> HalfsM b r l m ()
-closeFile fh = do
-  -- TODO/FIXME: sync & synchronously mark fh closed so other ops can't
-  -- continue writing (FHs must track open/closed state first).
-  closeFilePrim fh
+closeFile fh = closeFilePrim fh
 
 setFileSize :: (HalfsCapable b t r l m) =>
                FilePath -> Word64 -> HalfsM b r l m ()

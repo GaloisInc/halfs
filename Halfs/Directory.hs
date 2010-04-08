@@ -144,7 +144,6 @@ syncDirectory_lckd :: HalfsCapable b t r l m =>
                    -> HalfsM b r l m ()
 syncDirectory_lckd dh = do
   -- Precond: (dhLock dh) is currently held (can we assert this? TODO)
-
   state <- readRef $ dhState dh
 
   -- TODO: Currently, we overwrite the entire DirectoryEntry list, truncating
@@ -162,6 +161,7 @@ syncDirectory_lckd dh = do
       inr <- getDHINR_lckd dh
       writeStream inr 0 True
         =<< (encode . M.elems) `fmap` readRef (dhContents dh)
+      lift . bdFlush =<< hasks hsBlockDev
       modifyRef (dhState dh) dirStTransClean
 
 -- | Obtains an active directory handle for the directory at the given InodeRef
