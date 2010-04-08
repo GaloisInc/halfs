@@ -446,7 +446,7 @@ withFuseArgs f =
                        finally (f fuseArgs)
                                (fuse_opt_free_args fuseArgs))))
 
-withStructFuse :: Show fh => Ptr CFuseChan -> Ptr CFuseArgs -> FuseOperations fh -> (Exception -> IO Errno) -> (Ptr CStructFuse -> IO b) -> IO b
+withStructFuse :: Ptr CFuseChan -> Ptr CFuseArgs -> FuseOperations fh -> (Exception -> IO Errno) -> (Ptr CStructFuse -> IO b) -> IO b
 withStructFuse pFuseChan pArgs ops handler f =
     allocaBytes (#size struct fuse_operations) $ \ pOps -> do
       bzero pOps (#size struct fuse_operations)
@@ -838,7 +838,7 @@ fuseMainReal foreground ops handler pArgs mountPt =
 --   * registers the operations ;
 --
 --   * calls FUSE event loop.
-fuseMain :: Show fh => FuseOperations fh -> (Exception -> IO Errno) -> IO ()
+fuseMain :: FuseOperations fh -> (Exception -> IO Errno) -> IO ()
 fuseMain ops handler =
     -- this used to be implemented using libfuse's fuse_main. Doing this will fork()
     -- from C behind the GHC runtime's back, which deadlocks in GHC 6.8.
