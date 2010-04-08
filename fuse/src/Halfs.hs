@@ -206,9 +206,9 @@ halfsRemoveLink :: HalfsCapable b t r l m =>
                    HalfsSpecific b r l m
                 -> FilePath
                 -> m Errno
-halfsRemoveLink HS{ hspLogger = _log, hspState = _fs } _fp = do
-  error "halfsRemoveLink: Not Yet Implemented." -- TODO
-  return eNOSYS
+halfsRemoveLink hsp@HS{ hspLogger = log } fp = do
+  log $ "halfsRemoveLink: fp = " ++ show fp
+  execDefault hsp $ rmlink fp
          
 halfsRemoveDirectory :: HalfsCapable b t r l m =>
                         HalfsSpecific b r l m
