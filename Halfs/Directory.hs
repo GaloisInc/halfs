@@ -73,34 +73,34 @@ makeDirectory :: HalfsCapable b t r l m =>
                                           --   created directory
 makeDirectory parentIR dname user group perms =
   withDirectory parentIR $ \pdh -> do
-  withLock (dhLock pdh) $ do 
-  -- Begin critical section over parent's DirHandle 
-  contents <- readRef (dhContents pdh)
-  if M.member dname contents
-   then throwError $ HE_ObjectExists dname 
-   else do
-     bm  <- hasks hsBlockMap 
-     mir <- fmap blockAddrToInodeRef `fmap` alloc1 bm
-     case mir of
-       Nothing     -> throwError HE_AllocFailed
-       Just thisIR -> do
-         -- Build the directory inode and persist it
-         dev  <- hasks hsBlockDev       
-         bstr <- lift $ buildEmptyInodeEnc
-                          dev
-                          Directory
-                          perms
-                          thisIR
-                          parentIR
-                          user
-                          group
-         assert (BS.length bstr == fromIntegral (bdBlockSize dev)) $ return ()
-         lift $ bdWriteBlock dev (inodeRefToBlockAddr thisIR) bstr
-
-         -- Add 'dname' to parent directory's contents
-         addDirEnt_lckd pdh dname thisIR user group perms Directory
-         return thisIR
-  -- End critical section over parent's DirHandle 
+    withDHLock pdh $ do 
+      -- Begin critical section over parent's DirHandle 
+      contents <- readRef (dhContents pdh)
+      if M.member dname contents
+       then throwError $ HE_ObjectExists dname 
+       else do
+         bm  <- hasks hsBlockMap 
+         mir <- fmap blockAddrToInodeRef `fmap` alloc1 bm
+         case mir of
+           Nothing     -> throwError HE_AllocFailed
+           Just thisIR -> do
+             -- Build the directory inode and persist it
+             dev  <- hasks hsBlockDev       
+             bstr <- lift $ buildEmptyInodeEnc
+                              dev
+                              Directory
+                              perms
+                              thisIR
+                              parentIR
+                              user
+                              group
+             assert (BS.length bstr == fromIntegral (bdBlockSize dev)) $ do
+             lift $ bdWriteBlock dev (inodeRefToBlockAddr thisIR) bstr
+    
+             -- Add 'dname' to parent directory's contents
+             addDirEnt_lckd pdh dname thisIR user group perms Directory
+             return thisIR
+      -- End critical section over parent's DirHandle 
 
 -- | Given a parent directory's inode ref, remove the directory with the given name.
 removeDirectory :: HalfsCapable b t r l m =>
@@ -117,27 +117,27 @@ removeDirectory dname inr = do
 
   withLockedRscRef dhMap $ \dhMapRef -> do
   dh <- lookupRM inr dhMapRef >>= maybe (newDirHandle inr) return
-  withLock (dhLock dh) $ do
-  -- begin dirhandle critical section   
-
-  contents <- readRef (dhContents dh)
-  unless (M.null contents) $ HE_DirectoryNotEmpty `annErrno` eNOTEMPTY
-
-  -- Purge this dir's dirent from the parent directory
-  pinr <- atomicReadInode inr inoParent
-  pdh  <- lookupRM pinr dhMapRef >>= maybe (newDirHandle pinr) return
-  rmDirEnt pdh dname
-
-  -- Invalidate dh so that all subsequent DH-mediated access fails
-  writeRef (dhInode dh) Nothing 
-  freeInode inr
-  -- end dirhandle critical section   
+  withDHLock dh $ do
+    -- begin dirhandle critical section   
+  
+    contents <- readRef (dhContents dh)
+    unless (M.null contents) $ HE_DirectoryNotEmpty `annErrno` eNOTEMPTY
+  
+    -- Purge this dir's dirent from the parent directory
+    pinr <- atomicReadInode inr inoParent
+    pdh  <- lookupRM pinr dhMapRef >>= maybe (newDirHandle pinr) return
+    rmDirEnt pdh dname
+  
+    -- Invalidate dh so that all subsequent DH-mediated access fails
+    writeRef (dhInode dh) Nothing 
+    freeInode inr
+    -- end dirhandle critical section   
 
 -- | Syncs directory contents to disk
 syncDirectory :: HalfsCapable b t r l m =>
                  DirHandle r l
               -> HalfsM b r l m ()
-syncDirectory dh = withLock (dhLock dh) $ syncDirectory_lckd dh
+syncDirectory dh = withDHLock dh $ syncDirectory_lckd dh
 
 syncDirectory_lckd :: HalfsCapable b t r l m =>
                       DirHandle r l
@@ -207,7 +207,7 @@ addDirEnt :: HalfsCapable b t r l m =>
           -> FileType
           -> HalfsM b r l m ()
 addDirEnt dh name ir u g mode ftype =
-  withLock (dhLock dh) $ addDirEnt_lckd dh name ir u g mode ftype
+  withDHLock dh $ addDirEnt_lckd dh name ir u g mode ftype
 
 addDirEnt_lckd :: HalfsCapable b t r l m =>
                   DirHandle r l
@@ -234,7 +234,7 @@ rmDirEnt :: HalfsCapable b t r l m =>
          -> String
          -> HalfsM b r l m ()
 rmDirEnt dh name =
-  withLock (dhLock dh) $ rmDirEnt_lckd dh name
+  withDHLock dh $ rmDirEnt_lckd dh name
 
 rmDirEnt_lckd :: HalfsCapable b t r l m =>
                  DirHandle r l
@@ -281,7 +281,7 @@ findDE :: HalfsCapable b t r l m =>
        -> FileType
        -> HalfsM b r l m (DirFindRslt DirectoryEntry)
 findDE dh fname ftype = do
-  mde <- withLock (dhLock dh) $ lookupRM fname (dhContents dh)
+  mde <- withDHLock dh $ lookupRM fname (dhContents dh)
   case mde of
     Nothing -> return DF_NotFound
     Just de -> return $ if deType de `isFileType` ftype
@@ -336,7 +336,7 @@ isFileType t1 t2         = t1 == t2
 
 _showDH :: HalfsCapable b t r l m => DirHandle r l -> HalfsM b r l m String
 _showDH dh = do
-  withLock (dhLock dh) $ do 
+  withDHLock dh $ do 
     state    <- readRef $ dhState dh
     contents <- readRef $ dhContents dh
     inr      <- getDHINR_lckd dh

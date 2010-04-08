@@ -629,7 +629,7 @@ propM_simpleRmlinkOK _g dev = do
     _                         -> assert False
 
   exec "mklink /f1 /f2" $ mklink f1 f2
-  assert =<< liftM2 (&&) (exists f1) (exists f2)
+  assert =<< and `fmap` mapM exists [f1, f2]
 
   exec "rmlink /f1" $ rmlink f1
   assert =<< not `fmap` exists f1
@@ -665,6 +665,7 @@ propM_simpleRenameOK _g dev = do
   exec "create /f1"      $ createFile f1 defaultFilePerms
   exec "mkdir /d1"       $ mkdir d1 defaultDirPerms
   exec "mkdir /d1/d1sub" $ mkdir d1sub defaultDirPerms
+  assert =<< and `fmap` mapM exists [f1, d1, d1sub]
 
   -- Expected error: Path component not found
   expectErrno eNOENT  =<< runH fs (rename f1 (rootPath </> "blah" </> "blah"))
@@ -678,13 +679,10 @@ propM_simpleRenameOK _g dev = do
   expectErrno eINVAL  =<< runH fs (rename dotPath d2)
   expectErrno eINVAL  =<< runH fs (rename dotdotPath d2)  
 
+  exec "rename /f1 /f2" $ rename f1 f2
+
   quickRemountCheck fs
   return () 
---  exec "rename /f1 /f2" $ rename
-
-  
-  
-
 
 
 --------------------------------------------------------------------------------
@@ -701,9 +699,9 @@ initDirEntNames = [dotPath, dotdotPath]
 rootPath :: FilePath
 rootPath = [pathSeparator]
 
--- Somewhat lightweight sanity check that unmounts/remounts and does a
--- hacky "equality" check on filesystem contents.  We defer to other
--- tests to more adequately test deep structural equality post-remount.
+-- Somewhat lightweight sanity check that unmounts/remounts and does a hacky and
+-- inefficient "equality" check on filesystem contents.  We defer to other tests
+-- to more adequately test deep structural equality post-remount.
 quickRemountCheck :: HalfsCapable b t r l m =>
                      HalfsState b r l m
                   -> PropertyM m ()

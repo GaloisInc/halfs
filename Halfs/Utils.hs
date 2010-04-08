@@ -4,6 +4,7 @@ import qualified Data.Map as M
 
 import Halfs.Classes
 import Halfs.Monad
+import Halfs.Types
 
 fmapFst :: (a -> b) -> (a, c) -> (b, c)
 fmapFst f (x,y) = (f x, y)
@@ -26,3 +27,8 @@ lookupM = liftM . M.lookup
 
 lookupRM :: (Ord k, Reffable r m) => k -> r (M.Map k v) -> m (Maybe v)
 lookupRM k = lookupM k . readRef
+
+withDHLock :: (HalfsCapable b t r l m) =>
+              DirHandle r1 l -> HalfsT err env m a -> HalfsT err env m a
+withDHLock = withLock . dhLock
+             

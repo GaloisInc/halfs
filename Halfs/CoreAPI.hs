@@ -207,7 +207,7 @@ readDir :: (HalfsCapable b t r l m) =>
            DirHandle r l
         -> HalfsM b r l m [(FilePath, FileStat t)]
 readDir dh = do
-  withLock (dhLock dh) $ do
+  withDHLock dh $ do 
     inr      <- getDHINR_lckd dh
     contents <- liftM M.toList $
                   T.mapM (fileStat)
@@ -408,11 +408,64 @@ rename oldFP newFP = do
     mnewDE <- lookupRM newName (dhContents newParentDH)
     handleErrors oldDE mnewDE
 
+    -- HERE: if new is a directory, we must open it and hold its dh
+    -- lock: if it's non empty, we error.  If it's empty, we need to
+    -- continue to hold the lock so that no other processes can put
+    -- anything into it, and then we have to remove it -after- updating
+    -- its parent DH to point to the oldDE AND syncDirectorying.  At
+    -- this point we can probably invoke removeDirectory_lckd or
+    -- somesuch on it.  This order is important so that we (try to)
+    -- uphold the rename(2) behavior requirement of 'new' always being
+    -- valid (which probably needs valid bits and multiple writes (some
+    -- kind of primitive journaling) to be correct.  However, this is a
+    -- step in the right direction: if we crash before the newName ->
+    -- oldDE sync'ing is initiated, new is still valid and is the old
+    -- file/dir.  If we crash after the newName -> oldDE sync, then the
+    -- old file/dir will just dangle and should be able to be cleaned up
+    -- by fsck, and holding the lock ensures we never replace a
+    -- non-empty directory (or one that becomes that way via unmutexed
+    -- interleaves).  This should mean that the only vulnerability here
+    -- is a crash -during- the newName -> oldDE sync action itself, but
+    -- we'll need to move to some kind of (possibly primitive)
+    -- journaling scheme to address this I think.
+    --
+    -- Also, may want a addDirEnt_lckd_prim that permits replacement
+    -- rather than have to modify addDirEnt_lckd's interface?  Not sure.
+    --
+    -- Current thinking: Capture behavior as above, describe here the
+    -- remaining problems with the implementation and what might be done
+    -- to adhere fully to the rename(2) expected behavior.
+
+    -- HERE2:
+--    ({-conditional dummy bracket op-} undefined) $ \(mNewLock, mndh) -> do
+
+      -- create a conditionally dummy bracketing operation here so that
+      -- there can be transparency w.r.t whether or not 'new- is a
+      -- directory, and hands us back a maybe dirhandle when new is a
+      -- directory, and will deal with dhlock release & dir close
+      -- actions as needed.
+ 
     -- NB: This removeDirectory invocation on the new directory will raise an
     -- eNOTEMPTY-wrapped exception that covers the behavior requirement for
     -- [ENOTEMPTY]: New is a directory and is not empty.
 
-    return ()    
+    -- The rename(2) man page claims that some instance of 'new' ought
+    -- to exist even if the system crashes in the middle of the
+    -- operation.  We try to ensure this by setting up the 'new'
+    -- DirEnt & explicit syncDirectory first.
+
+{-
+    -- Add the newName dirent, replacing whatever was there (we'll
+    -- remove it later).
+    addDirEnt_lckd newParentDH newName (deInode oldDE) (deUser oldDE)
+                   (deGroup oldDE) (deMode oldDE) (deType oldDE)
+      `catchError` \e ->
+        case e of
+          HE_ObjectExists{} ->
+            -- It's okay for newName to already exist, we'll remo
+-}
+
+    trace ("would have renamed here") $ return ()
     -- End critical section over old and new parent directory handles
     
   where
@@ -420,11 +473,13 @@ rename oldFP newFP = do
     [oldPP, newPP]     = map takeDirectory [oldFP, newFP]
     --
     withDirResources f =
-      hbracket (openDir' oldPP) closeDir $ \opdh ->
-        hbracket (openDir' newPP) closeDir $ \npdh ->
+      -- bracket & lock the old and new parent directories, being careful not to
+      -- double-lock when they're the same.
+      withDir' openDir' oldPP $ \opdh -> 
+        withDir' openDir' newPP $ \npdh ->
           (if oldPP `equalFilePath` newPP
-            then withLock (dhLock opdh) 
-            else withLock (dhLock opdh) . withLock (dhLock npdh)
+            then withDHLock opdh
+            else withDHLock opdh . withDHLock npdh
           ) $ f opdh npdh
     -- 
     openDir' dp = openDir dp `catchError` \e ->
@@ -439,15 +494,19 @@ rename oldFP newFP = do
       -- [EINVAL]: Old is a parent directory of new
       when (deType oldDE == Directory && oldFP `isParentOf` newFP) $
         HE_RenameFailed `annErrno` eINVAL
+
       case mnewDE of
         Nothing    -> return ()
         Just newDE -> do
+
           -- [EISDIR]: new is a directory, but old is not a directory.
           when (nft == Directory && oft /= Directory) $
             HE_RenameFailed `annErrno` eISDIR
+
           -- [ENOTDIR]: old is a directory, but new is not a directory.
           when (oft == Directory && nft /= Directory) $
             HE_RenameFailed `annErrno` eNOTDIR
+
           where
             nft = deType newDE
             oft = deType oldDE
@@ -456,53 +515,6 @@ rename oldFP newFP = do
                          where l1 = splitDirectories p1
                                l2 = splitDirectories p2
       
-{-
-    handleFileTypeMismatch nft oft = do
-      -- [EISDIR]: new is a directory, but old is not a directory.
-      when (nft == Directory && oft /= Directory) $
-        HE_RenameFailed `annErrno` eISDIR
-      -- [ENOTDIR]: old is a directory, but new is not a directory.
-      when (oft == Directory && nft /= Directory) $
-        HE_RenameFailed `annErrno` eNOTDIR
--}
-
---     [ENOENT]           A component of the old path does not exist, or a path prefix of new does not exist.
-
-{-
-  (oir, oft)              <- absPathIR' oldFP AnyFileType
-  newParentIR             <- absPathIR' (takeDirectory newFP) Directory
-  (newExists, (nir, nft)) <-
-    (,) True `fmap` absPathIR newFP AnyFileType `catchError` \e ->
-      case e of
-        HE_PathComponentNotFound{} -> return (False, error "nir/nft invalid")
-        _ -> throwError e
-
-  when newExists $ handleFileTypeMismatch nft oft
-  -- [EINVAL]: Old is a parent directory of new
-  when (oft == Directory && oldFP `isParentOf` newFP) $
-    HE_RenameFailed `annErrno` eINVAL           
-
-  return ()
-  where
-    absPathIR' fp ft =
-      absPathIR fp ft `catchError` \e ->
-        case e of 
-          HE_PathComponentNotFound{} -> e `annErrno` eNOENT
-          _                          -> throwError e
-    --                                        
-    handleFileTypeMismatch nft oft = do
-      -- [EISDIR]: new is a directory, but old is not a directory.
-      when (nft == Directory && oft /= Directory) $
-        HE_RenameFailed `annErrno` eISDIR
-      -- [ENOTDIR]: old is a directory, but new is not a directory.
-      when (oft == Directory && nft /= Directory) $
-        HE_RenameFailed `annErrno` eNOTDIR
-    --
-    p1 `isParentOf` p2   = length l1 < length l2 && and (zipWith (==) l1 l2)
-                           where l1 = splitDirectories p1
-                                 l2 = splitDirectories p2
--}
-
 
 --------------------------------------------------------------------------------
 -- Access control
@@ -593,7 +605,7 @@ mklink path1 {-src-} path2 {-dst-} = do
           -- TODO: Obtain the proper permissions for the link
       usr <- getUser
       grp <- getGroup
-      withLock (dhLock p2dh) $ do 
+      withDHLock p2dh $ do 
         addDirEnt_lckd p2dh fname inr usr grp linkPerms RegularFile
           `catchError` \e -> do
             case e of
@@ -703,11 +715,20 @@ absPathIR fp ftype = do
    else
      throwError HE_AbsolutePathExpected
 
+-- | Bracketed directory open
 withDir :: HalfsCapable b t r l m =>
            FilePath
         -> (DirHandle r l -> HalfsM b r l m a)
         -> HalfsM b r l m a
-withDir fp = hbracket (openDir fp) closeDir
+withDir = withDir' openDir
+
+-- | Bracketed directory open, parameterized by a function for opening a dir
+withDir' :: HalfsCapable b t r l m =>
+            (FilePath -> HalfsM b r l m (DirHandle r l))
+         -> FilePath
+         -> (DirHandle r l -> HalfsM b r l m a)
+         -> HalfsM b r l m a
+withDir' openF = (`hbracket` closeDir) . openF
 
 withFile :: (HalfsCapable b t r l m) =>
             FilePath

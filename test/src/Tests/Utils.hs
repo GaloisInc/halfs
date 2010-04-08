@@ -24,7 +24,7 @@ import Halfs.Monad
 import Halfs.MonadUtils
 import Halfs.Protection
 import Halfs.SuperBlock
-import Halfs.Utils   (divCeil)
+import Halfs.Utils   (divCeil, withDHLock)
 
 import System.Device.BlockDevice
 import System.Device.File
@@ -270,7 +270,7 @@ dumpfs = do
   where
     dumpfs' i ipfx inr = do 
       contents <- withDirectory inr $ \dh -> do
-                    withLock (dhLock dh) $ readRef $ dhContents dh
+                    withDHLock dh $ readRef (dhContents dh)
       foldM (\dumpAcc (path, dirEnt) -> do
                sub <- if deType dirEnt == Directory && path /= "." && path /= ".."
                         then dumpfs' (i+2) "" (deInode dirEnt)

@@ -48,7 +48,7 @@ createFile parentDH fname usr grp mode = do
   case mfileIR of
     Nothing      -> throwError HE_AllocFailed
     Just fileIR -> do
-      withLock (dhLock parentDH) $ do
+      withDHLock parentDH $ do
         pIR <- getDHINR_lckd parentDH
         n   <- lift $ buildEmptyInodeEnc
                         dev
