@@ -15,7 +15,9 @@ module Halfs.Directory
   , openDirectory
   , removeDirectory
   , rmDirEnt
+  , rmDirEnt_lckd
   , syncDirectory
+  , syncDirectory_lckd
   , withDirectory
   -- * for testing
   , DirectoryEntry(..)
@@ -132,15 +134,19 @@ removeDirectory dname inr = do
   -- end dirhandle critical section   
 
 -- | Syncs directory contents to disk
-
--- NB: We need to decide where all open & dirty DirHandles are sync'd.  Probably
--- in fs unmount/teardown via CoreAPI.
 syncDirectory :: HalfsCapable b t r l m =>
                  DirHandle r l
               -> HalfsM b r l m ()
-syncDirectory dh = do 
-  withLock (dhLock dh) $ do 
+syncDirectory dh = withLock (dhLock dh) $ syncDirectory_lckd dh
+
+syncDirectory_lckd :: HalfsCapable b t r l m =>
+                      DirHandle r l
+                   -> HalfsM b r l m ()
+syncDirectory_lckd dh = do
+  -- Precond: (dhLock dh) is currently held (can we assert this? TODO)
+
   state <- readRef $ dhState dh
+
   -- TODO: Currently, we overwrite the entire DirectoryEntry list, truncating
   -- the directory's inode data stream as needed.  This is _braindead_, however.
   -- For OnlyAdded, we can just append to the stream; for OnlyDeleted, we can

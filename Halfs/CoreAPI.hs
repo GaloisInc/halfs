@@ -27,6 +27,8 @@ import Halfs.Types
 
 import System.Device.BlockDevice
 
+import Debug.Trace
+
 type HalfsM b r l m a = HalfsT HalfsError (Maybe (HalfsState b r l m)) m a
 
 data SyncType = Data | Everything
@@ -421,69 +423,61 @@ mklink path1 {-src-} path2 {-dst-} = do
                     an entire path name exceeded {PATH_MAX} characters.
   -}
 
-  -- Try to open path1 (the source file)
-  p1h <- openFile path1 fofReadOnly
-           `catchError` \e ->
-             case e of
-               -- [EPERM]: The file named by path1 is a directory
-               HE_UnexpectedFileType Directory _ -> e `annErrno` ePERM
-               -- [ENOTDIR]: A component of path1's pfx is not a directory
-               HE_UnexpectedFileType _ _         -> e `annErrno` eNOTDIR
-               -- [ENOENT] A component of path1's pfx does not exist
-               HE_PathComponentNotFound _        -> e `annErrno` eNOENT
-               -- [ENOENT] The file named by path1 does not exist
-               HE_FileNotFound                   -> e `annErrno` eNOENT
-               _                                 -> throwError e
-
-  -- Try to open path2's path prefix
-  let (p2pfx, p2fname) = splitFileName path2
-  p2pfxdh <- openDir p2pfx
-               `catchError` \e ->
-                 case e of
-                   -- [ENOTDIR]: A component of path2's pfx is not a directory
-                   HE_UnexpectedFileType{}    -> e `annErrno` eNOTDIR
-                   -- [ENOENT] A component of path2's pfx does not exist
-                   HE_PathComponentNotFound{} -> e `annErrno` eNOENT
-                   _                       -> throwError e
-  
-  usr <- getUser
-  grp <- getGroup
-
-  withLock (fhLock p1h) $ do 
-    srcINR <- getFHINR_lckd p1h
-    let cleanup = decLinkCount srcINR
-  
-    incLinkCount srcINR
-  
-    -- TODO: Obtain the proper permissions for the link
-    let defaultLinkPerms = FileMode [Read,Write] [Read] [Read]
-                 
-    addDirEnt p2pfxdh p2fname srcINR usr grp defaultLinkPerms RegularFile
-      `catchError` \e -> do
-        cleanup
-        case e of
-          -- [EEXIST]: The link named by path2 already exists.
-          HE_ObjectExists{} -> e `annErrno` eEXIST
-          _                 -> throwError e
-  
-    syncDirectory p2pfxdh
-      `catchError` \e -> do
-        cleanup
-        case e of
-          -- TODO: The syncDirectory failed, so we'll need to remove the
-          -- newly-inserted DirEnt from the map.  This kind of
-          -- rollback-on-exception will be common, and must maintain thread safety
-          -- properties, so we probably want to think of a clean way to handle it.
-          -- At minimum, I think, we need to acquire the lock on p2pfxdh and hold
-          -- it over the syncDirectory duration.
-        
-          -- [ENOSPC]: The directory in which the entry for the new link is being
-          -- placed cannot be extended because there is no space left on the file
-          -- system containing the directory.
-          HE_AllocFailed{} -> e `annErrno` eNOSPC
-          _                -> throwError e
-          
-  closeDir p2pfxdh
+  hbracket openSrcFile closeFile $ \p1fh -> do     
+    trace ("have p2dh") $ do
+    hbracket openDstDir closeDir $ \p2dh -> do
+      trace ("have p1fh") $ do
+      withLock (fhLock p1fh) $ do 
+        trace ("acq'd p1fh") $ do
+        srcINR <- getFHINR_lckd p1fh
+        trace ("got srcINR = " ++ show srcINR) $ do
+        addLink p2dh srcINR
+        trace ("on the way out") $ do
+        incLinkCount srcINR
+  where
+    addLink p2dh inr = do
+      trace "addLink entry" $ do
+      let fname     = takeFileName path2               
+          linkPerms = FileMode [Read,Write] [Read] [Read]
+          -- TODO: Obtain the proper permissions for the link
+      usr <- getUser
+      grp <- getGroup
+      withLock (dhLock p2dh) $ do 
+        addDirEnt_lckd p2dh fname inr usr grp linkPerms RegularFile
+          `catchError` \e -> do
+            case e of
+              -- [EEXIST]: The link named by path2 already exists.
+              HE_ObjectExists{} -> e `annErrno` eEXIST
+              _                 -> throwError e
+        -- Manual directory sync here in order to catch and wrap errors
+        syncDirectory_lckd p2dh `catchError` \e -> do
+          rmDirEnt_lckd p2dh fname
+          case e of
+            -- [ENOSPC]: The directory in which the entry for the new link is
+            -- being placed cannot be extended because there is no space left
+            -- on the file system containing the directory.
+            HE_AllocFailed{} -> e `annErrno` eNOSPC
+            _                -> throwError e
+    -- 
+    openDstDir = openDir (takeDirectory path2) `catchError` \e ->
+      case e of
+        -- [ENOTDIR]: A component of path2's pfx is not a directory
+        HE_UnexpectedFileType{}    -> e `annErrno` eNOTDIR
+        -- [ENOENT] A component of path2's pfx does not exist
+        HE_PathComponentNotFound{} -> e `annErrno` eNOENT
+        _                       -> throwError e
+    -- 
+    openSrcFile = openFile path1 fofReadOnly `catchError` \e ->
+      case e of
+        -- [EPERM]: The file named by path1 is a directory
+        HE_UnexpectedFileType Directory _ -> e `annErrno` ePERM
+        -- [ENOTDIR]: A component of path1's pfx is not a directory
+        HE_UnexpectedFileType _ _         -> e `annErrno` eNOTDIR
+        -- [ENOENT] A component of path1's pfx does not exist
+        HE_PathComponentNotFound _        -> e `annErrno` eNOENT
+        -- [ENOENT] The file named by path1 does not exist
+        HE_FileNotFound                   -> e `annErrno` eNOENT
+        _                                 -> throwError e
 
 rmlink :: (HalfsCapable b t r l m) =>
           FilePath -> HalfsM b r l m ()

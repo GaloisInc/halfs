@@ -80,7 +80,8 @@ qcProps quick =
     exec 10 "rmdir mutex"            propM_rmdirMutexOK
   ,
 -}
-    exec 1  "Simple rmlink"          propM_simpleRmlinkOK
+--   ,
+     exec 1  "Simple rmlink"         propM_simpleRmlinkOK
   ]
   where
     exec = mkMemDevExec quick "CoreAPI"
@@ -648,7 +649,7 @@ propM_simpleRmlinkOK _g dev = do
   trace ("freeMid3 = " ++ show freeMid3) $ do
   trace ("freeAfter = " ++ show freeAfter) $ do
 
---  assert (freeBefore >= freeAfter && freeBefore - freeAfter == 1)
+  assert (freeBefore >= freeAfter && freeBefore - freeAfter == 1)
   -- ^ 1 extra block still claimed for root directory contents
 
   quickRemountCheck fs         
