@@ -32,6 +32,7 @@ data HalfsError =
   | HE_ObjectExists FilePath
   | HE_ObjectDNE FilePath
   | HE_PathComponentNotFound String
+  | HE_RenameFailed
   | HE_TestFailed String
   | HE_UnexpectedFileType FileType FilePath
   | HE_UnmountFailed 

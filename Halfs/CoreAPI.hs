@@ -24,6 +24,7 @@ import Halfs.MonadUtils
 import Halfs.Protection
 import Halfs.SuperBlock
 import Halfs.Types
+import Halfs.Utils
 
 import System.Device.BlockDevice
 
@@ -386,31 +387,121 @@ rename oldFP newFP = do
   -}
 
 {- TO support:
-   
-     [EINVAL] Old is a parent directory of new, or an attempt is made to rename
-              `.' or `..'.
-
-     [EISDIR] new is a directory, but old is not a directory.
-
-     [ENOENT] A component of the old path does not exist, or a path prefix of
-              new does not exist.
-
      [ENOSPC] The directory in which the entry for the new name is being placed
               cannot be extended because there is no space left on the file
               system containing the directory.
-
-     [ENOTDIR] A component of either path prefix is not a directory.
-
-     [ENOTDIR] old is a directory, but new is not a directory.
-
-     [ENOTEMPTY] New is a directory and is not empty.
 -}
---  (oldIR, oldFT) <- absPathIR oldFP AnyFileType
---  (newIR, newFT) <- absPathIR newFP AnyFileType
 
-  return undefined    
+  trace ("oldFP = " ++ oldFP ++ ", newFP = " ++ newFP) $ do
 
+  -- [EINVAL]: An attempt is made to rename `.' or `..'.
+  when (oldFP `equalFilePath` dotPath || oldFP `equalFilePath` dotdotPath) $
+    HE_RenameFailed `annErrno` eINVAL
 
+  withDirResources $ \oldParentDH newParentDH -> do
+    -- Begin critical section over old and new parent directory handles
+
+    oldDE <- lookupRM oldName (dhContents oldParentDH)
+      >>= maybe (HE_PathComponentNotFound oldName `annErrno` eNOENT)
+                -- [ENOENT]: A component of the old path does not exist
+                (return)
+    mnewDE <- lookupRM newName (dhContents newParentDH)
+    handleErrors oldDE mnewDE
+
+    -- NB: This removeDirectory invocation on the new directory will raise an
+    -- eNOTEMPTY-wrapped exception that covers the behavior requirement for
+    -- [ENOTEMPTY]: New is a directory and is not empty.
+
+    return ()    
+    -- End critical section over old and new parent directory handles
+    
+  where
+    [oldName, newName] = map takeFileName [oldFP, newFP]
+    [oldPP, newPP]     = map takeDirectory [oldFP, newFP]
+    --
+    withDirResources f =
+      hbracket (openDir' oldPP) closeDir $ \opdh ->
+        hbracket (openDir' newPP) closeDir $ \npdh ->
+          (if oldPP `equalFilePath` newPP
+            then withLock (dhLock opdh) 
+            else withLock (dhLock opdh) . withLock (dhLock npdh)
+          ) $ f opdh npdh
+    -- 
+    openDir' dp = openDir dp `catchError` \e ->
+      case e of
+        -- [ENOTDIR]: A component of path prefix is not a directory
+        HE_UnexpectedFileType{}    -> e `annErrno` eNOTDIR
+        -- [ENOENT] A component of path does not exist
+        HE_PathComponentNotFound{} -> e `annErrno` eNOENT
+        _                          -> throwError e
+    --
+    handleErrors oldDE mnewDE = do
+      -- [EINVAL]: Old is a parent directory of new
+      when (deType oldDE == Directory && oldFP `isParentOf` newFP) $
+        HE_RenameFailed `annErrno` eINVAL
+      case mnewDE of
+        Nothing    -> return ()
+        Just newDE -> do
+          -- [EISDIR]: new is a directory, but old is not a directory.
+          when (nft == Directory && oft /= Directory) $
+            HE_RenameFailed `annErrno` eISDIR
+          -- [ENOTDIR]: old is a directory, but new is not a directory.
+          when (oft == Directory && nft /= Directory) $
+            HE_RenameFailed `annErrno` eNOTDIR
+          where
+            nft = deType newDE
+            oft = deType oldDE
+    -- 
+    p1 `isParentOf` p2 = length l1 < length l2 && and (zipWith (==) l1 l2)
+                         where l1 = splitDirectories p1
+                               l2 = splitDirectories p2
+      
+{-
+    handleFileTypeMismatch nft oft = do
+      -- [EISDIR]: new is a directory, but old is not a directory.
+      when (nft == Directory && oft /= Directory) $
+        HE_RenameFailed `annErrno` eISDIR
+      -- [ENOTDIR]: old is a directory, but new is not a directory.
+      when (oft == Directory && nft /= Directory) $
+        HE_RenameFailed `annErrno` eNOTDIR
+-}
+
+--     [ENOENT]           A component of the old path does not exist, or a path prefix of new does not exist.
+
+{-
+  (oir, oft)              <- absPathIR' oldFP AnyFileType
+  newParentIR             <- absPathIR' (takeDirectory newFP) Directory
+  (newExists, (nir, nft)) <-
+    (,) True `fmap` absPathIR newFP AnyFileType `catchError` \e ->
+      case e of
+        HE_PathComponentNotFound{} -> return (False, error "nir/nft invalid")
+        _ -> throwError e
+
+  when newExists $ handleFileTypeMismatch nft oft
+  -- [EINVAL]: Old is a parent directory of new
+  when (oft == Directory && oldFP `isParentOf` newFP) $
+    HE_RenameFailed `annErrno` eINVAL           
+
+  return ()
+  where
+    absPathIR' fp ft =
+      absPathIR fp ft `catchError` \e ->
+        case e of 
+          HE_PathComponentNotFound{} -> e `annErrno` eNOENT
+          _                          -> throwError e
+    --                                        
+    handleFileTypeMismatch nft oft = do
+      -- [EISDIR]: new is a directory, but old is not a directory.
+      when (nft == Directory && oft /= Directory) $
+        HE_RenameFailed `annErrno` eISDIR
+      -- [ENOTDIR]: old is a directory, but new is not a directory.
+      when (oft == Directory && nft /= Directory) $
+        HE_RenameFailed `annErrno` eNOTDIR
+    --
+    p1 `isParentOf` p2   = length l1 < length l2 && and (zipWith (==) l1 l2)
+                           where l1 = splitDirectories p1
+                                 l2 = splitDirectories p2
+-}
 
 
 --------------------------------------------------------------------------------
@@ -606,7 +697,7 @@ absPathIR fp ftype = do
      rdirIR <- rootDir `fmap` readRef sbRef
      mir    <- find rdirIR ftype (drop 1 $ splitDirectories fp)
      case mir of
-       DF_NotFound         -> throwErrno eNOENT (HE_PathComponentNotFound fp)
+       DF_NotFound         -> throwError $ HE_PathComponentNotFound fp
        DF_WrongFileType ft -> throwError $ HE_UnexpectedFileType ft fp
        DF_Found (ir, ft)   -> return (ir, ft)
    else

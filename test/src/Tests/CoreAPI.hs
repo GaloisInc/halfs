@@ -52,33 +52,35 @@ type HalfsProp =
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [
-    exec 10 "Init and mount"         propM_initAndMountOK
-  ,
-    exec 10 "Mount/unmount"          propM_mountUnmountOK
-  ,
-    exec 10 "Unmount mutex"          propM_unmountMutexOK
-  ,
-    exec 10 "Directory construction" propM_dirConstructionOK
-  ,
-    exec 10 "Simple file creation"   propM_fileBasicsOK
-  ,
-    exec 10 "Simple file ops"        propM_simpleFileOpsOK
-  ,
-    exec 10 "chmod/chown ops"        propM_chmodchownOK
-  ,
-    exec 5  "File WR 1"              (propM_fileWROK "myfile")
-  ,
-    exec 5  "File WR 2"              (propM_fileWROK "foo/bar/baz")
-  ,
-    exec 10 "Directory mutex"        propM_dirMutexOK
-  ,
-    exec 10 "Hardlink creation"      propM_hardlinksOK
-  ,
-    exec 10 "Simple rmdir"           propM_simpleRmdirOK
-  ,
-    exec 10 "rmdir mutex"            propM_rmdirMutexOK
-  ,
-    exec 10  "Simple rmlink"         propM_simpleRmlinkOK
+--     exec 10 "Init and mount"         propM_initAndMountOK
+--   ,
+--     exec 10 "Mount/unmount"          propM_mountUnmountOK
+--   ,
+--     exec 10 "Unmount mutex"          propM_unmountMutexOK
+--   ,
+--     exec 10 "Directory construction" propM_dirConstructionOK
+--   ,
+--     exec 10 "Simple file creation"   propM_fileBasicsOK
+--   ,
+--     exec 10 "Simple file ops"        propM_simpleFileOpsOK
+--   ,
+--     exec 10 "chmod/chown ops"        propM_chmodchownOK
+--   ,
+--     exec 5  "File WR 1"              (propM_fileWROK "myfile")
+--   ,
+--     exec 5  "File WR 2"              (propM_fileWROK "foo/bar/baz")
+--   ,
+--     exec 10 "Directory mutex"        propM_dirMutexOK
+--   ,
+--     exec 10 "Hardlink creation"      propM_hardlinksOK
+--   ,
+--     exec 10 "Simple rmdir"           propM_simpleRmdirOK
+--   ,
+--     exec 10 "rmdir mutex"            propM_rmdirMutexOK
+--   ,
+--     exec 10 "Simple rmlink"          propM_simpleRmlinkOK
+--   ,
+    exec 1 "Simple rename"           propM_simpleRenameOK
   ]
   where
     exec = mkMemDevExec quick "CoreAPI"
@@ -499,9 +501,6 @@ propM_hardlinksOK _g dev = do
                      , d1 </> "link_3_to_source"
                      ]
     maxBytes       = fromIntegral $ bdBlockSize dev * bdNumBlocks dev `div` 8
-    --
-    expectErrno exp (Left (HE_ErrnoAnnotated _ errno)) = assert (errno == exp)
-    expectErrno _ _                                    = assert False
 
 propM_simpleRmdirOK :: HalfsProp
 propM_simpleRmdirOK _g dev = do
@@ -645,9 +644,56 @@ propM_simpleRmlinkOK _g dev = do
 
   quickRemountCheck fs         
 
+propM_simpleRenameOK :: HalfsProp
+propM_simpleRenameOK _g dev = do
+  fs <- mkNewFS dev >> mountOK dev
+
+  let exec     = execH "propM_simpleRenameOK" fs
+      d1       = rootPath </> "d1" 
+      d1sub    = d1 </> "d1sub"
+      d2       = rootPath </> "d2" 
+      f1       = rootPath </> "f1"
+      f2       = rootPath </> "f2"
+      exists p =
+        (elem (takeFileName p) . map fst)
+          `fmap` exec ("readDir " ++ p)
+                      (withDir (takeDirectory p) readDir)
+
+  -- Expected error: Path component not found
+  expectErrno eNOENT =<< runH fs (rename f1 f2)
+
+  exec "create /f1"      $ createFile f1 defaultFilePerms
+  exec "mkdir /d1"       $ mkdir d1 defaultDirPerms
+  exec "mkdir /d1/d1sub" $ mkdir d1sub defaultDirPerms
+
+  -- Expected error: Path component not found
+  expectErrno eNOENT  =<< runH fs (rename f1 (rootPath </> "blah" </> "blah"))
+  -- Expected error: new is a directory, but old is not a directory
+  expectErrno eISDIR  =<< runH fs (rename f1 d1)
+  -- Expected error: old is a directory, but new is not a directory
+  expectErrno eNOTDIR =<< runH fs (rename d1 f1)
+  -- Expected error: old is a parent directory of new
+  expectErrno eINVAL  =<< runH fs (rename d1 d1sub)
+  -- Expected error: attempt to rename '.' or '..'
+  expectErrno eINVAL  =<< runH fs (rename dotPath d2)
+  expectErrno eINVAL  =<< runH fs (rename dotdotPath d2)  
+
+  quickRemountCheck fs
+  return () 
+--  exec "rename /f1 /f2" $ rename
+
+  
+  
+
+
 
 --------------------------------------------------------------------------------
 -- Misc
+
+
+expectErrno :: Monad m => Errno -> Either HalfsError a -> PropertyM m ()
+expectErrno exp (Left (HE_ErrnoAnnotated _ errno)) = assert (errno == exp)
+expectErrno _ _                                    = assert False
 
 initDirEntNames :: [FilePath]
 initDirEntNames = [dotPath, dotdotPath]
@@ -663,6 +709,7 @@ quickRemountCheck :: HalfsCapable b t r l m =>
                   -> PropertyM m ()
 quickRemountCheck fs = do
   dump0 <- exec "Get dump0" dumpfs
+  trace ("dump0: " ++ dump0) $ do 
   unmountOK fs
   fs'   <- mountOK (hsBlockDev fs)
   dump1 <- exec "Get dump1" dumpfs

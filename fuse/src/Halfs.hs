@@ -231,9 +231,9 @@ halfsRename :: HalfsCapable b t r l m =>
                HalfsSpecific b r l m
             -> FilePath -> FilePath
             -> m Errno
-halfsRename HS{ hspLogger = _log, hspState = _fs } _old _new = do
-  error $ "halfsRename: Not Yet Implemented." -- TODO
-  return eNOSYS
+halfsRename hsp@HS{ hspLogger = log } old new = do
+  log $ "halfsRename: old = " ++ show old ++ ", new = " ++ show new
+  execDefault hsp $ rename old new
          
 halfsCreateLink :: HalfsCapable b t r l m =>
                    HalfsSpecific b r l m
