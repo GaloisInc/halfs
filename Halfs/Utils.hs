@@ -28,7 +28,10 @@ lookupM = liftM . M.lookup
 lookupRM :: (Ord k, Reffable r m) => k -> r (M.Map k v) -> m (Maybe v)
 lookupRM k = lookupM k . readRef
 
+lookupDE :: Reffable r m =>
+            FilePath -> DirHandle r l -> m (Maybe DirectoryEntry)
+lookupDE nm = lookupRM nm . dhContents 
+
 withDHLock :: (HalfsCapable b t r l m) =>
               DirHandle r1 l -> HalfsT err env m a -> HalfsT err env m a
 withDHLock = withLock . dhLock
-             

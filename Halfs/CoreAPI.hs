@@ -401,8 +401,8 @@ rename oldFP newFP = do
   withDirResources $ \oldParentDH newParentDH -> do
     -- Begin critical section over old and new parent directory handles
 
-    mnewDE <- lookupRM newName (dhContents newParentDH)
-    oldDE  <- lookupRM oldName (dhContents oldParentDH)
+    mnewDE <- lookupDE newName newParentDH
+    oldDE  <- lookupDE oldName oldParentDH
                 >>= (`maybe` return)
                       (HE_PathComponentNotFound oldName `annErrno` eNOENT)
                       -- [ENOENT]: A component of the old path DNE

@@ -221,7 +221,7 @@ addDirEnt_lckd :: HalfsCapable b t r l m =>
 addDirEnt_lckd dh name inr u g mode ftype = do
   -- Precond: (dhLock dh) is currently held (can we assert this? TODO)
   -- begin sanity check
-  mfound <- lookupRM name (dhContents dh)
+  mfound <- lookupDE name dh
   maybe (return ()) (const $ throwError $ HE_ObjectExists name) mfound
   -- end sanity check
   modifyRef (dhContents dh) (M.insert name $ DirEnt name inr u g mode ftype)
@@ -243,7 +243,7 @@ rmDirEnt_lckd :: HalfsCapable b t r l m =>
 rmDirEnt_lckd dh name = do
   -- Precond: (dhLock dh) is currently held (can we assert this? TODO)
   -- begin sanity check
-  mfound <- lookupRM name (dhContents dh)
+  mfound <- lookupDE name dh
   maybe (throwError $ HE_ObjectDNE name) (const $ return ()) mfound
   -- end sanity check
   modifyRef (dhContents dh) (M.delete name)
@@ -281,7 +281,7 @@ findDE :: HalfsCapable b t r l m =>
        -> FileType
        -> HalfsM b r l m (DirFindRslt DirectoryEntry)
 findDE dh fname ftype = do
-  mde <- withDHLock dh $ lookupRM fname (dhContents dh)
+  mde <- withDHLock dh $ lookupDE fname dh
   case mde of
     Nothing -> return DF_NotFound
     Just de -> return $ if deType de `isFileType` ftype
