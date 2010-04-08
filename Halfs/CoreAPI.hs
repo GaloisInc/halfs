@@ -235,15 +235,15 @@ createFile :: (HalfsCapable b t r l m ) =>
 createFile fp mode = do
   -- TODO: permissions
   withDir ppath $ \pdh -> do
-  findInDir pdh fname RegularFile >>= \rslt ->
-    case rslt of
-      DF_Found _          -> throwError $ HE_ObjectExists fp
-      DF_WrongFileType ft -> throwError $ HE_UnexpectedFileType ft fp
-      _                   -> return ()  
-  usr  <- getUser
-  grp  <- getGroup
-  _inr <- F.createFile pdh fname usr grp mode
-  return ()
+    findInDir pdh fname RegularFile >>= \rslt ->
+      case rslt of
+        DF_Found _          -> throwError $ HE_ObjectExists fp
+        DF_WrongFileType ft -> throwError $ HE_UnexpectedFileType ft fp
+        _                   -> return ()  
+    usr  <- getUser
+    grp  <- getGroup
+    _inr <- F.createFile pdh fname usr grp mode
+    return ()
   where
     (ppath, fname) = splitFileName fp
            
@@ -424,19 +424,13 @@ mklink path1 {-src-} path2 {-dst-} = do
   -}
 
   hbracket openSrcFile closeFile $ \p1fh -> do     
-    trace ("have p2dh") $ do
     hbracket openDstDir closeDir $ \p2dh -> do
-      trace ("have p1fh") $ do
       withLock (fhLock p1fh) $ do 
-        trace ("acq'd p1fh") $ do
         srcINR <- getFHINR_lckd p1fh
-        trace ("got srcINR = " ++ show srcINR) $ do
         addLink p2dh srcINR
-        trace ("on the way out") $ do
         incLinkCount srcINR
   where
     addLink p2dh inr = do
-      trace "addLink entry" $ do
       let fname     = takeFileName path2               
           linkPerms = FileMode [Read,Write] [Read] [Read]
           -- TODO: Obtain the proper permissions for the link
@@ -563,7 +557,7 @@ withFile :: (HalfsCapable b t r l m) =>
          -> (FileHandle r l -> HalfsM b r l m a)
          -> HalfsM b r l m a
 withFile fp oflags = 
-  hbracket (openFile fp oflags) (\fh -> {- TODO: sync? -} closeFile fh)
+  hbracket (openFile fp oflags) closeFile
 
 writeSB :: (HalfsCapable b t r l m) =>
            BlockDevice m -> SuperBlock -> m SuperBlock
