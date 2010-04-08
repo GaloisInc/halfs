@@ -73,7 +73,7 @@ newfs dev uid gid rdirPerms = do
   blockMap <- lift $ newBlockMap dev
   initFree <- readRef (bmNumFree blockMap)
   rdirAddr <- lift (alloc1 blockMap) >>=
-              maybe (fail "Unable to allocate block for rdir inode") return
+                maybe (fail "Unable to allocate block for rdir inode") return
 
   -- Build the root directory inode and persist it; note that we can't use
   -- Directory.makeDirectory here because this is a special case where we have
@@ -401,11 +401,11 @@ rename oldFP newFP = do
   withDirResources $ \oldParentDH newParentDH -> do
     -- Begin critical section over old and new parent directory handles
 
-    oldDE <- lookupRM oldName (dhContents oldParentDH)
-      >>= maybe (HE_PathComponentNotFound oldName `annErrno` eNOENT)
-                -- [ENOENT]: A component of the old path does not exist
-                (return)
     mnewDE <- lookupRM newName (dhContents newParentDH)
+    oldDE  <- lookupRM oldName (dhContents oldParentDH)
+                >>= (`maybe` return)
+                      (HE_PathComponentNotFound oldName `annErrno` eNOENT)
+                      -- [ENOENT]: A component of the old path DNE
     handleErrors oldDE mnewDE
 
     -- HERE: if new is a directory, we must open it and hold its dh
