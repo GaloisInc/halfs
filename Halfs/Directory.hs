@@ -259,8 +259,11 @@ find :: HalfsCapable b t r l m =>
      -> [FilePath]         -- ^ Path components
      -> HalfsM b r l m (DirFindRslt InodeRef)
 --
-find startINR _ [] = 
-  return $ DF_Found startINR
+find startINR ftype [] = do
+  ft <- atomicReadInode startINR inoFileType
+  if ft `isFileType` ftype
+   then return $ DF_Found (startINR, ft)
+   else return $ DF_WrongFileType ft
 --
 find startINR ftype (pathComp:rest) = do
   dh <- openDirectory startINR
@@ -268,7 +271,7 @@ find startINR ftype (pathComp:rest) = do
   case sr of
     DF_NotFound         -> return $ DF_NotFound
     DF_WrongFileType ft -> return $ DF_WrongFileType ft
-    DF_Found de         -> find (deInode de) ftype rest
+    DF_Found (de, _)    -> find (deInode de) ftype rest
 
 -- | Locate the given directory entry typed file by filename in the
 -- DirHandle's content map
@@ -281,8 +284,8 @@ findDE dh fname ftype = do
   mde <- withLock (dhLock dh) $ lookupRM fname (dhContents dh)
   case mde of
     Nothing -> return DF_NotFound
-    Just de -> return $ if de `isFileType` ftype
-                         then DF_Found de
+    Just de -> return $ if deType de `isFileType` ftype
+                         then DF_Found (de, deType de)
                          else DF_WrongFileType (deType de)
 
 -- Exportable version of findDE; doesn't expose DirectoryEntry to caller
@@ -327,9 +330,9 @@ withDirectory :: HalfsCapable b t r l m =>
               -> HalfsM b r l m a
 withDirectory ir = hbracket (openDirectory ir) closeDirectory
 
-isFileType :: DirectoryEntry -> FileType -> Bool
-isFileType _ AnyFileType              = True
-isFileType (DirEnt { deType = t }) ft = t == ft
+isFileType :: FileType -> FileType -> Bool
+isFileType _ AnyFileType = True
+isFileType t1 t2         = t1 == t2
 
 _showDH :: HalfsCapable b t r l m => DirHandle r l -> HalfsM b r l m String
 _showDH dh = do

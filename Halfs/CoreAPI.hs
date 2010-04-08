@@ -266,7 +266,7 @@ openFile fp oflags = do
            case rslt of
              DF_NotFound         -> throwError $ HE_FileNotFound
              DF_WrongFileType ft -> throwError $ HE_UnexpectedFileType ft fp
-             DF_Found fir        -> foundFile fir
+             DF_Found (fir, _ft) -> foundFile fir
   logMsg $ "CoreAPI.openFile: findInDir on parent complete"
   closeDir pdh
   logMsg $ "CoreAPI.openFile: closeDir complete"
@@ -338,7 +338,75 @@ setFileTimes fp accTm modTm = do
 
 rename :: (HalfsCapable b t r l m) =>
           FilePath -> FilePath -> HalfsM b r l m ()
-rename = undefined
+rename old new = do
+  -- TODO: perms checks, more errno wrapping
+  {- Currently status of unsupported POSIX error behaviors:
+
+     TODO
+     ---- 
+     [EACCES] A component of either path prefix denies search permission.
+
+     [EACCES] The requested operation requires writing in a directory (e.g.,
+              new, new/.., or old/..) whose modes disallow this.
+
+     [EIO] An I/O error occurs while making or updating a directory entry.
+
+     [ELOOP] Too many symbolic links are encountered in translating either
+             pathname.  This is taken to be indicative of a looping symbolic
+             link.
+
+     [EPERM] The directory containing old is marked sticky, and neither the
+             containing directory nor old are owned by the effective user ID.
+
+     [EPERM] The new file exists, the directory containing new is marked sticky,
+             and neither the containing directory nor new are owned by the
+             effective user ID.
+
+     DEFERRED
+     -------- 
+
+     [EXDEV] The link named by new and the file named by old are on different
+             logical devices (file systems).  Note that this error code will not
+             be returned if the implementation permits cross-device links.
+
+     [EROFS] The requested link requires writing in a directory on a read-only
+             file system.
+
+     NOT APPLICABLE (but may be reconsidered later)
+     ----------------------------------------------
+     [EFAULT] Path points outside the process's allocated address space.
+
+     [EDQUOT] The directory in which the entry for the new name is being placed
+              cannot be extended because the user's quota of disk blocks on the
+              file system containing the directory has been exhausted.
+
+     [ENAMETOOLONG] A component of a pathname exceeds {NAME_MAX} characters, or
+                    an entire path name exceeds {PATH_MAX} characters.
+  -}
+
+{- TO support:
+   
+     [EINVAL] Old is a parent directory of new, or an attempt is made to rename
+              `.' or `..'.
+
+     [EISDIR] new is a directory, but old is not a directory.
+
+     [ENOENT] A component of the old path does not exist, or a path prefix of
+              new does not exist.
+
+     [ENOSPC] The directory in which the entry for the new name is being placed
+              cannot be extended because there is no space left on the file
+              system containing the directory.
+
+     [ENOTDIR] A component of either path prefix is not a directory.
+
+     [ENOTDIR] old is a directory, but new is not a directory.
+
+     [ENOTEMPTY] New is a directory and is not empty.
+-}
+  return undefined    
+
+
 
 
 --------------------------------------------------------------------------------
@@ -374,7 +442,7 @@ access = undefined
 mklink :: (HalfsCapable b t r l m) =>
           FilePath -> FilePath -> HalfsM b r l m ()
 mklink path1 {-src-} path2 {-dst-} = do
-  {- Currently status of POSIX error behaviors:
+  {- Currently status of unsupported POSIX error behaviors:
 
      TODO
      ---- 
@@ -535,7 +603,7 @@ absPathIR fp ftype = do
      case mir of
        DF_NotFound         -> throwErrno eNOENT (HE_PathComponentNotFound fp)
        DF_WrongFileType ft -> throwError $ HE_UnexpectedFileType ft fp
-       DF_Found ir         -> return ir
+       DF_Found (ir, _ft)  -> return ir
    else
      throwError HE_AbsolutePathExpected
 

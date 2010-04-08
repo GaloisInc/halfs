@@ -74,7 +74,7 @@ dotdotPath = ".."
 
 -- | DF_WrongFileType implies the filesystem element with the search key
 -- was found but was not of the correct type.
-data DirFindRslt a = DF_NotFound | DF_WrongFileType FileType | DF_Found a
+data DirFindRslt a = DF_NotFound | DF_WrongFileType FileType | DF_Found (a, FileType)
 
 data DirectoryEntry = DirEnt
   { deName  :: String
@@ -211,4 +211,4 @@ instance Eq FileMode where
 instance Functor DirFindRslt where
   fmap _ DF_NotFound           = DF_NotFound
   fmap _ (DF_WrongFileType ft) = DF_WrongFileType ft
-  fmap f (DF_Found r)          = DF_Found (f r)
+  fmap f (DF_Found (r, a))     = DF_Found (f r, a)
