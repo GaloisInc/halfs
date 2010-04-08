@@ -181,7 +181,7 @@ mkdir :: (HalfsCapable b t r l m) =>
       -> FileMode
       -> HalfsM b r l m ()
 mkdir fp fm = do
-  parentIR <- absPathIR path Directory 
+  parentIR <- fst `fmap` absPathIR path Directory 
   usr <- getUser
   grp <- getGroup
   makeDirectory parentIR dirName usr grp fm
@@ -191,11 +191,12 @@ mkdir fp fm = do
 
 rmdir :: (HalfsCapable b t r l m) =>
          FilePath -> HalfsM b r l m ()
-rmdir fp = absPathIR fp Directory >>= removeDirectory (takeBaseName fp)
+rmdir fp = removeDirectory (takeBaseName fp)
+             =<< fst `fmap` absPathIR fp Directory
 
 openDir :: (HalfsCapable b t r l m) =>
            FilePath -> HalfsM b r l m (DirHandle r l)
-openDir fp = absPathIR fp Directory >>= openDirectory
+openDir fp = openDirectory =<< fst `fmap` absPathIR fp Directory
 
 closeDir :: (HalfsCapable b t r l m) =>
             DirHandle r l -> HalfsM b r l m ()
@@ -338,7 +339,7 @@ setFileTimes fp accTm modTm = do
 
 rename :: (HalfsCapable b t r l m) =>
           FilePath -> FilePath -> HalfsM b r l m ()
-rename old new = do
+rename oldFP newFP = do
   -- TODO: perms checks, more errno wrapping
   {- Currently status of unsupported POSIX error behaviors:
 
@@ -404,6 +405,9 @@ rename old new = do
 
      [ENOTEMPTY] New is a directory and is not empty.
 -}
+--  (oldIR, oldFT) <- absPathIR oldFP AnyFileType
+--  (newIR, newFT) <- absPathIR newFP AnyFileType
+
   return undefined    
 
 
@@ -537,7 +541,8 @@ mklink path1 {-src-} path2 {-dst-} = do
 
 rmlink :: (HalfsCapable b t r l m) =>
           FilePath -> HalfsM b r l m ()
-rmlink fp = absPathIR fp RegularFile >>= removeFile (takeFileName fp)
+rmlink fp = removeFile (takeFileName fp)
+              =<< fst `fmap` absPathIR fp RegularFile
 
 createSymLink :: (HalfsCapable b t r l m) =>
                  FilePath -> FilePath -> HalfsM b r l m ()
@@ -553,7 +558,7 @@ readSymLink = undefined
 
 fstat :: (HalfsCapable b t r l m) =>
          FilePath -> HalfsM b r l m (FileStat t)
-fstat fp = absPathIR fp AnyFileType >>= fileStat
+fstat fp = fileStat =<< fst `fmap` absPathIR fp AnyFileType
 
 fsstat :: (HalfsCapable b t r l m) =>
           HalfsM b r l m FileSystemStats
@@ -593,7 +598,7 @@ modifyInode fp f =
 absPathIR :: HalfsCapable b t r l m =>
              FilePath
           -> FileType
-          -> HalfsM b r l m InodeRef
+          -> HalfsM b r l m (InodeRef, FileType)
 absPathIR fp ftype = do
   if isAbsolute fp
    then do
@@ -603,7 +608,7 @@ absPathIR fp ftype = do
      case mir of
        DF_NotFound         -> throwErrno eNOENT (HE_PathComponentNotFound fp)
        DF_WrongFileType ft -> throwError $ HE_UnexpectedFileType ft fp
-       DF_Found (ir, _ft)  -> return ir
+       DF_Found (ir, ft)   -> return (ir, ft)
    else
      throwError HE_AbsolutePathExpected
 
