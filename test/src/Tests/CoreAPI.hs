@@ -79,7 +79,7 @@ qcProps quick =
 --     exec 10 "rmdir mutex"            propM_rmdirMutexOK
 --   ,
 --     exec 10 "Simple rmlink"          propM_simpleRmlinkOK
---   ,
+--  ,
     exec 1 "Simple rename"           propM_simpleRenameOK
   ]
   where
@@ -506,7 +506,6 @@ propM_simpleRmdirOK :: HalfsProp
 propM_simpleRmdirOK _g dev = do
   fs <- mkNewFS dev >> mountOK dev
   let exec     = execH "propM_simpleRmdirOK" fs
-      getFree  = sreadRef . bmNumFree . hsBlockMap
       d0       = rootPath </> "foo"
       d1       = d0       </> "bar"
       fp       = d0       </> "f1"
@@ -595,11 +594,10 @@ propM_rmdirMutexOK _g dev = do
           -- ThreadB readDir, should only fail if dir DNE or the DH is invalid
           e0 <- runHalfs fs $ withDir dp readDir
           merr <- case e0 of
-            Left e@(HE_ErrnoAnnotated HE_PathComponentNotFound{} errno) -> 
-              return $ if errno == eNOENT then Left "pcnf" else Right e
-            Left HE_InvalidDirHandle -> return (Left "idh")
-            Left e                   -> return (Right e)
-            _                        -> return (Left "ok")
+            Left HE_PathComponentNotFound{} -> return (Left "pcnf")
+            Left HE_InvalidDirHandle        -> return (Left "idh")
+            Left e                          -> return (Right e)
+            _                               -> return (Left "ok")
           writeChan ch merr
           threadB fs ch (n-1)
 
@@ -608,7 +606,6 @@ propM_simpleRmlinkOK _g dev = do
   fs <- mkNewFS dev >> mountOK dev
 
   let exec     = execH "propM_simpleRmlinkOK" fs
-      getFree  = sreadRef . bmNumFree . hsBlockMap
       f1       = rootPath </> "f1"
       f2       = rootPath </> "f2"
       exists p =
@@ -647,26 +644,25 @@ propM_simpleRmlinkOK _g dev = do
 propM_simpleRenameOK :: HalfsProp
 propM_simpleRenameOK _g dev = do
   fs <- mkNewFS dev >> mountOK dev
-
-  let exec     = execH "propM_simpleRenameOK" fs
-      d1       = rootPath </> "d1" 
-      d1sub    = d1 </> "d1sub"
-      d2       = rootPath </> "d2" 
-      f1       = rootPath </> "f1"
-      f2       = rootPath </> "f2"
-      exists p =
+  let exec      = execH "propM_simpleRenameOK" fs
+      dne p     = assert =<< not `fmap` exists' p
+      exists p  = assert =<< exists' p
+      exists' p =
         (elem (takeFileName p) . map fst)
           `fmap` exec ("readDir " ++ p)
                       (withDir (takeDirectory p) readDir)
-
+{-
   -- Expected error: Path component not found
   expectErrno eNOENT =<< runH fs (rename f1 f2)
-
+-}
+  trace ("f1 = " ++ show f1) $ do
+  trace ("f3 = " ++ show f3) $ do
   exec "create /f1"      $ createFile f1 defaultFilePerms
-  exec "mkdir /d1"       $ mkdir d1 defaultDirPerms
-  exec "mkdir /d1/d1sub" $ mkdir d1sub defaultDirPerms
-  assert =<< and `fmap` mapM exists [f1, d1, d1sub]
+  exec "create /f3"      $ createFile f3 defaultFilePerms
+  exec "mkdirs"          $ mapM_ (`mkdir` defaultDirPerms) [d1, d1sub, d3]
+  mapM exists [f1, f3, d1, d1sub, d3]
 
+{-
   -- Expected error: Path component not found
   expectErrno eNOENT  =<< runH fs (rename f1 (rootPath </> "blah" </> "blah"))
   -- Expected error: new is a directory, but old is not a directory
@@ -678,16 +674,74 @@ propM_simpleRenameOK _g dev = do
   -- Expected error: attempt to rename '.' or '..'
   expectErrno eINVAL  =<< runH fs (rename dotPath d2)
   expectErrno eINVAL  =<< runH fs (rename dotdotPath d2)  
+-}
 
-  exec "rename /f1 /f2" $ rename f1 f2
+  -- File to non-existent dest
+  zeroOrMoreBlocksAllocd fs $ exec "rename /f1 /f2" $ rename f1 f2
+  dne f1
+  mapM exists [f2, f3, d1, d1sub, d3]
 
+  -- File to existent dest
+  blocksUnallocd 1 fs $ exec "rename /f2 /f3" $ rename f2 f3
+  mapM dne [f1, f2]
+  mapM exists [f3, d1, d1sub, d3]
+  
+  -- Directory to non-existent dest
+  zeroOrMoreBlocksAllocd fs $ exec "rename /d1/d1sub /d2" $ rename d1sub d2
+  mapM dne [f1, f2, d1sub]
+  mapM exists [f3, d1, d2, d3]
+
+  -- Directory to existing empty dest dir
+  blocksUnallocd 1 fs $ exec "rename /d3 /d2" $ rename d3 d2
+  mapM dne [f1, f2, d1sub, d3]
+  mapM exists [f3, d1, d2]
+
+  -- File into dir
+  x <- getFree fs
+  zeroOrMoreBlocksAllocd fs $ exec "rename /f3 /d2/f3" $ rename f3 (d2 </> "f3")
+  y <- getFree fs
+  trace ("x = " ++ show x ++ ", show y = " ++ show y) $ do
+  mapM dne [f1, f2, d1sub, d3]
+  mapM exists [d1, d2, d2 </> "f3"]
+
+  -- Directory to existing non-empty dest dir
+  zeroOrMoreBlocksAllocd fs $ expectErrno eNOTEMPTY =<< runH fs (rename d1 d2)
   quickRemountCheck fs
-  return () 
+  return ()
+  where
+    -- 
+    d1sub                    = d1 </> "d1sub"
+    [d1, d2, d3, f1, f2, f3] =
+      map (rootPath </>) ["d1", "d2", "d3", "f1", "f2", "f3"]
+
 
 
 --------------------------------------------------------------------------------
 -- Misc
 
+-- Block utilization checking combinators
+rscUtil :: HalfsCapable b t r l m =>
+           (Word64 -> Word64 -> Bool) -- ^ predicate on after/before block cnts
+        -> HalfsState b r l m         -- ^ the filesystem state
+        -> PropertyM m a              -- ^ the action to check
+        -> PropertyM m ()
+rscUtil p fs act = do b <- getFree fs; act; a <- getFree fs; assert (p a b)
+
+blocksUnallocd :: HalfsCapable b t r l m =>
+                  Word64             -- ^ expected #blocks unallocated
+               -> HalfsState b r l m -- ^ the filesystem state
+               -> PropertyM m a      -- ^ the action to check
+               -> PropertyM m ()
+blocksUnallocd x = rscUtil (\a b -> a >= b && a - b == x)
+                   
+zeroOrMoreBlocksAllocd :: HalfsCapable b t r l m =>
+                          HalfsState b r l m -- ^ the filesystem state
+                       -> PropertyM m a      -- ^ the action to check
+                       -> PropertyM m ()
+zeroOrMoreBlocksAllocd = rscUtil (<=)
+
+getFree :: (HalfsCapable b t r l m) => HalfsState b r l m -> PropertyM m Word64
+getFree = sreadRef . bmNumFree . hsBlockMap
 
 expectErrno :: Monad m => Errno -> Either HalfsError a -> PropertyM m ()
 expectErrno exp (Left (HE_ErrnoAnnotated _ errno)) = assert (errno == exp)

@@ -65,16 +65,21 @@ createFile parentDH fname usr grp mode = do
         return $ fileIR
 
 removeFile :: HalfsCapable b t r l m =>
-              String   -- ^ name of file to remove from parent directory
-           -> InodeRef -- ^ inr of file to remove
+              Maybe String -- ^ name to remove from parent directory's content
+                           -- map (when Nothing, leaves the parent directory's
+                           -- content map alone)
+           -> InodeRef     -- ^ inr of file to remove
            -> HalfsM b r l m ()
-removeFile fname inr = do
-  -- Purge the filename from the parent directory
-  dhMap <- hasks hsDHMap
-  withLockedRscRef dhMap $ \dhMapRef -> do
-    pinr <- atomicReadInode inr inoParent
-    pdh  <- lookupRM pinr dhMapRef >>= maybe (newDirHandle pinr) return
-    rmDirEnt pdh fname
+removeFile mfname inr = do
+  case mfname of
+    Nothing    -> return ()
+    Just fname -> do 
+      -- Purge the filename from the parent directory
+      dhMap <- hasks hsDHMap
+      withLockedRscRef dhMap $ \dhMapRef -> do
+        pinr <- atomicReadInode inr inoParent
+        pdh  <- lookupRM pinr dhMapRef >>= maybe (newDirHandle pinr) return
+        rmDirEnt pdh fname
 
   -- Decrement link count & register deallocation callback
   hbracket (openFilePrim fofReadOnly inr) closeFilePrim $ \fh -> do

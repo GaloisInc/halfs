@@ -6,6 +6,7 @@ module Halfs.Directory
   , FileType(..)
   , addDirEnt
   , addDirEnt_lckd
+  , addDirEnt_lckd'
   , closeDirectory
   , find
   , findInDir
@@ -43,9 +44,11 @@ import Halfs.Inode ( Inode(..)
                    , atomicReadInode
                    , blockAddrToInodeRef
                    , buildEmptyInodeEnc
+                   , drefInode
                    , freeInode
                    , inodeRefToBlockAddr
                    , readStream
+                   , withLockedInode
                    , writeStream
                    )
 import Halfs.Protection
@@ -53,7 +56,7 @@ import Halfs.Types
 import Halfs.Utils
 import System.Device.BlockDevice
 
--- import Debug.Trace
+import Debug.Trace
 
 type HalfsM b r l m a = HalfsT HalfsError (Maybe (HalfsState b r l m)) m a
 
@@ -104,10 +107,13 @@ makeDirectory parentIR dname user group perms =
 
 -- | Given a parent directory's inode ref, remove the directory with the given name.
 removeDirectory :: HalfsCapable b t r l m =>
-                   String             -- ^ directory basename
-                -> InodeRef           -- ^ inr of directory to remove
+                   Maybe String -- ^ name to remove from parent
+                                -- directory's content map (when Nothing,
+                                -- leaves the the parent directory's
+                                -- content map alone)
+                -> InodeRef     -- ^ inr of directory to remove
                 -> HalfsM b r l m ()
-removeDirectory dname inr = do
+removeDirectory mdname inr = do
   -- TODO: Perms check (write perms on parent directory, etc.)
   dhMap <- hasks hsDHMap
 
@@ -123,10 +129,16 @@ removeDirectory dname inr = do
     contents <- readRef (dhContents dh)
     unless (M.null contents) $ HE_DirectoryNotEmpty `annErrno` eNOTEMPTY
   
-    -- Purge this dir's dirent from the parent directory
-    pinr <- atomicReadInode inr inoParent
-    pdh  <- lookupRM pinr dhMapRef >>= maybe (newDirHandle pinr) return
-    rmDirEnt pdh dname
+    -- When we've been given a directory name, purge this dir's dirent from the
+    -- parent directory.
+    case mdname of
+      Nothing    -> return ()
+      Just dname -> do
+        dev <- hasks hsBlockDev
+        withLockedInode inr $ do
+          pinr <- inoParent `fmap` drefInode dev inr
+          pdh  <- lookupRM pinr dhMapRef >>= maybe (newDirHandle pinr) return
+          rmDirEnt pdh dname
   
     -- Invalidate dh so that all subsequent DH-mediated access fails
     writeRef (dhInode dh) Nothing 
@@ -159,6 +171,10 @@ syncDirectory_lckd dh = do
   where
     overwriteAll = do
       inr <- getDHINR_lckd dh
+
+      tmp <- (encode . M.elems) `fmap` readRef (dhContents dh)
+      trace ("overwriteAll: writing length = " ++ show (BS.length tmp)) $ do
+
       writeStream inr 0 True
         =<< (encode . M.elems) `fmap` readRef (dhContents dh)
       lift . bdFlush =<< hasks hsBlockDev
@@ -218,14 +234,23 @@ addDirEnt_lckd :: HalfsCapable b t r l m =>
                -> FileMode
                -> FileType
                -> HalfsM b r l m ()
-addDirEnt_lckd dh name inr u g mode ftype = do
+addDirEnt_lckd dh name inr u g mode ftype =
+  addDirEnt_lckd' False dh $ DirEnt name inr u g mode ftype
+
+addDirEnt_lckd' :: HalfsCapable b t r l m => 
+                   Bool
+                -> DirHandle r l
+                -> DirectoryEntry
+                -> HalfsM b r l m ()
+addDirEnt_lckd' replaceOK dh de  = do
   -- Precond: (dhLock dh) is currently held (can we assert this? TODO)
-  -- begin sanity check
-  mfound <- lookupDE name dh
-  maybe (return ()) (const $ throwError $ HE_ObjectExists name) mfound
-  -- end sanity check
-  modifyRef (dhContents dh) (M.insert name $ DirEnt name inr u g mode ftype)
+  when (not replaceOK) $ do
+    mfound <- lookupDE name dh
+    maybe (return ()) (const $ throwError $ HE_ObjectExists name) mfound
+  modifyRef (dhContents dh) (M.insert name de)
   modifyRef (dhState dh) dirStTransAdd
+  where
+    name = deName de
 
 -- | Remove a directory entry for a file, directory, or symlink; expects
 -- that the item exists in the directory.  Thread-safe.
