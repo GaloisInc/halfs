@@ -535,6 +535,9 @@ execOrErrno HS{ hspLogger = log, hspState = fs } defaultEn f act = do
    Left (HE_ErrnoAnnotated e en) -> do
      log ("execOrErrno: e = " ++ show e)
      return $ Left en
+   Left e@HE_PathComponentNotFound{} -> do
+     log ("execOrErrno: e = " ++ show e)
+     return $ Left eNOENT
    Left e                        -> do
      log ("execOrErrno: e = " ++ show e)
      return $ Left defaultEn
