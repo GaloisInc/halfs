@@ -5,6 +5,7 @@ where
 
 import Data.Word
 import Control.Monad.ST
+import Foreign.C.Error 
 import System.Directory
 import System.IO
 import System.IO.Unsafe (unsafePerformIO)
@@ -15,6 +16,7 @@ import Test.QuickCheck.Monadic
 import qualified Data.ByteString as BS
 import qualified Data.Map as M
 
+import Halfs.BlockMap
 import Halfs.Classes
 import Halfs.CoreAPI (mount, newfs, unmount)
 import Halfs.Directory
@@ -191,6 +193,10 @@ expectErr expectedP rsn act fs =
 unexpectedErr :: (Monad m, Show a) => a -> PropertyM m ()
 unexpectedErr = fail . (++) "Expected failure, but not: " . show
 
+expectErrno :: Monad m => Errno -> Either HalfsError a -> PropertyM m ()
+expectErrno e (Left (HE_ErrnoAnnotated _ errno)) = assert (errno == e)
+expectErrno _ _                                  = assert False
+
 checkFileStat :: (HalfsCapable b t r l m, Integral a) =>
                  FileStat t 
               -> a           -- expected filesize
@@ -255,6 +261,38 @@ rootDirPerms     = FileMode [Read,Write,Execute] [] []
 defaultDirPerms  = FileMode [Read,Write,Execute] [Read, Execute] [Read, Execute]
 defaultFilePerms = FileMode [Read,Write] [Read] [Read]
 
+
+--------------------------------------------------------------------------------
+-- Block utilization checking combinators
+
+rscUtil :: HalfsCapable b t r l m =>
+           (Word64 -> Word64 -> Bool) -- ^ predicate on after/before block cnts
+        -> HalfsState b r l m         -- ^ the filesystem state
+        -> PropertyM m a              -- ^ the action to check
+        -> PropertyM m ()
+rscUtil p fs act = do b <- getFree fs; act; a <- getFree fs; assert (p a b)
+                   where getFree = sreadRef . bmNumFree . hsBlockMap
+
+blocksUnallocd :: HalfsCapable b t r l m =>
+                  Word64             -- ^ expected #blocks unallocated
+               -> HalfsState b r l m -- ^ the filesystem state
+               -> PropertyM m a      -- ^ the action to check
+               -> PropertyM m ()
+blocksUnallocd x = rscUtil (\a b -> a >= b && a - b == x)
+                   
+blocksAllocd :: HalfsCapable b t r l m =>
+                Word64             -- ^ expected #blocks unallocated
+             -> HalfsState b r l m -- ^ the filesystem state
+             -> PropertyM m a      -- ^ the action to check
+             -> PropertyM m ()
+blocksAllocd x = rscUtil (\a b -> b >= a && b - a == x)
+
+zeroOrMoreBlocksAllocd :: HalfsCapable b t r l m =>
+                          HalfsState b r l m -- ^ the filesystem state
+                       -> PropertyM m a      -- ^ the action to check
+                       -> PropertyM m ()
+zeroOrMoreBlocksAllocd = rscUtil (<=)
+
 
 --------------------------------------------------------------------------------
 -- Debugging helpers
@@ -272,7 +310,9 @@ dumpfs = do
       contents <- withDirectory inr $ \dh -> do
                     withDHLock dh $ readRef (dhContents dh)
       foldM (\dumpAcc (path, dirEnt) -> do
-               sub <- if deType dirEnt == Directory && path /= "." && path /= ".."
+               sub <- if deType dirEnt == Directory
+                         && path /= "."
+                         && path /= ".."
                         then dumpfs' (i+2) "" (deInode dirEnt)
                         else return ""
                return $ dumpAcc

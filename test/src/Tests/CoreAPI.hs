@@ -11,7 +11,7 @@ import Data.List
 import Data.Maybe
 import Data.Serialize
 import Foreign.C.Error 
-import Prelude hiding (read, exp)
+import Prelude hiding (read)
 import System.FilePath
 import Test.QuickCheck hiding (numTests)
 import Test.QuickCheck.Monadic 
@@ -36,7 +36,7 @@ import Tests.Instances (printableBytes, filename)
 import Tests.Types
 import Tests.Utils
 
-import Debug.Trace
+-- import Debug.Trace
 
 
 --------------------------------------------------------------------------------
@@ -52,35 +52,35 @@ type HalfsProp =
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [
---     exec 10 "Init and mount"         propM_initAndMountOK
---   ,
---     exec 10 "Mount/unmount"          propM_mountUnmountOK
---   ,
---     exec 10 "Unmount mutex"          propM_unmountMutexOK
---   ,
---     exec 10 "Directory construction" propM_dirConstructionOK
---   ,
---     exec 10 "Simple file creation"   propM_fileBasicsOK
---   ,
---     exec 10 "Simple file ops"        propM_simpleFileOpsOK
---   ,
---     exec 10 "chmod/chown ops"        propM_chmodchownOK
---   ,
---     exec 5  "File WR 1"              (propM_fileWROK "myfile")
---   ,
---     exec 5  "File WR 2"              (propM_fileWROK "foo/bar/baz")
---   ,
---     exec 10 "Directory mutex"        propM_dirMutexOK
---   ,
---     exec 10 "Hardlink creation"      propM_hardlinksOK
---   ,
---     exec 10 "Simple rmdir"           propM_simpleRmdirOK
---   ,
---     exec 10 "rmdir mutex"            propM_rmdirMutexOK
---   ,
---     exec 10 "Simple rmlink"          propM_simpleRmlinkOK
---  ,
-    exec 1 "Simple rename"           propM_simpleRenameOK
+    exec 10 "Init and mount"         propM_initAndMountOK
+  ,
+    exec 10 "Mount/unmount"          propM_mountUnmountOK
+  ,
+    exec 10 "Unmount mutex"          propM_unmountMutexOK
+  ,
+    exec 10 "Directory construction" propM_dirConstructionOK
+  ,
+    exec 10 "Simple file creation"   propM_fileBasicsOK
+  ,
+    exec 10 "Simple file ops"        propM_simpleFileOpsOK
+  ,
+    exec 10 "chmod/chown ops"        propM_chmodchownOK
+  ,
+    exec 5  "File WR 1"              (propM_fileWROK "myfile")
+  ,
+    exec 5  "File WR 2"              (propM_fileWROK "foo/bar/baz")
+  ,
+    exec 10 "Directory mutex"        propM_dirMutexOK
+  ,
+    exec 10 "Hardlink creation"      propM_hardlinksOK
+  ,
+    exec 10 "Simple rmdir"           propM_simpleRmdirOK
+  ,
+    exec 10 "rmdir mutex"            propM_rmdirMutexOK
+  ,
+    exec 10 "Simple rmlink"          propM_simpleRmlinkOK
+  ,
+    exec 10 "Simple rename"          propM_simpleRenameOK
   ]
   where
     exec = mkMemDevExec quick "CoreAPI"
@@ -524,20 +524,19 @@ propM_simpleRmdirOK _g dev = do
       assert (errno == eNOTEMPTY)
     _ -> assert False
 
-  -- simple mkdir/rmdir check
-  freeBefore <- getFree fs
-  exec "mkdir /foo/bar" $ mkdir d1 defaultDirPerms
-  dh <- exec "openDir /foo/bar" $ openDir d1
-  assert =<< exists d1
-  exec "rmdir /foo/bar" $ rmdir d1
-  assert =<< liftM2 (==) (getFree fs) (return freeBefore)
-  assert =<< not `fmap` exists d1
+  -- simple mkdir/rmdir check: net resource change should be 0 blocks
+  blocksAllocd 0 fs $ do 
+    exec "mkdir /foo/bar" $ mkdir d1 defaultDirPerms
+    dh <- exec "openDir /foo/bar" $ openDir d1
+    assert =<< exists d1
+    exec "rmdir /foo/bar" $ rmdir d1
+    assert =<< not `fmap` exists d1
+    -- Expected error: no access to an invalidated directory handle
+    e1 <- runH fs $ readDir dh
+    case e1 of
+      Left HE_InvalidDirHandle -> return ()
+      _                        -> assert False
 
-  -- Expected error: no access to an invalidated directory handle
-  e1 <- runH fs $ readDir dh
-  case e1 of
-    Left HE_InvalidDirHandle -> return ()
-    _                        -> assert False
   quickRemountCheck fs 
 
 -- Simple sanity check for the mutex behavior rmdir is supposed to be enforcing.
@@ -613,32 +612,32 @@ propM_simpleRmlinkOK _g dev = do
           `fmap` exec ("readDir " ++ p)
                       (withDir (takeDirectory p) readDir)
 
-  freeBefore <- getFree fs
+  -- There should only be one block allocated for the root directory
+  -- contents after the rmlink sequence below.
   exec "create /f1" $ createFile f1 defaultFilePerms
   assert =<< exists f1
-
-  -- Expected error: no access to an invalidated filehandle
-  deadFH <- exec "open /f1" $ openFile f1 fofReadOnly
-  exec "close /f1"          $ closeFile deadFH
-  e1 <- runH fs $ read deadFH 0 0
-  case e1 of
-    Left HE_InvalidFileHandle -> return ()
-    _                         -> assert False
-
-  exec "mklink /f1 /f2" $ mklink f1 f2
-  assert =<< and `fmap` mapM exists [f1, f2]
-
-  exec "rmlink /f1" $ rmlink f1
-  assert =<< not `fmap` exists f1
-  assert =<< exists f2
-
-  exec "rmlink /f2" $ rmlink f2
-  assert =<< not `fmap` exists f2
-
-  freeAfter <- getFree fs
-  assert (freeBefore >= freeAfter && freeBefore - freeAfter == 1)
-  -- ^ 1 extra block still claimed for root directory contents
-
+  
+  -- Removal of all hardlinks to f1's inode should result in deallocation of
+  -- f1's inode's single block
+  blocksUnallocd 1 fs $ do 
+    -- Expected error: no access to an invalidated filehandle
+    deadFH <- exec "open /f1" $ openFile f1 fofReadOnly
+    exec "close /f1"          $ closeFile deadFH
+    e1 <- runH fs $ read deadFH 0 0
+    case e1 of
+      Left HE_InvalidFileHandle -> return ()
+      _                         -> assert False
+    
+    exec "mklink /f1 /f2" $ mklink f1 f2
+    assert =<< and `fmap` mapM exists [f1, f2]
+    
+    exec "rmlink /f1" $ rmlink f1
+    assert =<< not `fmap` exists f1
+    assert =<< exists f2
+    
+    exec "rmlink /f2" $ rmlink f2
+    assert =<< not `fmap` exists f2
+  
   quickRemountCheck fs         
 
 propM_simpleRenameOK :: HalfsProp
@@ -651,30 +650,27 @@ propM_simpleRenameOK _g dev = do
         (elem (takeFileName p) . map fst)
           `fmap` exec ("readDir " ++ p)
                       (withDir (takeDirectory p) readDir)
-{-
+
   -- Expected error: Path component not found
-  expectErrno eNOENT =<< runH fs (rename f1 f2)
--}
-  trace ("f1 = " ++ show f1) $ do
-  trace ("f3 = " ++ show f3) $ do
-  exec "create /f1"      $ createFile f1 defaultFilePerms
-  exec "create /f3"      $ createFile f3 defaultFilePerms
-  exec "mkdirs"          $ mapM_ (`mkdir` defaultDirPerms) [d1, d1sub, d3]
+  zeroOrMoreBlocksAllocd fs $ expectErrno eNOENT =<< runH fs (rename f1 f2)
+
+  exec "create files" $ mapM_ (`createFile` defaultFilePerms) [f1, f3]
+  exec "make dirs"    $ mapM_ (`mkdir` defaultDirPerms)       [d1, d1sub, d3]
   mapM exists [f1, f3, d1, d1sub, d3]
 
-{-
-  -- Expected error: Path component not found
-  expectErrno eNOENT  =<< runH fs (rename f1 (rootPath </> "blah" </> "blah"))
-  -- Expected error: new is a directory, but old is not a directory
-  expectErrno eISDIR  =<< runH fs (rename f1 d1)
-  -- Expected error: old is a directory, but new is not a directory
-  expectErrno eNOTDIR =<< runH fs (rename d1 f1)
-  -- Expected error: old is a parent directory of new
-  expectErrno eINVAL  =<< runH fs (rename d1 d1sub)
-  -- Expected error: attempt to rename '.' or '..'
-  expectErrno eINVAL  =<< runH fs (rename dotPath d2)
-  expectErrno eINVAL  =<< runH fs (rename dotdotPath d2)  
--}
+  mapM_ (zeroOrMoreBlocksAllocd fs)
+    [ -- Expected error: Path component not found
+      expectErrno eNOENT  =<< runH fs (rename f1 (rootPath </> "z" </> "z"))
+      -- Expected error: new is a directory, but old is not a directory
+    , expectErrno eISDIR  =<< runH fs (rename f1 d1)
+      -- Expected error: old is a directory, but new is not a directory
+    , expectErrno eNOTDIR =<< runH fs (rename d1 f1)
+      -- Expected error: old is a parent directory of new
+    , expectErrno eINVAL  =<< runH fs (rename d1 d1sub)
+      -- Expected error: attempt to rename '.' or '..'
+    , expectErrno eINVAL  =<< runH fs (rename dotPath d2)
+    , expectErrno eINVAL  =<< runH fs (rename dotdotPath d2)
+    ]
 
   -- File to non-existent dest
   zeroOrMoreBlocksAllocd fs $ exec "rename /f1 /f2" $ rename f1 f2
@@ -697,10 +693,7 @@ propM_simpleRenameOK _g dev = do
   mapM exists [f3, d1, d2]
 
   -- File into dir
-  x <- getFree fs
   zeroOrMoreBlocksAllocd fs $ exec "rename /f3 /d2/f3" $ rename f3 (d2 </> "f3")
-  y <- getFree fs
-  trace ("x = " ++ show x ++ ", show y = " ++ show y) $ do
   mapM dne [f1, f2, d1sub, d3]
   mapM exists [d1, d2, d2 </> "f3"]
 
@@ -714,38 +707,9 @@ propM_simpleRenameOK _g dev = do
     [d1, d2, d3, f1, f2, f3] =
       map (rootPath </>) ["d1", "d2", "d3", "f1", "f2", "f3"]
 
-
 
 --------------------------------------------------------------------------------
 -- Misc
-
--- Block utilization checking combinators
-rscUtil :: HalfsCapable b t r l m =>
-           (Word64 -> Word64 -> Bool) -- ^ predicate on after/before block cnts
-        -> HalfsState b r l m         -- ^ the filesystem state
-        -> PropertyM m a              -- ^ the action to check
-        -> PropertyM m ()
-rscUtil p fs act = do b <- getFree fs; act; a <- getFree fs; assert (p a b)
-
-blocksUnallocd :: HalfsCapable b t r l m =>
-                  Word64             -- ^ expected #blocks unallocated
-               -> HalfsState b r l m -- ^ the filesystem state
-               -> PropertyM m a      -- ^ the action to check
-               -> PropertyM m ()
-blocksUnallocd x = rscUtil (\a b -> a >= b && a - b == x)
-                   
-zeroOrMoreBlocksAllocd :: HalfsCapable b t r l m =>
-                          HalfsState b r l m -- ^ the filesystem state
-                       -> PropertyM m a      -- ^ the action to check
-                       -> PropertyM m ()
-zeroOrMoreBlocksAllocd = rscUtil (<=)
-
-getFree :: (HalfsCapable b t r l m) => HalfsState b r l m -> PropertyM m Word64
-getFree = sreadRef . bmNumFree . hsBlockMap
-
-expectErrno :: Monad m => Errno -> Either HalfsError a -> PropertyM m ()
-expectErrno exp (Left (HE_ErrnoAnnotated _ errno)) = assert (errno == exp)
-expectErrno _ _                                    = assert False
 
 initDirEntNames :: [FilePath]
 initDirEntNames = [dotPath, dotdotPath]
@@ -761,7 +725,7 @@ quickRemountCheck :: HalfsCapable b t r l m =>
                   -> PropertyM m ()
 quickRemountCheck fs = do
   dump0 <- exec "Get dump0" dumpfs
-  trace ("dump0: " ++ dump0) $ do 
+--  trace ("dump0: " ++ dump0) $ do 
   unmountOK fs
   fs'   <- mountOK (hsBlockDev fs)
   dump1 <- exec "Get dump1" dumpfs

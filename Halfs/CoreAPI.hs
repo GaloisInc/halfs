@@ -344,6 +344,7 @@ rename :: (HalfsCapable b t r l m) =>
           FilePath -> FilePath -> HalfsM b r l m ()
 rename oldFP newFP = do
   -- TODO: perms checks, more errno wrapping
+
   {- Currently status of unsupported POSIX error behaviors:
 
      TODO
@@ -388,14 +389,6 @@ rename oldFP newFP = do
                     an entire path name exceeds {PATH_MAX} characters.
   -}
 
-{- TO support:
-     [ENOSPC] The directory in which the entry for the new name is being placed
-              cannot be extended because there is no space left on the file
-              system containing the directory.
--}
-
-  trace ("oldFP = " ++ oldFP ++ ", newFP = " ++ newFP) $ do
-
   -- [EINVAL]: An attempt is made to rename `.' or `..'.
   when (oldFP `equalFilePath` dotPath || oldFP `equalFilePath` dotdotPath) $
     HE_RenameFailed `annErrno` eINVAL
@@ -408,20 +401,12 @@ rename oldFP newFP = do
                 >>= (`maybe` return)
                       (HE_PathComponentNotFound oldName `annErrno` eNOENT)
                       -- [ENOENT]: A component of the old path DNE
+
     handleErrors oldDE mnewDE
 
     let updateContentMaps = do
---          trace ("updateContentMaps: oldDE = " ++ show oldDE) $ do
---          parentContents0 <- readRef (dhContents newParentDH)
           addDirEnt_lckd' True newParentDH oldDE{ deName = newName }
           rmDirEnt_lckd oldParentDH oldName
---          parentContents1 <- readRef (dhContents newParentDH)
-
---          trace ("new parent contents before = " ++ show parentContents0) $ do
---          trace ("new parent contents after = " ++ show parentContents1) $ do
-
-          b4  <- numFreeBlocks =<< hasks hsBlockMap
-          trace ("b4 = " ++ show b4) $ do
           syncDirectory_lckd newParentDH `catchError` \e -> do
             case e of
               -- [ENOSPC]: The directory in which the entry for the new name is
@@ -429,45 +414,47 @@ rename oldFP newFP = do
               -- on the file system containing the directory.
               HE_AllocFailed{} -> e `annErrno` eNOSPC
               _                -> throwError e
-          af <- numFreeBlocks =<< hasks hsBlockMap
-          trace ("af = " ++ show af) $ do
-          return ()  
 
-    trace ("rename: processed errors") $ do
+    -- We try to respect rename(2)'s behavior requirement that "an instance of
+    -- new will always exist, even if the system should crash in the middle of
+    -- the operation."  Although there's still a risk here if the crash occurs
+    -- in the middle of the syncDirectory_lckd operation below (we're not
+    -- journaled), the content maps for the parent directories are updated
+    -- completely before any existing files/directories are removed.
+    --
+    -- The thinking is as follows: if we crash immediately before the newName ->
+    -- oldDE sync'ing is initiated, 'new' is still valid and refers to the old
+    -- file/dir.  If we crash immediately after the newName -> oldDE sync'ing,
+    -- 'new' is valid and since the old file/dir won't be a referent of any
+    -- content maps, fsck should be able to identify its resources as available.
+    -- 
+    -- Finally, when 'new' is an existing empty directory that we'll replace
+    -- with 'old', it's important that we hold its dh lock for the duration of
+    -- the content map updates so that it doesn't become non-empty underneath
+    -- us.
 
-    -- <TODO: comments here about why we're doing things in this particular
-    -- order>
-    removeNew <- case mnewDE of
-      Nothing -> do
-        trace ("rename: no dirent for 'new'") $ do
-        -- No dirent for 'new', so we can just edit the parent's content map
-        updateContentMaps
-        return $ return ()
-      Just newDE ->
-        case deType newDE of
-          Directory -> do
-            trace ("rename: new is a directory") $ do
-            -- New is a directory: ensure that it's empty before updating the
-            -- parent's content map
-            hbracket (openDirectory $ deInode newDE) closeDirectory $ \newDH ->
-              withDHLock newDH $ do
-                isEmpty <- M.null `fmap` readRef (dhContents newDH)
-                unless isEmpty $ do
-                  trace ("rename: new is a non-empty directory, raising error") $ do
-                  HE_DirectoryNotEmpty `annErrno` eNOTEMPTY
-                updateContentMaps
-                return $ removeDirectory Nothing (deInode newDE)
-          RegularFile -> do
-            -- New is a file
-            trace ("rename: new is a file") $ do
-            updateContentMaps
-            return $ removeFile Nothing (deInode newDE)
-          _ -> throwError $ HE_InternalError "rename target type is unsupported"
+    case mnewDE of
+      Nothing    -> updateContentMaps
+      Just newDE -> case deType newDE of
+        RegularFile -> updateContentMaps >> removeFile Nothing (deInode newDE)
+        Directory   -> do
+          -- New is a directory: ensure that it's empty before updating the
+          -- parent's content map
+          hbracket (openDirectory $ deInode newDE) closeDirectory $ \ndh -> do
+            withDHLock ndh $ do
+              -- begin dirhandle critical section            
+              isEmpty <- M.null `fmap` readRef (dhContents ndh)
+              unless isEmpty $ HE_DirectoryNotEmpty `annErrno` eNOTEMPTY
+              updateContentMaps
+              -- end dirhandle critical section            
 
-    removeNew
-    trace ("leaving rename") $ return ()
+            -- NB: We remove the replaced new directory's inode outside of its
+            -- locked DH context or we'll deadlock when removeDirectory
+            -- acquires.  The unlocked window should be safe here, and it lets
+            -- us avoid writing "removeDirectory_dhlckd".
+            removeDirectory Nothing (deInode newDE)
+        _ -> throwError $ HE_InternalError "rename target type is unsupported"
     -- End critical section over old and new parent directory handles
-    
   where
     [oldName, newName] = map takeFileName [oldFP, newFP]
     [oldPP, newPP]     = map takeDirectory [oldFP, newFP]
@@ -477,7 +464,7 @@ rename oldFP newFP = do
       -- double-lock when they're the same.
       withDir' openDir' oldPP $ \opdh -> 
         withDir' openDir' newPP $ \npdh ->
-          (if oldPP `equalFilePath` newPP
+          (if oldPP == newPP
             then withDHLock opdh
             else withDHLock opdh . withDHLock npdh
           ) $ f opdh npdh
@@ -498,15 +485,12 @@ rename oldFP newFP = do
       case mnewDE of
         Nothing    -> return ()
         Just newDE -> do
-
           -- [EISDIR]: new is a directory, but old is not a directory.
           when (nft == Directory && oft /= Directory) $
             HE_RenameFailed `annErrno` eISDIR
-
           -- [ENOTDIR]: old is a directory, but new is not a directory.
           when (oft == Directory && nft /= Directory) $
             HE_RenameFailed `annErrno` eNOTDIR
-
           where
             nft = deType newDE
             oft = deType oldDE
@@ -514,7 +498,7 @@ rename oldFP newFP = do
     p1 `isParentOf` p2 = length l1 < length l2 && and (zipWith (==) l1 l2)
                          where l1 = splitDirectories p1
                                l2 = splitDirectories p2
-      
+
 
 --------------------------------------------------------------------------------
 -- Access control

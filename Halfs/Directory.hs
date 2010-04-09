@@ -125,7 +125,6 @@ removeDirectory mdname inr = do
   dh <- lookupRM inr dhMapRef >>= maybe (newDirHandle inr) return
   withDHLock dh $ do
     -- begin dirhandle critical section   
-  
     contents <- readRef (dhContents dh)
     unless (M.null contents) $ HE_DirectoryNotEmpty `annErrno` eNOTEMPTY
   
@@ -171,10 +170,6 @@ syncDirectory_lckd dh = do
   where
     overwriteAll = do
       inr <- getDHINR_lckd dh
-
-      tmp <- (encode . M.elems) `fmap` readRef (dhContents dh)
-      trace ("overwriteAll: writing length = " ++ show (BS.length tmp)) $ do
-
       writeStream inr 0 True
         =<< (encode . M.elems) `fmap` readRef (dhContents dh)
       lift . bdFlush =<< hasks hsBlockDev
