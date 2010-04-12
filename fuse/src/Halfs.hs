@@ -405,7 +405,7 @@ halfsReadDirectory hsp@HS{ hspLogger = log, hspFpdhMap = fpdhMap } fp = do
         Nothing -> throwError HE_DirectoryHandleNotFound
         Just dh -> readDir dh
                      >>= mapM (\(p, s) -> (,) p `fmap` hfstat2fstat s)
-  log $ "  rslt = " ++ show rslt
+  -- log $ "  rslt = " ++ show rslt
   return rslt
 
 halfsReleaseDirectory :: HalfsCapable b t r l m =>

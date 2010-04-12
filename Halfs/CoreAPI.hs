@@ -192,7 +192,7 @@ mkdir fp fm = do
 
 rmdir :: (HalfsCapable b t r l m) =>
          FilePath -> HalfsM b r l m ()
-rmdir fp = removeDirectory (Just $ takeBaseName fp)
+rmdir fp = removeDirectory (Just $ takeFileName fp)
              =<< fst `fmap` absPathIR fp Directory
 
 openDir :: (HalfsCapable b t r l m) =>
