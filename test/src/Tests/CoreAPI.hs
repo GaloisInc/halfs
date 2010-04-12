@@ -36,7 +36,7 @@ import Tests.Instances (printableBytes, filename)
 import Tests.Types
 import Tests.Utils
 
--- import Debug.Trace
+import Debug.Trace
 
 
 --------------------------------------------------------------------------------
@@ -52,6 +52,7 @@ type HalfsProp =
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [
+{-
     exec 10 "Init and mount"         propM_initAndMountOK
   ,
     exec 10 "Mount/unmount"          propM_mountUnmountOK
@@ -81,6 +82,8 @@ qcProps quick =
     exec 10 "Simple rmlink"          propM_simpleRmlinkOK
   ,
     exec 10 "Simple rename"          propM_simpleRenameOK
+-}
+    exec 1 "Dummy" propM_dummyOK
   ]
   where
     exec = mkMemDevExec quick "CoreAPI"
@@ -707,6 +710,23 @@ propM_simpleRenameOK _g dev = do
     [d1, d2, d3, f1, f2, f3] =
       map (rootPath </>) ["d1", "d2", "d3", "f1", "f2", "f3"]
 
+propM_dummyOK :: HalfsProp
+propM_dummyOK _g dev = do
+  fs <- mkNewFS dev >> mountOK dev
+  let qexec = execH "propM_dummyOK" fs "dummy"
+      trial = rootPath </> "trial"
+      bonie = trial </> "Bonnie.29392"
+      fn    = bonie </> "0000000rrOt4Rl"
+  qexec $ do
+    mkdir trial defaultDirPerms
+    mkdir bonie defaultDirPerms
+    createFile fn defaultFilePerms
+    rmlink fn
+    rmdir bonie
+  
+  quickRemountCheck fs
+  return ()
+
 
 --------------------------------------------------------------------------------
 -- Misc
@@ -725,7 +745,7 @@ quickRemountCheck :: HalfsCapable b t r l m =>
                   -> PropertyM m ()
 quickRemountCheck fs = do
   dump0 <- exec "Get dump0" dumpfs
---  trace ("dump0: " ++ dump0) $ do 
+  trace ("dump0: " ++ dump0) $ do 
   unmountOK fs
   fs'   <- mountOK (hsBlockDev fs)
   dump1 <- exec "Get dump1" dumpfs

@@ -94,7 +94,7 @@ removeFile mfname inr = do
         -- and fh locks are held when it is executed.
         mfhData <- lookupRM inr fhMapRef
         case mfhData of 
-          Just (_, c, _) -> modifyRef fhMapRef $ M.insert inr (fh, c, cb)
+          Just (_, c, _) -> insertRM inr (fh, c, cb) fhMapRef
             where cb = invalidateFH fh >> freeInode inr
           Nothing        -> error "fh not found for open file, cannot happen"
       return nd{ inoNumLinks = inoNumLinks nd - 1 }
@@ -107,13 +107,13 @@ openFilePrim oflags@FileOpenFlags{ openMode = omode } inr = do
     mfh <- lookupRM inr fhMapRef
     case mfh of
       Just (fh, c, onFinalClose) -> do
-        modifyRef fhMapRef (M.insert inr (fh, c + 1, onFinalClose))
+        insertRM inr (fh, c + 1, onFinalClose) fhMapRef
         return fh
       Nothing -> do
         fh <- FH (omode /= WriteOnly) (omode /= ReadOnly) oflags
                 `fmap` newRef (Just inr)
                 `ap`   newLock
-        modifyRef fhMapRef $ M.insert inr (fh, 1, invalidateFH fh)
+        insertRM inr (fh, 1, invalidateFH fh) fhMapRef
         return fh
 
 closeFilePrim :: HalfsCapable b t r l m =>
@@ -146,9 +146,8 @@ closeFilePrim fh = do
         -- and so p1 can still use the FH which is not intended.
         --
         Just (_, c, onFinalClose)
-          | c == 1    -> modifyRef fhMapRef (M.delete inr) >> onFinalClose
-          | otherwise -> modifyRef fhMapRef $
-                           M.insert inr (fh, c - 1, onFinalClose)
+          | c == 1    -> deleteRM inr fhMapRef >> onFinalClose
+          | otherwise -> insertRM inr (fh, c - 1, onFinalClose) fhMapRef
 
 -- Get file handle's inode reference
 getFHINR_lckd :: HalfsCapable b t r l m =>

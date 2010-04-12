@@ -389,7 +389,7 @@ halfsOpenDirectory hsp@HS{ hspLogger = log, hspFpdhMap = fpdhMap } fp = do
     withLockedRscRef fpdhMap $ \ref -> do
       mdh <- lookupRM fp ref
       case mdh of
-        Nothing -> openDir fp >>= modifyRef ref . M.insert fp 
+        Nothing -> openDir fp >>= \v -> insertRM fp v ref
         _       -> return ()
   
 halfsReadDirectory :: HalfsCapable b t r l m =>  
@@ -419,7 +419,7 @@ halfsReleaseDirectory hsp@HS{ hspLogger = log, hspFpdhMap = fpdhMap} fp = do
       mdh <- lookupRM fp ref
       case mdh of
         Nothing -> throwError HE_DirectoryHandleNotFound
-        Just dh -> closeDir dh >> modifyRef ref (M.delete fp)
+        Just dh -> closeDir dh >> deleteRM fp ref
          
 halfsSyncDirectory :: HalfsCapable b t r l m =>
                       HalfsSpecific b r l m

@@ -667,10 +667,10 @@ withLockedInode inr act =
           case lockInfo of
             Nothing -> do
               l <- newLock
-              modifyRef mapRef $ M.insert inr (l, 1)
+              insertRM inr (l, 1) mapRef
               return l
             Just (l, r) -> do
-              modifyRef mapRef $ M.insert inr (l, r + 1)
+              insertRM inr (l, r + 1) mapRef
               return l
           -- end inode lock map critical section
       lock inodeLock
@@ -685,8 +685,8 @@ withLockedInode inr act =
         lockInfo <- lookupRM inr mapRef
         case lockInfo of
           Nothing -> fail "withLockedInode internal: No InodeRef in lock map"
-          Just (l, r) | r == 1    -> modifyRef mapRef $ M.delete inr
-                      | otherwise -> modifyRef mapRef $ M.insert inr (l, r - 1)
+          Just (l, r) | r == 1    -> deleteRM inr mapRef
+                      | otherwise -> insertRM inr (l, r - 1) mapRef
         -- end inode lock map critical section
       release inodeLock
 

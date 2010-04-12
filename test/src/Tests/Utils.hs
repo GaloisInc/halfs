@@ -137,7 +137,7 @@ unmountOK :: HalfsCapable b t r l m =>
              HalfsState b r l m -> PropertyM m ()
 unmountOK fs =
   runH fs unmount >>=
-    either (fail . (++) "Unxpected unmount failure: " . show)
+    either (fail . (++) "Unexpected unmount failure: " . show)
            (const $ return ())
          
 sreadRef :: HalfsCapable b t r l m => r a -> PropertyM m a

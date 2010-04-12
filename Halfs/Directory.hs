@@ -122,27 +122,28 @@ removeDirectory mdname inr = do
   -- so we can ensure that the directory is empty.
 
   withLockedRscRef dhMap $ \dhMapRef -> do
-  dh <- lookupRM inr dhMapRef >>= maybe (newDirHandle inr) return
-  withDHLock dh $ do
-    -- begin dirhandle critical section   
-    contents <- readRef (dhContents dh)
-    unless (M.null contents) $ HE_DirectoryNotEmpty `annErrno` eNOTEMPTY
-  
-    -- When we've been given a directory name, purge this dir's dirent from the
-    -- parent directory.
-    case mdname of
-      Nothing    -> return ()
-      Just dname -> do
-        dev <- hasks hsBlockDev
-        withLockedInode inr $ do
-          pinr <- inoParent `fmap` drefInode dev inr
-          pdh  <- lookupRM pinr dhMapRef >>= maybe (newDirHandle pinr) return
-          rmDirEnt pdh dname
-  
-    -- Invalidate dh so that all subsequent DH-mediated access fails
-    writeRef (dhInode dh) Nothing 
-    freeInode inr
-    -- end dirhandle critical section   
+    dh <- lookupRM inr dhMapRef >>= maybe (newDirHandle inr) return
+    withDHLock dh $ do
+      -- begin dirhandle critical section   
+      contents <- readRef (dhContents dh)
+      unless (M.null contents) $ HE_DirectoryNotEmpty `annErrno` eNOTEMPTY
+    
+      -- When we've been given a directory name, purge this dir's dirent from
+      -- the parent directory.
+      case mdname of
+        Nothing    -> return ()
+        Just dname -> do 
+          dev <- hasks hsBlockDev
+          withLockedInode inr $ do
+            pinr <- inoParent `fmap` drefInode dev inr
+            pdh  <- lookupRM pinr dhMapRef >>= maybe (newDirHandle pinr) return
+            rmDirEnt pdh dname
+    
+      -- Invalidate dh so that all subsequent DH-mediated access fails
+      writeRef (dhInode dh) Nothing
+      deleteRM inr dhMapRef
+      freeInode inr
+      -- end dirhandle critical section   
 
 -- | Syncs directory contents to disk
 syncDirectory :: HalfsCapable b t r l m =>
@@ -196,7 +197,7 @@ openDirectory inr = do
         case mdh' of
           Just dh' -> return dh'
           Nothing  -> do
-            modifyRef ref (M.insert inr dh)
+            insertRM inr dh ref
             return dh
 
 closeDirectory :: HalfsCapable b t r l m =>
@@ -242,7 +243,7 @@ addDirEnt_lckd' replaceOK dh de  = do
   when (not replaceOK) $ do
     mfound <- lookupDE name dh
     maybe (return ()) (const $ throwError $ HE_ObjectExists name) mfound
-  modifyRef (dhContents dh) (M.insert name de)
+  insertRM name de (dhContents dh)
   modifyRef (dhState dh) dirStTransAdd
   where
     name = deName de
@@ -266,7 +267,7 @@ rmDirEnt_lckd dh name = do
   mfound <- lookupDE name dh
   maybe (throwError $ HE_ObjectDNE name) (const $ return ()) mfound
   -- end sanity check
-  modifyRef (dhContents dh) (M.delete name)
+  deleteRM name (dhContents dh)
   modifyRef (dhState dh) dirStTransRm
 
 -- | Finds a directory, file, or symlink given a starting inode
