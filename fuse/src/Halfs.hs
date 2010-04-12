@@ -110,14 +110,15 @@ main = do
     return ()
 
   fs <- execNoEnv $ mount dev uid gid
-
-  System.IO.withFile (optLogFile opts) WriteMode $ \h -> do
-
-  let log s = hPutStrLn h s >> hFlush h
-  dhMap <- newLockedRscRef M.empty
-  withArgs argv1 $ fuseMain (ops (HS log fs dhMap)) $ \e -> do
-    log $ "*** Exception: " ++ show e
-    return eFAULT
+  let withLog act = case optLogFile opts of
+                      Nothing -> act $ const $ return ()
+                      Just lp -> System.IO.withFile lp WriteMode $ \h ->
+                                   act $ \s -> hPutStrLn h s >> hFlush h
+  withLog $ \log -> do 
+    dhMap <- newLockedRscRef M.empty
+    withArgs argv1 $ fuseMain (ops (HS log fs dhMap)) $ \e -> do
+      log $ "*** Exception: " ++ show e
+      return eFAULT
 
 --------------------------------------------------------------------------------
 -- Halfs-hFUSE filesystem operation implementation
@@ -567,7 +568,7 @@ data Options = Options
   , optMemDev  :: Bool
   , optNumSecs :: Word64
   , optSecSize :: Word64
-  , optLogFile :: FilePath
+  , optLogFile :: Maybe FilePath
   }
   deriving (Show)
 
@@ -577,7 +578,7 @@ defOpts = Options
   , optMemDev  = True
   , optNumSecs = 512
   , optSecSize = 512
-  , optLogFile = "halfs.log"
+  , optLogFile = Nothing
   } 
 
 options :: [OptDescr (Options -> Options)]
@@ -601,10 +602,10 @@ options =
       )
       "sector size in bytes (ignored for existing filedevs; default 512)"
   , Option ['l'] ["logfile"]
-      (ReqArg (\s opts -> opts{ optLogFile = s })
+      (ReqArg (\s opts -> opts{ optLogFile = Just s })
               "PATH"
       )
-      "filename for halfs logging (default ./halfs.log)"
+      "filename for halfs logging (default is no logging done)"
   ]
 
 --------------------------------------------------------------------------------
