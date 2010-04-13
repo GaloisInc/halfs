@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+set -e
+
+# fuse loopback executable
+FUSEXMP_PATH=~/fuse-2.8.3/example/fusexmp
+
+LOOPBACK_MNTPT=/tmp/fuse_loopback
+HALFS_MNTPT=/tmp/halfs
+
+OUTFILE=bmark-bonnie++-filesz.csv
+
+# Range of sizes for for filesize tests in MiB
+# needs corresponding half-sized RAMSIZE when FILESIZE < 2*physramsize
+FILESIZES="16 32 64 128 256 512"
+
+# Range of test sizes for the file creation test; units are 1024 files ("kdirs").
+KDIRS="1 2 4 8"
+
+HERE=$(dirname $0)
+REPO_ROOT="$HERE/.."
+SCRATCH="$REPO_ROOT/scratch"
+
+################################################################################
+
+echo -n Mounting FUSE loopback FS...
+mkdir -p /tmp/fuse_loopback
+"$FUSEXMP_PATH" -omodules=subdir,subdir=/tmp "$LOOPBACK_MNTPT"
+echo done.
+
+mkdir -p "$SCRATCH"
+rm -f "$OUTFILE"
+
+# csv header gunk
+echo ,,Output,,Output,,Output,,Input,,Input,,Random,,,Sequential,,,,,,Random,,,,, \
+ >> "$OUTFILE"
+echo ,,PerChar,,Block,,Rewrite,,PerChar,,Block,,Seeks,,,Create,,Read,,Delete,,Create,,\
+Read,,Delete >> "$OUTFILE"
+echo FS Type,File Size,K/sec,%CPU,K/sec,%CPU,K/sec,%CPU,K/sec,%CPU,K/sec,%CPU,\
+/sec,%CPU,#KFiles,/sec,%CPU,/sec,%CPU,/sec,%CPU,/sec,%CPU,/sec,%CPU,/sec,%CPU \
+ >> "$OUTFILE"
+
+echo "----------------------------------------------------------------------"
+echo Filesize tests
+echo "----------------------------------------------------------------------"
+
+for sz in $FILESIZES; do
+  rsz=$(($sz/2))
+  echo Running size tests on "$sz"MiB file
+  echo
+  echo ">>> Native filesystem <<<"
+  bonnie++ -m native -q -d "$SCRATCH" -s $sz -r $rsz -n 0 >> "$OUTFILE"
+  echo
+  echo ">>> FUSE loopback <<<"
+  bonnie++ -m loopback -q -d "$LOOPBACK_MNTPT" -s $sz -r $rsz -n 0 >> "$OUTFILE"
+
+  if [ "$sz" -le "64" ]; then 
+    echo
+    echo ">>> halfs <<<"
+    bonnie++ -m halfs -q -d "$HALFS_MNTPT" -s $sz -r $rsz -n 0 >> "$OUTFILE"    
+  fi
+done
+
+echo "----------------------------------------------------------------------"
+echo File creation tests
+echo "----------------------------------------------------------------------"
+
+for kdir in $KDIRS; do
+  echo Running file creation tests on $(($kdir*1024)) files
+  echo ">>> Native filesystem <<<"
+  bonnie++ -m native -q -d "$SCRATCH" -s 0 -n $kdir >> "$OUTFILE"
+  echo
+  echo ">>> FUSE loopback <<<"
+  bonnie++ -m loopback -q -d "$LOOPBACK_MNTPT" -s 0 -n $kdir >> "$OUTFILE"
+  echo
+  echo ">>> halfs <<<"
+  bonnie++ -m halfs -q -d "$HALFS_MNTPT" -s 0 -n $kdir >> "$OUTFILE"    
+done
+
+echo
+echo -n Unmounting FUSE loopback FS...
+fusermount -u "$LOOPBACK_MNTPT"
+echo Done.
+
+
+
+

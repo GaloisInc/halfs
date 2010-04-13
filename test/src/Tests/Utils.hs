@@ -36,7 +36,7 @@ import System.Device.ST
 import Tests.Instances
 import Tests.Types
 
--- import Debug.Trace
+import Debug.Trace
 
 type DevCtor          = BDGeom -> IO (Maybe (BlockDevice IO))
 type HalfsM b r l m a = HalfsT HalfsError (Maybe (HalfsState b r l m)) m a
@@ -85,7 +85,6 @@ monadicBCMIOProp = monadic (unsafePerformIO . runBCM)
 withFileStore :: Bool -> FilePath -> Word64 -> Word64 -> (FilePath -> IO a)
               -> IO a
 withFileStore temp fp secSize secCnt act = do
-  let numBytes = fromIntegral (secSize * secCnt)
   (fname, h) <-
     if temp
      then openBinaryTempFile
@@ -93,7 +92,11 @@ withFileStore temp fp secSize secCnt act = do
             (takeFileName fp)
      else (,) fp `fmap` openBinaryFile fp ReadWriteMode
 
-  BS.hPut h $ BS.replicate numBytes 0
+  let chunkSz               = 2^(20::Int)
+      (numChunks, numBytes) = fromIntegral (secSize * secCnt) `divMod` chunkSz
+      chunk = BS.replicate chunkSz 0 
+  replicateM_ numChunks (BS.hPut h chunk)
+  BS.hPut h (BS.replicate numBytes 0)
   hClose h
   rslt <- act fname
   when temp $ removeFile fname
