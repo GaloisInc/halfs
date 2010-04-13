@@ -282,9 +282,7 @@ find :: HalfsCapable b t r l m =>
 --
 find startINR ftype [] = do
   ft <- atomicReadInode startINR inoFileType
-  if ft `isFileType` ftype
-   then return $ DF_Found (startINR, ft)
-   else return $ DF_WrongFileType ft
+  return $ foundRslt startINR ft ftype
 --
 find startINR ftype (pathComp:rest) = do
   dh <- openDirectory startINR
@@ -305,9 +303,7 @@ findDE dh fname ftype = do
   mde <- withDHLock dh $ lookupDE fname dh
   case mde of
     Nothing -> return DF_NotFound
-    Just de -> return $ if deType de `isFileType` ftype
-                         then DF_Found (de, deType de)
-                         else DF_WrongFileType (deType de)
+    Just de -> return $ foundRslt de (deType de) ftype
 
 -- Exportable version of findDE; doesn't expose DirectoryEntry to caller
 findInDir :: HalfsCapable b t r l m =>
@@ -316,6 +312,12 @@ findInDir :: HalfsCapable b t r l m =>
           -> FileType
           -> HalfsM b r l m (DirFindRslt InodeRef)
 findInDir dh fname ftype = fmap deInode `fmap` findDE dh fname ftype
+
+foundRslt :: a -> FileType -> FileType -> DirFindRslt a
+foundRslt inr ft ftype =
+  if ft `isFileType` ftype
+   then DF_Found (inr, ft)
+   else DF_WrongFileType ft
 
 
 --------------------------------------------------------------------------------
