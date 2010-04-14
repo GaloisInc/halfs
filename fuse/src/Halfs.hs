@@ -162,11 +162,11 @@ halfsGetFileStat :: HalfsCapable b t r l m =>
                  -> FilePath
                  -> m (Either Errno FileStat)
 halfsGetFileStat hsp@HS{ hspLogger = log } fp = do
-  log $ "halfsGetFileStat: fp = " ++ show fp
+  --log $ "halfsGetFileStat: fp = " ++ show fp
   eestat <- execOrErrno hsp eINVAL id (fstat fp)
   case eestat of
     Left en -> do
-      log $ "  (fstat failed w/ " ++ show en ++ ")"
+      --log $ "  (fstat failed w/ " ++ show en ++ ")"
       return $ Left en
     Right stat -> 
       Right `fmap` hfstat2fstat stat
@@ -188,7 +188,7 @@ halfsCreateDevice hsp@HS{ hspLogger = log } fp etype mode _devID = do
         ", mode = " ++ show mode
   case etype of
     RegularFile -> do
-      log $ "halfsCreateDevice: Regular file w/ " ++ show hmode
+      --log $ "halfsCreateDevice: Regular file w/ " ++ show hmode
       execDefault hsp $ hlocal (withLogger log) $ createFile fp hmode
     _ -> do
       log $ "halfsCreateDevice: Error: Unsupported EntryType encountered."
@@ -302,7 +302,6 @@ halfsOpen hsp@HS{ hspLogger = log } fp omode flags = do
   log $ "halfsOpen: fp = " ++ show fp ++ ", omode = " ++ show omode ++ 
         ", flags = " ++ show flags
   rslt <- execOrErrno hsp eINVAL id $ openFile fp halfsFlags
-  log $ "halfsOpen: CoreAPI.openFile completed"
   return rslt
   where
     -- NB: In HFuse 0.2.2, the explicit and truncate are always false,
@@ -361,7 +360,7 @@ halfsFlush :: HalfsCapable b t r l m =>
            -> FilePath -> FileHandle r l
            -> m Errno
 halfsFlush hsp@HS{ hspLogger = log } fp fh = do
-  log $ "halfsFlush: Flushing " ++ show fp
+  --log $ "halfsFlush: Flushing " ++ show fp
   execDefault hsp $ flush fh
          
 halfsRelease :: HalfsCapable b t r l m =>
@@ -407,6 +406,7 @@ halfsReadDirectory hsp@HS{ hspLogger = log, hspFpdhMap = fpdhMap } fp = do
         Just dh -> readDir dh
                      >>= mapM (\(p, s) -> (,) p `fmap` hfstat2fstat s)
   -- log $ "  rslt = " ++ show rslt
+  log $ "  rslt had " ++ show (length `fmap` rslt) ++ " entries."
   return rslt
 
 halfsReleaseDirectory :: HalfsCapable b t r l m =>
@@ -435,7 +435,7 @@ halfsAccess :: HalfsCapable b t r l m =>
             -> FilePath -> Int
             -> m Errno
 halfsAccess (HS log _fs _fpdhMap) fp n = do
-  log $ "halfsAccess: fp = " ++ show fp ++ ", n = " ++ show n
+  --log $ "halfsAccess: fp = " ++ show fp ++ ", n = " ++ show n
   return eOK -- TODO FIXME currently grants all access!
          
 halfsInit :: HalfsCapable b t r l m =>
@@ -537,7 +537,7 @@ execOrErrno HS{ hspLogger = log, hspState = fs } defaultEn f act = do
      log ("execOrErrno: e = " ++ show e)
      return $ Left en
    Left e@HE_PathComponentNotFound{} -> do
-     log ("execOrErrno: e = " ++ show e)
+     --log ("execOrErrno: e = " ++ show e)
      return $ Left eNOENT
    Left e                        -> do
      log ("execOrErrno: e = " ++ show e)
