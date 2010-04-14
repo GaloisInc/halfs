@@ -11,10 +11,10 @@ OUTFILE=bmark-bonnie++-filesz.csv
 
 # Range of sizes for for filesize tests in MiB
 # needs corresponding half-sized RAMSIZE when FILESIZE < 2*physramsize
-FILESIZES="16 32 64 128 256 512"
+FILESIZES="16 32 64 128"
 
 # Range of test sizes for the file creation test; units are 1024 files ("kdirs").
-KDIRS="1 2 4 8"
+KDIRS="1 2 4 8 16"
 
 HERE=$(dirname $0)
 REPO_ROOT="$HERE/.."
@@ -53,11 +53,11 @@ for sz in $FILESIZES; do
   echo ">>> FUSE loopback <<<"
   bonnie++ -m loopback -q -d "$LOOPBACK_MNTPT" -s $sz -r $rsz -n 0 >> "$OUTFILE"
 
-  if [ "$sz" -le "64" ]; then 
-    echo
-    echo ">>> halfs <<<"
-    bonnie++ -m halfs -q -d "$HALFS_MNTPT" -s $sz -r $rsz -n 0 >> "$OUTFILE"    
-  fi
+#  if [ "$sz" -le "64" ]; then 
+  echo
+  echo ">>> halfs <<<"
+  bonnie++ -m halfs -q -d "$HALFS_MNTPT" -s $sz -r $rsz -n 0 >> "$OUTFILE"    
+#  fi
 done
 
 echo "----------------------------------------------------------------------"
