@@ -161,7 +161,7 @@ halfsGetFileStat :: HalfsCapable b t r l m =>
                     HalfsSpecific b r l m
                  -> FilePath
                  -> m (Either Errno FileStat)
-halfsGetFileStat hsp@HS{ hspLogger = log } fp = do
+halfsGetFileStat hsp@HS{ hspLogger = _log } fp = do
   --log $ "halfsGetFileStat: fp = " ++ show fp
   eestat <- execOrErrno hsp eINVAL id (fstat fp)
   case eestat of
@@ -359,7 +359,7 @@ halfsFlush :: HalfsCapable b t r l m =>
               HalfsSpecific b r l m
            -> FilePath -> FileHandle r l
            -> m Errno
-halfsFlush hsp@HS{ hspLogger = log } fp fh = do
+halfsFlush hsp@HS{ hspLogger = _log } _fp fh = do
   --log $ "halfsFlush: Flushing " ++ show fp
   execDefault hsp $ flush fh
          
@@ -434,7 +434,7 @@ halfsAccess :: HalfsCapable b t r l m =>
                HalfsSpecific b r l m
             -> FilePath -> Int
             -> m Errno
-halfsAccess (HS log _fs _fpdhMap) fp n = do
+halfsAccess (HS _log _fs _fpdhMap) _fp _n = do
   --log $ "halfsAccess: fp = " ++ show fp ++ ", n = " ++ show n
   return eOK -- TODO FIXME currently grants all access!
          
@@ -536,7 +536,7 @@ execOrErrno HS{ hspLogger = log, hspState = fs } defaultEn f act = do
    Left (HE_ErrnoAnnotated e en) -> do
      log ("execOrErrno: e = " ++ show e)
      return $ Left en
-   Left e@HE_PathComponentNotFound{} -> do
+   Left _e@HE_PathComponentNotFound{} -> do
      --log ("execOrErrno: e = " ++ show e)
      return $ Left eNOENT
    Left e                        -> do
