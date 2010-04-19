@@ -53,6 +53,7 @@ qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [
     exec 10 "Init and mount"         propM_initAndMountOK
+--  , HERE: write fsck test
   ,
     exec 10 "Mount/unmount"          propM_mountUnmountOK
   ,
@@ -100,28 +101,25 @@ propM_initAndMountOK _g dev = do
       assert $ IN.nilInodeRef /= rootDir sb
     
       -- Mount the filesystem & ensure integrity with newfs contents
-      runHNoEnv (mount dev defaultUser defaultGroup) >>= \efs -> case efs of 
-        Left  err -> fail $ "Mount failed: " ++ show err
-        Right fs  -> do
-          sb'      <- sreadRef (hsSuperBlock fs)
-          freeBlks <- sreadRef (bmNumFree $ hsBlockMap fs)
-          assert $ not $ unmountClean sb'
-          assert $ sb' == sb{ unmountClean = False }
-          assert $ freeBlocks sb' == freeBlks
-    
-      -- Mount the filesystem again and ensure "dirty unmount" failure
-      e0 <- runHNoEnv (mount dev defaultUser defaultGroup)
-      case e0 of
-        Left (HE_MountFailed DirtyUnmount) -> return ()
-        _                                  -> assert False
+      runHNoEnv (mount dev defaultUser defaultGroup defaultDirPerms) >>= \efs ->
+        case efs of 
+          Left  err -> fail $ "Mount failed: " ++ show err
+          Right fs  -> isClean fs sb
 
-      -- Corrupt the superblock and ensure "bad superblock" failure
-      run $ bdWriteBlock dev 0 $ BS.replicate (fromIntegral $ bdBlockSize dev) 0
-      e1 <- runHNoEnv (mount dev defaultUser defaultGroup)
-      case e1 of
-        Left (HE_MountFailed BadSuperBlock{}) -> return ()
-        _                                     -> assert False
-                                               
+      -- Mount the filesystem again and ensure that fsck properly yields
+      -- a clean filesystem
+      runHNoEnv (mount dev defaultUser defaultGroup defaultDirPerms) >>= \efs ->
+        case efs of
+          Left _   -> assert False
+          Right fs -> isClean fs sb
+  where
+    isClean fs oldSB = do
+      sb'      <- sreadRef (hsSuperBlock fs)
+      freeBlks <- sreadRef (bmNumFree $ hsBlockMap fs)
+      assert $ not $ unmountClean sb'
+      assert $ sb' == oldSB{ unmountClean = False }
+      assert $ freeBlocks sb' == freeBlks
+
 propM_mountUnmountOK :: HalfsProp
 propM_mountUnmountOK _g dev = do
   fs <- mkNewFS dev >> mountOK dev

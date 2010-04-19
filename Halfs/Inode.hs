@@ -17,6 +17,7 @@ module Halfs.Inode
   , atomicReadInode
   , bsReplicate
   , drefInode
+  , expandConts -- for use by fsck
   , fileStat_lckd
   , freeInode
   , withLockedInode
@@ -48,7 +49,6 @@ import Data.ByteString(ByteString)
 import qualified Data.ByteString as BS
 import Data.Char
 import Data.List (find, genericDrop, genericLength, genericTake, genericSplitAt)
-import qualified Data.Map as M
 import Data.Maybe
 import Data.Serialize 
 import Data.Serialize.Get
@@ -68,7 +68,7 @@ import Halfs.Utils
 
 import System.Device.BlockDevice
 
-import Debug.Trace
+--import Debug.Trace
 dbug :: String -> a -> a
 dbug _ = id
 --dbug = trace
@@ -517,7 +517,7 @@ writeStream_lckd dev bm startIR start trunc bytes           = do
   -- terminator.
   (conts2, unallocDirtyConts, numBlksFreed) <-
     if trunc && bytesToAlloc == 0
-    then dbug ("invoking truncUnalloc") $ truncUnalloc dev bm start len conts1
+    then truncUnalloc dev bm start len conts1
     else return (conts1, [], 0)
   assert (length conts2 > 0 && length conts2 <= length conts1) $ return ()
 

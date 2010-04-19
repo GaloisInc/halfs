@@ -36,7 +36,7 @@ import System.Device.ST
 import Tests.Instances
 import Tests.Types
 
-import Debug.Trace
+-- import Debug.Trace
 
 type DevCtor          = BDGeom -> IO (Maybe (BlockDevice IO))
 type HalfsM b r l m a = HalfsT HalfsError (Maybe (HalfsState b r l m)) m a
@@ -133,7 +133,7 @@ mountOK :: HalfsCapable b t r l m =>
            BlockDevice m
         -> PropertyM m (HalfsState b r l m)
 mountOK dev =
-  runHNoEnv (mount dev defaultUser defaultGroup) >>=
+  runHNoEnv (mount dev defaultUser defaultGroup defaultDirPerms) >>=
     either (fail . (++) "Unexpected mount failure: " . show) return
 
 unmountOK :: HalfsCapable b t r l m =>
@@ -321,10 +321,11 @@ dumpfs = do
                return $ dumpAcc
                      ++ replicate i ' '
                      ++ path
-                     ++ case deType dirEnt of
-                          RegularFile -> " (file)\n"
-                          Directory   -> " (directory)\n" ++ sub
-                          Symlink     -> " (symlink)\n"
+                     ++ let inr' = deInode dirEnt in 
+                        case deType dirEnt of
+                          RegularFile -> " (" ++ show inr' ++ ") (file)\n"
+                          Directory   -> " (" ++ show inr' ++ ") (directory)\n" ++ sub
+                          Symlink     -> " (" ++ show inr' ++ ") (symlink)\n"
                           _           -> error "unknown file type"
             )
             ipfx (M.toList contents)

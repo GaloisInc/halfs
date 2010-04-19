@@ -56,7 +56,7 @@ import Halfs.Types
 import Halfs.Utils
 import System.Device.BlockDevice
 
-import Debug.Trace
+-- import Debug.Trace
 
 type HalfsM b r l m a = HalfsT HalfsError (Maybe (HalfsState b r l m)) m a
 

@@ -1,34 +1,40 @@
+
 {-# LANGUAGE FlexibleContexts, ScopedTypeVariables, RankNTypes #-}
 module Halfs.CoreAPI where
 
 import Control.Exception (assert)
 import Data.ByteString   (ByteString)
-import qualified Data.ByteString  as BS
-import qualified Data.Map         as M
+import Data.Maybe
 import Data.Serialize
-import qualified Data.Traversable as T
 import Data.Word
 import Foreign.C.Error hiding (throwErrno)
 import System.FilePath
+
+import qualified Data.ByteString  as BS
+import qualified Data.List        as L 
+import qualified Data.Map         as M
+import qualified Data.Traversable as T
 
 import Halfs.BlockMap
 import Halfs.Classes
 import Halfs.Directory
 import Halfs.Errors
 import Halfs.File
-import qualified Halfs.File as F
 import Halfs.HalfsState
 import Halfs.Inode
 import Halfs.Monad
-import Halfs.MonadUtils
+import Halfs.MonadUtils hiding (logMsg)
 import Halfs.Protection
 import Halfs.SuperBlock
 import Halfs.Types
 import Halfs.Utils
 
+import qualified Halfs.File as F
+
 import System.Device.BlockDevice
 
 import Debug.Trace
+logMsg s = trace s $ return ()
 
 type HalfsM b r l m a = HalfsT HalfsError (Maybe (HalfsState b r l m)) m a
 
@@ -112,24 +118,39 @@ mount :: (HalfsCapable b t r l m) =>
          BlockDevice m
       -> UserID
       -> GroupID
+      -> FileMode
       -> HalfsM b r l m (HalfsState b r l m)
-mount dev usr grp = do
+mount dev usr grp rdirPerms = do
   esb <- decode `fmap` lift (bdReadBlock dev 0)
   case esb of
-    Left msg -> throwError $ HE_MountFailed $ BadSuperBlock msg
+    Left _msg -> 
+      -- Unable to read the superblock: for now, we just give up on the
+      -- mount and provide a new filesystem.
+      newfs' dev usr grp rdirPerms
     Right sb -> do
       if unmountClean sb
        then do
+         bm  <- lift $ readBlockMap dev
          sb' <- lift $ writeSB dev sb{ unmountClean = False }
-         HalfsState dev usr grp Nothing   -- No logger, supplied on demand
-           `fmap` lift (readBlockMap dev) -- blockmap
-           `ap`   newRef sb'              -- superblock 
-           `ap`   newLock                 -- filesystem lock
-           `ap`   newLockedRscRef 0       -- Locked file node count
-           `ap`   newLockedRscRef M.empty -- Locked map: inr -> DH
-           `ap`   newLockedRscRef M.empty -- Locked map: inr -> (l, refcnt)
-           `ap`   newLockedRscRef M.empty -- Locked map: inr -> (FH, opencnt)
-       else throwError $ HE_MountFailed DirtyUnmount
+         newHalfsState dev usr grp sb' bm
+       else do
+         dummyState <- 
+           HalfsState dev usr grp Nothing
+             (error "Internal: fsck dummy state's blockmap is invalid")
+             (error "Internal: fsck dummy state's superblock is invalid")
+             `fmap` newLock                 -- filesystem lock
+             `ap`   newLockedRscRef 0       -- Locked file node count
+             `ap`   newLockedRscRef M.empty -- Locked map: inr -> DH
+             `ap`   newLockedRscRef M.empty -- Locked map: inr -> (l, refcnt)
+             `ap`   newLockedRscRef M.empty -- Locked map: inr -> (FH, opencnt)
+         erslt <- lift $ runHalfs dummyState $ do
+                    fsck dev sb usr grp
+                      >>= maybe (newfs' dev usr grp rdirPerms) return
+         case erslt of
+           Left err -> error $ "Internal error during fsck: " ++ show err
+           Right fs -> return fs
+  where
+    newfs' d u g p = newfs d u g p >> mount d u g p
 
 -- | Unmounts the given filesystem.  After this operation completes, the
 -- superblock will have its unmountClean flag set to True.
@@ -163,8 +184,91 @@ unmount = do
      lift $ writeSB dev sb'
      return ()
   
-fsck :: Int
-fsck = undefined
+--------------------------------------------------------------------------------
+-- FileSystem ChecK (fsck)
+
+fsck :: HalfsCapable b t r l m =>
+        BlockDevice m
+     -> SuperBlock
+     -> UserID
+     -> GroupID
+     -> HalfsM b r l m (Maybe (HalfsState b r l m))
+fsck dev sb usr grp = do
+  used <- lift $ newUsedBitmap dev
+  mbad <- fsck' dev sb used (rootDir sb) (rootDir sb)
+  case mbad of
+    Nothing           -> return Nothing
+    Just (bad, newFC) -> do
+      bm        <- lift $ writeUsedBitmap dev used >> readBlockMap dev
+      finalFree <- readRef (bmNumFree bm)
+      lift $ writeSB dev $ sb 
+        { unmountClean = True
+        , freeBlocks   = finalFree
+        , usedBlocks   = initFree - finalFree
+        , fileCount    = newFC
+        }
+      logMsg $ "fsck: Complete. Bad inodes found: " ++ show bad
+      Just `fmap` newHalfsState dev usr grp sb bm
+  where
+    blks      = blockMapSizeBlks (bdNumBlocks dev) (bdBlockSize dev) 
+    initFree  = bdNumBlocks dev - blks - 1 {- -1 for superblock -}
+
+fsck' :: HalfsCapable b t r l m =>
+         BlockDevice m
+      -> SuperBlock
+      -> b
+      -> InodeRef
+      -> InodeRef
+      -> HalfsM b r l m (Maybe ([InodeRef], Word64))
+fsck' dev sb used pinr inr = do
+  whenValid (drefInode dev inr) val
+  where
+    -- Failed operations result in this inode being marked invalid
+    whenValid act onValid = do
+      eea <- Right `fmap` act `catchError` \e -> Left `fmap` inv e
+      either return onValid eea
+    --
+    inv err = do
+      logMsg $ "fsck: corrupt inode " ++ show inr ++ ", marking bad. (Reason: "
+               ++ show err ++ ")"
+      if pinr /= inr
+       then do 
+         -- We have a valid parent directory, so remove the dirent for this inr
+         pdh      <- newDirHandle pinr
+         contents <- readRef (dhContents pdh)
+         case L.find (\de -> deInode de == inr) (M.elems contents) of
+           Nothing -> do
+             logMsg "Internal fsck error: failed to find expected inode"
+             error  "Internal fsck error: failed to find expected inode"
+           Just de -> do
+             rmDirEnt_lckd pdh (deName de)
+             syncDirectory_lckd pdh
+         return $ Just ([inr], 0)
+       else
+         -- Critical failure: root directory couldn't be decoded
+         return Nothing
+    --
+    val nd@Inode{ inoCont = cont, inoFileType = ftype } = do
+      assert (inoAddress nd == inr) $ return ()
+      whenValid (drop 1 `fmap` expandConts dev cont) $ \conts -> do 
+        let markUsed = mapM_ (setBit used) $
+                         unIR inr : map (unCR . address) conts
+        case ftype of
+          Directory -> do
+            whenValid (newDirHandle inr) $ \thisDH -> do
+              markUsed
+              kids <- M.elems `fmap` readRef (dhContents thisDH)
+              foldM (\(Just (bads, fc)) kid -> do
+                         Just (bs, k) <- fsck' dev sb used inr (deInode kid)
+                         return $ Just (bads ++ bs, fc + k) 
+                    )
+                    (Just ([], 0)) kids
+
+          RegularFile -> do
+            markUsed
+            return $ Just ([], 1)
+
+          _ -> error "fsck' internal error: filetype not supported"
 
 
 --------------------------------------------------------------------------------
@@ -263,17 +367,13 @@ openFile :: (HalfsCapable b t r l m) =>
          -> HalfsM b r l m (FileHandle r l) 
 openFile fp oflags = do
   -- TODO: check perms
-  logMsg $ "CoreAPI.openFile entry: fp = " ++ show fp ++ ", oflags = " ++ show oflags
   pdh <- openDir ppath
-  logMsg $ "CoreAPI.openFile: openDir on parent complete"
   fh  <- findInDir pdh fname RegularFile >>= \rslt ->
            case rslt of
              DF_NotFound         -> throwError $ HE_FileNotFound
              DF_WrongFileType ft -> throwError $ HE_UnexpectedFileType ft fp
              DF_Found (fir, _ft) -> foundFile fir
-  logMsg $ "CoreAPI.openFile: findInDir on parent complete"
   closeDir pdh
-  logMsg $ "CoreAPI.openFile: closeDir complete"
   return fh
   where
     (ppath, fname) = splitFileName fp
@@ -668,6 +768,23 @@ fsstat = do
 
 --------------------------------------------------------------------------------
 -- Utility functions & consts
+
+newHalfsState :: HalfsCapable b t r l m =>
+                 BlockDevice m
+              -> UserID
+              -> GroupID
+              -> SuperBlock
+              -> BlockMap b r l
+              -> HalfsM b r l m (HalfsState b r l m)
+newHalfsState dev usr grp sb bm =
+  HalfsState dev usr grp Nothing   -- No logger, supplied on demand
+    `fmap` return bm               -- blockmap
+    `ap`   newRef sb               -- superblock 
+    `ap`   newLock                 -- filesystem lock
+    `ap`   newLockedRscRef 0       -- Locked file node count
+    `ap`   newLockedRscRef M.empty -- Locked map: inr -> DH
+    `ap`   newLockedRscRef M.empty -- Locked map: inr -> (l, refcnt)
+    `ap`   newLockedRscRef M.empty -- Locked map: inr -> (FH, opencnt)
 
 -- | Atomic inode modification wrapper
 modifyInode :: HalfsCapable b t r l m =>

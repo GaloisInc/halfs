@@ -11,8 +11,6 @@ module Halfs.File
   )
  where
 
-import qualified Data.Map as M
-
 import Halfs.BlockMap
 import Halfs.Classes
 import Halfs.Directory

@@ -22,6 +22,10 @@ module Halfs.BlockMap
   , blkRange
   , blkRangeExt
   , blkRangeBG
+  -- * Internal use only
+  , blockMapSizeBlks
+  , newUsedBitmap
+  , writeUsedBitmap
   )
  where
 
@@ -113,6 +117,22 @@ newBlockMap :: (Monad m, Reffable r m, Bitmapped b m, Lockable l m) =>
 newBlockMap dev = do
   when (numFree == 0) $ fail "Block device is too small for block map creation"
 
+  bArr     <- newUsedBitmap dev
+  treeR    <- newRef $ singleton $ Extent baseFreeIdx numFree
+  numFreeR <- newRef numFree
+  lk       <- newLock 
+  return $ assert (baseFreeIdx + numFree == numBlks) $
+    BM treeR bArr numFreeR lk
+ where
+  numBlks        = bdNumBlocks dev
+  blockMapSzBlks = blockMapSizeBlks numBlks (bdBlockSize dev)
+  baseFreeIdx    = blockMapSzBlks + 1
+  numFree        = numBlks - blockMapSzBlks - 1 {- -1 for superblock -}
+
+newUsedBitmap :: (Monad m, Reffable r m, Bitmapped b m, Lockable l m) =>
+               BlockDevice m
+            -> m b
+newUsedBitmap dev = do
   -- We overallocate the bitmap up to the entire size of the block(s)
   -- needed for the block map region so that de/serialization in the
   -- {read,write}BlockMap functions is straightforward
@@ -122,18 +142,12 @@ newBlockMap dev = do
     [ (0, 0)                   -- superblock
     , (1, blockMapSzBlks)      -- blocks for storing the block map
     , (numBlks, totalBits - 1) -- overallocated region
-    ] 
-  treeR    <- newRef $ singleton $ Extent baseFreeIdx numFree
-  numFreeR <- newRef numFree
-  lk       <- newLock 
-  return $ assert (baseFreeIdx + numFree == numBlks) $
-    BM treeR bArr numFreeR lk
- where
-  numBlks        = bdNumBlocks dev
-  totalBits      = blockMapSzBlks * bdBlockSize dev * 8
-  blockMapSzBlks = blockMapSizeBlks numBlks (bdBlockSize dev)
-  baseFreeIdx    = blockMapSzBlks + 1
-  numFree        = numBlks - blockMapSzBlks - 1 {- -1 for superblock -}
+    ]
+  return bArr
+  where
+    numBlks        = bdNumBlocks dev
+    totalBits      = blockMapSzBlks * bdBlockSize dev * 8
+    blockMapSzBlks = blockMapSizeBlks numBlks (bdBlockSize dev)
 
 -- | Read in the block map from the disk
 readBlockMap :: (Monad m, Reffable r m, Bitmapped b m, Lockable l m) =>
@@ -192,8 +206,15 @@ writeBlockMap ::
   -> BlockMap b r l
   -> m ()
 writeBlockMap dev bmap = do
-  withLockM (bmLock bmap) $ do
-  -- Pack the used bitmap into the block map's block region
+  withLockM (bmLock bmap) $ writeUsedBitmap dev (bmUsedMap bmap)
+
+writeUsedBitmap ::
+  (Monad m, Reffable r m, Bitmapped b m, Functor m, Lockable l m) =>
+     BlockDevice m
+  -> b
+  -> m ()
+writeUsedBitmap dev used = do
+  -- Pack the given bitmap into the block map's block region
   forM_ [0..blockMapSzBlks - 1] $ \blkIdx -> do
     blockBS <- BS.pack `fmap` forM [0..bdBlockSize dev - 1] (getBytes blkIdx)
     bdWriteBlock dev (blkIdx + 1 {- +1 for superblock -}) blockBS
@@ -205,10 +226,10 @@ writeBlockMap dev bmap = do
       bs <- forM [0..7] $ \bitIdx -> do
         let base = blkIdx * bdBlockSize dev
             idx  = (base + byteIdx) * 8 + bitIdx
-        checkBit (bmUsedMap bmap) idx
+        checkBit used idx
       return $ foldr (\(b,i) r -> if b then B.setBit r i else r)
                (0::Word8) (bs `zip` [0..7])
-            
+
 -- | Allocate a set of blocks from the disk. This routine will attempt
 -- to fetch a contiguous set of blocks, but isn't guaranteed to do so.
 -- Contiguous blocks are represented via the Contig constructor of the
