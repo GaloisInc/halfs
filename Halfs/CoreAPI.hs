@@ -197,15 +197,15 @@ fsck dev sb usr grp = do
   used <- lift $ newUsedBitmap dev
   mbad <- fsck' dev sb used (rootDir sb) (rootDir sb)
   case mbad of
-    Nothing           -> return Nothing
-    Just (bad, newFC) -> do
+    Nothing        -> return Nothing
+    Just (bad, fc) -> do
       bm        <- lift $ writeUsedBitmap dev used >> readBlockMap dev
       finalFree <- readRef (bmNumFree bm)
       lift $ writeSB dev $ sb 
         { unmountClean = True
         , freeBlocks   = finalFree
         , usedBlocks   = initFree - finalFree
-        , fileCount    = newFC
+        , fileCount    = fc
         }
       logMsg $ "fsck: Complete. Bad inodes found: " ++ show bad
       Just `fmap` newHalfsState dev usr grp sb bm
@@ -232,7 +232,7 @@ fsck' dev sb used pinr inr = do
       logMsg $ "fsck: corrupt inode " ++ show inr ++ ", marking bad. (Reason: "
                ++ show err ++ ")"
       if pinr /= inr
-       then do 
+       then do
          -- We have a valid parent directory, so remove the dirent for this inr
          pdh      <- newDirHandle pinr
          contents <- readRef (dhContents pdh)
