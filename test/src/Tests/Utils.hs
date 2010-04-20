@@ -132,7 +132,7 @@ mkNewFS dev = runHNoEnv $ newfs dev rootUser rootGroup rootDirPerms
 mountOK :: HalfsCapable b t r l m =>
            BlockDevice m
         -> PropertyM m (HalfsState b r l m)
-mountOK dev =
+mountOK dev = do
   runHNoEnv (defaultMount dev)
     >>= either (fail . (++) "Unexpected mount failure: " . show) return
 

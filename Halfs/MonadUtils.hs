@@ -12,10 +12,16 @@ import Halfs.Errors
 import Halfs.Monad
 import Halfs.HalfsState
 
+import Debug.Trace
+
 type HalfsM b r l m a = HalfsT HalfsError (Maybe (HalfsState b r l m)) m a
 
 logMsg :: Monad m => String -> HalfsM b r l m ()
-logMsg msg = hasks hsLogger >>= maybe (return ()) (\logger -> lift $ logger msg)
+logMsg msg = do
+  mst <- ask
+  case mst of
+    Nothing  -> return ()
+    Just st  -> maybe (return ()) (\logger -> lift $ logger msg) (hsLogger st)
 
 hasks :: Monad m => (HalfsState b r l m -> a) -> HalfsM b r l m a
 hasks f =

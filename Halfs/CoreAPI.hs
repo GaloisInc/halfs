@@ -23,7 +23,7 @@ import Halfs.File
 import Halfs.HalfsState
 import Halfs.Inode
 import Halfs.Monad
-import Halfs.MonadUtils hiding (logMsg)
+import Halfs.MonadUtils --hiding (logMsg)
 import Halfs.Protection
 import Halfs.SuperBlock
 import Halfs.Types
@@ -34,7 +34,7 @@ import qualified Halfs.File as F
 import System.Device.BlockDevice
 
 import Debug.Trace
-logMsg s = trace s $ return ()
+--logMsg s = trace s $ return ()
 
 type HalfsM b r l m a = HalfsT HalfsError (Maybe (HalfsState b r l m)) m a
 
@@ -121,11 +121,18 @@ mount :: (HalfsCapable b t r l m) =>
       -> FileMode
       -> HalfsM b r l m (HalfsState b r l m)
 mount dev usr grp rdirPerms = do
+  let mntlgr s = trace s $ return ()
+
+  -- fsck et. al need to read some aspects of the HalfsState (dev), even though
+  -- there isn't yet a valid state from mounting/successful fsck.  Being able to
+  -- log via logMsg is nice here, too, so we wrap everything in a dummy halfs
+  -- monad environment. HERE/TODO
+
   esb <- decode `fmap` lift (bdReadBlock dev 0)
   case esb of
     Left _msg -> do
-      -- Unable to read the superblock: for now, we just give up on the
-      -- mount and provide a new filesystem.
+      -- Unable to read the superblock: for now, we just give up on the mount
+      -- and provide a new filesystem.
       logMsg "mount: unable to read superblock, creating new filesystem."
       newfs' dev usr grp rdirPerms
     Right sb -> do
@@ -133,7 +140,7 @@ mount dev usr grp rdirPerms = do
        then do
          bm  <- lift $ readBlockMap dev
          sb' <- lift $ writeSB dev sb{ unmountClean = False }
-         newHalfsState dev usr grp sb' bm
+         newHalfsState dev usr grp sb' bm Nothing
        else do
          dummy <- newHalfsState dev usr grp
                     (error "Internal: fsck state's blockmap is invalid")
@@ -775,9 +782,10 @@ newHalfsState :: HalfsCapable b t r l m =>
               -> GroupID
               -> SuperBlock
               -> BlockMap b r l
+              -> Maybe (String -> m ())
               -> HalfsM b r l m (HalfsState b r l m)
-newHalfsState dev usr grp sb bm =
-  HalfsState dev usr grp Nothing   -- No logger, supplied on demand
+newHalfsState dev usr grp sb bm lgr =
+  HalfsState dev usr grp lgr       
     `fmap` return bm               -- blockmap
     `ap`   newRef sb               -- superblock 
     `ap`   newLock                 -- filesystem lock

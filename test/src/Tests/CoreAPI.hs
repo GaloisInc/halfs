@@ -36,7 +36,7 @@ import Tests.Instances (printableBytes, filename)
 import Tests.Types
 import Tests.Utils hiding (HalfsM)
 
-import Debug.Trace
+-- import Debug.Trace
 
 
 --------------------------------------------------------------------------------
@@ -52,9 +52,10 @@ type HalfsProp =
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [
---    exec 10 "Init and mount"         propM_initAndMountOK
---  , HERE: write fsck test
-    exec 1 "fsck" propM_fsckOK
+--     exec 10 "Init and mount"         propM_initAndMountOK
+--   ,
+    exec 1 "fsck"                   propM_fsckOK
+
 --   ,
 --     exec 10 "Mount/unmount"          propM_mountUnmountOK
 --   ,
@@ -169,9 +170,9 @@ propM_fsckOK _g dev = do
         -- corrupt superblock & don't unmount (forces fsck below)
         zeroBlock 0         
 
-  mountOK dev >>= \fs -> do 
+  mountOK dev >>= \fs -> do
     assrt "FS empty after superblock corruption"
-      =<< (not . or) `fmap` mapM (existsP' fs True) (ds ++ fls)
+      =<<  (not . or) `fmap` mapM (existsP' fs True) (ds ++ fls)
     quickRemountCheck fs
 
   -- Repopulate, corrupt root directory, and check FS
