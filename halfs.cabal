@@ -37,7 +37,7 @@ library
                     System.Device.File,
                     System.Device.Memory,
                     System.Device.ST
-  GHC-Options:      -O2 -Wall -fno-ignore-asserts
+  GHC-Options:      -O2 -Wall -fno-ignore-asserts -threaded
   extensions:       FlexibleContexts, FlexibleInstances,
                     ScopedTypeVariables,
                     GeneralizedNewtypeDeriving,
@@ -50,11 +50,11 @@ executable halfs-tests
 
   build-depends:    QuickCheck == 2.1.0.2,
                     directory  >= 1.0.0.3,
-                    random     >= 1.0.0.1           
+                    random     >= 1.0.0.1
 
   hs-source-dirs: test/src . 
   main-is: Driver.hs
-  ghc-options: -O2 -Wall -fno-ignore-asserts -threaded
+  ghc-options: -O2 -Wall -fno-ignore-asserts -threaded 
 
 executable halfs
   build-depends:    HFuse >= 0.2.2

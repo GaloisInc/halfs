@@ -36,7 +36,7 @@ import Tests.Instances (printableBytes, filename)
 import Tests.Types
 import Tests.Utils hiding (HalfsM)
 
--- import Debug.Trace
+import Debug.Trace
 
 
 --------------------------------------------------------------------------------
@@ -52,6 +52,7 @@ type HalfsProp =
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [
+{-
     exec 10 "Init and mount"         propM_initAndMountOK
   ,
     exec 10 "fsck"                   propM_fsckOK
@@ -83,6 +84,8 @@ qcProps quick =
     exec 10 "Simple rmlink"          propM_simpleRmlinkOK
   ,
     exec 10 "Simple rename"          propM_simpleRenameOK
+-}
+    propM_profileMe
   ]
   where
     exec = mkMemDevExec quick "CoreAPI"
@@ -772,6 +775,25 @@ propM_simpleRenameOK _g dev = do
     d1sub                    = d1 </> "d1sub"
     [d1, d2, d3, f1, f2, f3] =
       map (rootPath </>) ["d1", "d2", "d3", "f1", "f2", "f3"]
+
+propM_profileMe :: (Args, Property)
+propM_profileMe = (,) stdArgs{maxSuccess = 1} $ monadicIO $ go $ \dev -> do
+  fs <- mkNewFS dev >> mountOK dev
+  trace ("created fs") $ do
+  execH "propM_profileMe" fs "create and write" $ do
+    createFile fn defaultFilePerms 
+    trace ("created file") $ do
+    withFile fn (fofWriteOnly True) $ \fh -> do
+      forM addrs $ \addr -> do
+--        trace ("Writing " ++ show (BS.length chunk) ++ " bytes to "
+--               ++ fn ++ " at offset " ++ show addr) $ do
+        write fh addr chunk
+  where
+    fn       = rootPath </> "theFile"
+    go f     = run (memDev g) >>= (`whenDev` run . bdShutdown) f
+    g        = BDGeom 65536 4096             -- 256 MiB FS
+    chunk    = BS.replicate 4096 0x42        -- 4k chunk
+    addrs    = [ i * 4096 | i <- [0..32767]] -- lower 128 MiB addrs
 
 
 --------------------------------------------------------------------------------

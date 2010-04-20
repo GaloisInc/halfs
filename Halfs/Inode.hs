@@ -767,7 +767,7 @@ allocFill dev bm avail blksToAlloc contsToAlloc existing = do
       -- currently "flattens" BlockGroup; see comment in writeStream
       mbg <- lift $ BM.allocBlocks bm blksToAlloc
       case mbg of
-        Nothing -> throwError HE_AllocFailed
+        Nothing -> dbug ("allocBlocks alloc fail") $ throwError HE_AllocFailed
         Just bg -> return $ BM.blkRangeBG bg
     -- 
     allocConts =
@@ -780,7 +780,9 @@ allocFill dev bm avail blksToAlloc contsToAlloc existing = do
           case mcr of
             Nothing -> return Nothing
             Just cr -> Just `fmap` lift (buildEmptyCont dev cr)
-        maybe (throwError HE_AllocFailed) (return) mconts
+        maybe (dbug ("allocConts alloc fail") $ throwError HE_AllocFailed)
+              (return)
+              mconts
 
 -- | Truncates the stream at the given a stream index and length offset, and
 -- unallocates all resources in the corresponding free region
