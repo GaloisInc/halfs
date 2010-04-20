@@ -23,7 +23,7 @@ import Halfs.File
 import Halfs.HalfsState
 import Halfs.Inode
 import Halfs.Monad
-import Halfs.MonadUtils --hiding (logMsg)
+import Halfs.MonadUtils
 import Halfs.Protection
 import Halfs.SuperBlock
 import Halfs.Types
@@ -33,8 +33,7 @@ import qualified Halfs.File as F
 
 import System.Device.BlockDevice
 
-import Debug.Trace
---logMsg s = trace s $ return ()
+-- import Debug.Trace
 
 type HalfsM b r l m a = HalfsT HalfsError (Maybe (HalfsState b r l m)) m a
 
@@ -121,42 +120,41 @@ mount :: (HalfsCapable b t r l m) =>
       -> FileMode
       -> HalfsM b r l m (HalfsState b r l m)
 mount dev usr grp rdirPerms = do
-  let mntlgr s = trace s $ return ()
+  -- fsck needs read access some aspects of the HalfsState (e.g. the dev), even
+  -- though there isn't yet a valid state from a mount/successful fsck.  Being
+  -- able to log here via logMsg is nice here, too, so we wrap everything in a
+  -- dummy environment with some bits filled in.  We'll raise internal errors if
+  -- any of the nonexistent bits are pulled on.
 
-  -- fsck et. al need to read some aspects of the HalfsState (dev), even though
-  -- there isn't yet a valid state from mounting/successful fsck.  Being able to
-  -- log via logMsg is nice here, too, so we wrap everything in a dummy halfs
-  -- monad environment. HERE/TODO
-
-  esb <- decode `fmap` lift (bdReadBlock dev 0)
-  case esb of
-    Left _msg -> do
-      -- Unable to read the superblock: for now, we just give up on the mount
-      -- and provide a new filesystem.
-      logMsg "mount: unable to read superblock, creating new filesystem."
-      newfs' dev usr grp rdirPerms
-    Right sb -> do
-      if unmountClean sb
-       then do
-         bm  <- lift $ readBlockMap dev
-         sb' <- lift $ writeSB dev sb{ unmountClean = False }
-         newHalfsState dev usr grp sb' bm Nothing
-       else do
-         dummy <- newHalfsState dev usr grp
-                    (error "Internal: fsck state's blockmap is invalid")
-                    (error "Internal: fsck state's superblock is invalid")
-         erslt <- lift $ runHalfs dummy $ do
-                    mfs <- fsck dev sb usr grp rdirPerms
-                    case mfs of
-                      Just fs -> return fs
-                      Nothing -> do
-                        logMsg "mount: fsck failed. Creating new filesystem."
-                        newfs' dev usr grp rdirPerms
-         case erslt of
-           Left err -> error $ "Internal error during fsck: " ++ show err
-           Right fs -> return fs
+  let lgr = Nothing -- Just $ \s -> trace s (return ())
+  dummy <- newHalfsState dev usr grp lgr
+             (error "Internal (mount): dummy state's superblock is invalid!")
+             (error "Internal (mount): dummy state's blockmap is invalid!")
+  either throwError return =<< (lift $ runHalfs dummy $ mount')
   where
     newfs' d u g p = newfs d u g p >> mount d u g p
+    --
+    mount' = do
+    esb <- decode `fmap` lift (bdReadBlock dev 0)
+    case esb of
+      Left _msg -> do
+        -- Unable to read the superblock: for now, we just give up on the mount
+        -- and provide a new filesystem.
+        logMsg "mount: unable to read superblock, creating new filesystem."
+        newfs' dev usr grp rdirPerms
+      Right sb -> do
+        if unmountClean sb
+         then do
+           bm  <- lift $ readBlockMap dev
+           sb' <- lift $ writeSB dev sb{ unmountClean = False }
+           newHalfsState dev usr grp Nothing sb' bm 
+         else do
+           mfs <- fsck dev sb usr grp rdirPerms
+           case mfs of
+             Just fs -> return fs
+             Nothing -> do
+               logMsg "mount: fsck failed. Creating new filesystem."
+               newfs' dev usr grp rdirPerms
 
 -- | Unmounts the given filesystem.  After this operation completes, the
 -- superblock will have its unmountClean flag set to True.
@@ -780,11 +778,11 @@ newHalfsState :: HalfsCapable b t r l m =>
                  BlockDevice m
               -> UserID
               -> GroupID
+              -> Maybe (String -> m ())
               -> SuperBlock
               -> BlockMap b r l
-              -> Maybe (String -> m ())
               -> HalfsM b r l m (HalfsState b r l m)
-newHalfsState dev usr grp sb bm lgr =
+newHalfsState dev usr grp lgr sb bm =
   HalfsState dev usr grp lgr       
     `fmap` return bm               -- blockmap
     `ap`   newRef sb               -- superblock 
