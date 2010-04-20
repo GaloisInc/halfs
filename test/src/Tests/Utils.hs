@@ -133,8 +133,8 @@ mountOK :: HalfsCapable b t r l m =>
            BlockDevice m
         -> PropertyM m (HalfsState b r l m)
 mountOK dev =
-  runHNoEnv (mount dev defaultUser defaultGroup defaultDirPerms) >>=
-    either (fail . (++) "Unexpected mount failure: " . show) return
+  runHNoEnv (defaultMount dev)
+    >>= either (fail . (++) "Unexpected mount failure: " . show) return
 
 unmountOK :: HalfsCapable b t r l m =>
              HalfsState b r l m -> PropertyM m ()
@@ -264,6 +264,9 @@ rootDirPerms     = FileMode [Read,Write,Execute] [] []
 defaultDirPerms  = FileMode [Read,Write,Execute] [Read, Execute] [Read, Execute]
 defaultFilePerms = FileMode [Read,Write] [Read] [Read]
 
+defaultMount :: HalfsCapable b t r l m =>
+                BlockDevice m -> HalfsM b r l m (HalfsState b r l m)
+defaultMount dev = mount dev defaultUser defaultGroup defaultDirPerms
 
 --------------------------------------------------------------------------------
 -- Block utilization checking combinators

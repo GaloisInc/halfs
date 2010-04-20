@@ -34,7 +34,7 @@ import System.Device.BlockDevice (BlockDevice(..))
 
 import Tests.Instances (printableBytes, filename)
 import Tests.Types
-import Tests.Utils
+import Tests.Utils hiding (HalfsM)
 
 import Debug.Trace
 
@@ -52,36 +52,37 @@ type HalfsProp =
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [
-    exec 10 "Init and mount"         propM_initAndMountOK
+--    exec 10 "Init and mount"         propM_initAndMountOK
 --  , HERE: write fsck test
-  ,
-    exec 10 "Mount/unmount"          propM_mountUnmountOK
-  ,
-    exec 10 "Unmount mutex"          propM_unmountMutexOK
-  ,
-    exec 10 "Directory construction" propM_dirConstructionOK
-  ,
-    exec 10 "Simple file creation"   propM_fileBasicsOK
-  ,
-    exec 10 "Simple file ops"        propM_simpleFileOpsOK
-  ,
-    exec 10 "chmod/chown ops"        propM_chmodchownOK
-  ,
-    exec 5  "File WR 1"              (propM_fileWROK "myfile")
-  ,
-    exec 5  "File WR 2"              (propM_fileWROK "foo/bar/baz")
-  ,
-    exec 10 "Directory mutex"        propM_dirMutexOK
-  ,
-    exec 10 "Hardlink creation"      propM_hardlinksOK
-  ,
-    exec 10 "Simple rmdir"           propM_simpleRmdirOK
-  ,
-    exec 10 "rmdir mutex"            propM_rmdirMutexOK
-  ,
-    exec 10 "Simple rmlink"          propM_simpleRmlinkOK
-  ,
-    exec 10 "Simple rename"          propM_simpleRenameOK
+    exec 1 "fsck" propM_fsckOK
+--   ,
+--     exec 10 "Mount/unmount"          propM_mountUnmountOK
+--   ,
+--     exec 10 "Unmount mutex"          propM_unmountMutexOK
+--   ,
+--     exec 10 "Directory construction" propM_dirConstructionOK
+--   ,
+--     exec 10 "Simple file creation"   propM_fileBasicsOK
+--   ,
+--     exec 10 "Simple file ops"        propM_simpleFileOpsOK
+--   ,
+--     exec 10 "chmod/chown ops"        propM_chmodchownOK
+--   ,
+--     exec 5  "File WR 1"              (propM_fileWROK "myfile")
+--   ,
+--     exec 5  "File WR 2"              (propM_fileWROK "foo/bar/baz")
+--   ,
+--     exec 10 "Directory mutex"        propM_dirMutexOK
+--   ,
+--     exec 10 "Hardlink creation"      propM_hardlinksOK
+--   ,
+--     exec 10 "Simple rmdir"           propM_simpleRmdirOK
+--   ,
+--     exec 10 "rmdir mutex"            propM_rmdirMutexOK
+--   ,
+--     exec 10 "Simple rmlink"          propM_simpleRmlinkOK
+--   ,
+--     exec 10 "Simple rename"          propM_simpleRenameOK
   ]
   where
     exec = mkMemDevExec quick "CoreAPI"
@@ -101,14 +102,14 @@ propM_initAndMountOK _g dev = do
       assert $ IN.nilInodeRef /= rootDir sb
     
       -- Mount the filesystem & ensure integrity with newfs contents
-      runHNoEnv (mount dev defaultUser defaultGroup defaultDirPerms) >>= \efs ->
+      runHNoEnv (defaultMount dev) >>= \efs ->
         case efs of 
           Left  err -> fail $ "Mount failed: " ++ show err
           Right fs  -> isClean fs sb
 
       -- Mount the filesystem again and ensure that fsck properly yields
       -- a clean filesystem
-      runHNoEnv (mount dev defaultUser defaultGroup defaultDirPerms) >>= \efs ->
+      runHNoEnv (defaultMount dev) >>= \efs ->
         case efs of
           Left _   -> assert False
           Right fs -> isClean fs sb
@@ -119,6 +120,79 @@ propM_initAndMountOK _g dev = do
       assert $ not $ unmountClean sb'
       assert $ sb' == oldSB{ unmountClean = False }
       assert $ freeBlocks sb' == freeBlks
+
+propM_fsckOK :: HalfsProp
+propM_fsckOK _g dev = do
+  fs0 <- mkNewFS dev >> mountOK dev
+  let assrt          = assertMsg "propM_fsckOK"
+      exec           = execH "propM_fsckOK" fs0
+      ds@[d1,d2,d3]  = map (rootPath </>) ["d1", "d2", "d3"]
+      fls@[f1,f2,f3] = [d1 </> "f1", d2 </> "f2", d3 </> "f3"]
+
+  exec "populate1" $ populate ds fls
+
+  -- Corrupt f2's inode & don't unmount (forces fsck below)
+  f2inr <- exec "fstat f2" $ (unIR . fsInode) `fmap` fstat f2
+  zeroBlock f2inr
+
+  runHNoEnv (defaultMount dev) >>= \efs ->
+    case efs of
+      Left _   -> assert False
+      Right fs -> do
+        let exec'  = execH "propM_fsckOK" fs
+            exists = existsP fs
+
+        assrt "FS contents as expected after f2 corruption"
+          =<< and `fmap` sequence [ not `fmap` exists f2
+                                  , and `fmap` mapM exists [f1,f3]
+                                  , and `fmap` mapM exists ds
+                                  ]
+        
+        -- Corrupt d3 & don't unmount (forces fsck below)
+        d3inr <- exec' "fstat d3" $ (unIR . fsInode) `fmap` fstat d3
+        zeroBlock d3inr
+ 
+  runHNoEnv (defaultMount dev) >>= \efs ->
+    case efs of
+      Left _   -> assert False
+      Right fs -> do
+        let exists' = existsP fs
+
+        assrt "FS contents as expected after d3 corruption"
+          =<< and `fmap` sequence
+                [ (not . or) `fmap` mapM (existsP' fs True) [f2,d3,f3]
+                  -- ^ HE_PathComponentNotFound will be raised, so allow it
+                , and `fmap` mapM exists' [f1]
+                , and `fmap` mapM exists' [d1,d2]
+                ]
+
+        -- corrupt superblock & don't unmount (forces fsck below)
+        zeroBlock 0         
+
+  mountOK dev >>= \fs -> do 
+    assrt "FS empty after superblock corruption"
+      =<< (not . or) `fmap` mapM (existsP' fs True) (ds ++ fls)
+    quickRemountCheck fs
+
+  -- Repopulate, corrupt root directory, and check FS
+  (mkNewFS dev >> mountOK dev) >>= \fs -> do 
+    execH "propM_fsckOK" fs "populate2" $ populate ds fls
+    zeroBlock =<< (unIR . rootDir) `fmap` sreadRef (hsSuperBlock fs)
+    -- don't unmount (forces fsck below)
+  mountOK dev >>= \fs -> do
+    assrt "FS empty after root directory corruption"
+      =<< (not . or) `fmap` mapM (existsP' fs True) (ds ++ fls)  
+    quickRemountCheck fs
+
+  where
+    zeroBlock inr =
+      run $ bdWriteBlock dev inr (IN.bsReplicate (bdBlockSize dev) 0)
+    populate ds fls = do
+      mapM_ (`mkdir` defaultDirPerms) ds
+      mapM_ (`createFile` defaultFilePerms) fls
+      forM_ fls $ \f ->
+        withFile f (fofReadWrite True) $ \fh ->
+          write fh 0 (BS.replicate 1024 0)
 
 propM_mountUnmountOK :: HalfsProp
 propM_mountUnmountOK _g dev = do
@@ -503,15 +577,11 @@ propM_hardlinksOK _g dev = do
 propM_simpleRmdirOK :: HalfsProp
 propM_simpleRmdirOK _g dev = do
   fs <- mkNewFS dev >> mountOK dev
-  let exec     = execH "propM_simpleRmdirOK" fs
-      d0       = rootPath </> "foo"
-      d1       = d0       </> "bar"
-      fp       = d0       </> "f1"
-      exists p =
-        (elem (takeFileName p) . map fst)
-          `fmap` exec ("readDir " ++ p)
-                      (withDir (takeDirectory p) readDir)
-
+  let exec   = execH "propM_simpleRmdirOK" fs
+      exists = existsP fs
+      d0     = rootPath </> "foo"
+      d1     = d0       </> "bar"
+      fp     = d0       </> "f1"
 
   -- Expected error: removal of non-empty directory
   exec "mkdir /foo"     $ mkdir d0 defaultDirPerms
@@ -598,17 +668,15 @@ propM_rmdirMutexOK _g dev = do
           writeChan ch merr
           threadB fs ch (n-1)
 
+
 propM_simpleRmlinkOK :: HalfsProp
 propM_simpleRmlinkOK _g dev = do
   fs <- mkNewFS dev >> mountOK dev
 
-  let exec     = execH "propM_simpleRmlinkOK" fs
-      f1       = rootPath </> "f1"
-      f2       = rootPath </> "f2"
-      exists p =
-        (elem (takeFileName p) . map fst)
-          `fmap` exec ("readDir " ++ p)
-                      (withDir (takeDirectory p) readDir)
+  let exec   = execH "propM_simpleRmlinkOK" fs
+      exists = existsP fs
+      f1     = rootPath </> "f1"
+      f2     = rootPath </> "f2"
 
   -- There should only be one block allocated for the root directory
   -- contents after the rmlink sequence below.
@@ -708,6 +776,22 @@ propM_simpleRenameOK _g dev = do
 
 --------------------------------------------------------------------------------
 -- Misc
+
+existsP' :: (HalfsCapable b t r l m) =>
+            HalfsState b r l m
+         -> Bool
+         -> FilePath
+         -> PropertyM m Bool
+existsP' fs eok p = liftM (elem (takeFileName p)) $ 
+  runH fs (withDir (takeDirectory p) readDir) >>= \ea -> case ea of
+    Left e   -> if eok then return [] else assert False >> return []
+    Right xs -> return (map fst xs)
+
+existsP  :: (HalfsCapable b t r l m) =>
+            HalfsState b r l m
+         -> FilePath
+         -> PropertyM m Bool
+existsP = flip existsP' False
 
 initDirEntNames :: [FilePath]
 initDirEntNames = [dotPath, dotdotPath]

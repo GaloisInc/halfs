@@ -123,9 +123,10 @@ mount :: (HalfsCapable b t r l m) =>
 mount dev usr grp rdirPerms = do
   esb <- decode `fmap` lift (bdReadBlock dev 0)
   case esb of
-    Left _msg -> 
+    Left _msg -> do
       -- Unable to read the superblock: for now, we just give up on the
       -- mount and provide a new filesystem.
+      logMsg "mount: unable to read superblock, creating new filesystem."
       newfs' dev usr grp rdirPerms
     Right sb -> do
       if unmountClean sb
@@ -134,18 +135,16 @@ mount dev usr grp rdirPerms = do
          sb' <- lift $ writeSB dev sb{ unmountClean = False }
          newHalfsState dev usr grp sb' bm
        else do
-         dummyState <- 
-           HalfsState dev usr grp Nothing
-             (error "Internal: fsck dummy state's blockmap is invalid")
-             (error "Internal: fsck dummy state's superblock is invalid")
-             `fmap` newLock                 -- filesystem lock
-             `ap`   newLockedRscRef 0       -- Locked file node count
-             `ap`   newLockedRscRef M.empty -- Locked map: inr -> DH
-             `ap`   newLockedRscRef M.empty -- Locked map: inr -> (l, refcnt)
-             `ap`   newLockedRscRef M.empty -- Locked map: inr -> (FH, opencnt)
-         erslt <- lift $ runHalfs dummyState $ do
-                    fsck dev sb usr grp
-                      >>= maybe (newfs' dev usr grp rdirPerms) return
+         dummy <- newHalfsState dev usr grp
+                    (error "Internal: fsck state's blockmap is invalid")
+                    (error "Internal: fsck state's superblock is invalid")
+         erslt <- lift $ runHalfs dummy $ do
+                    mfs <- fsck dev sb usr grp rdirPerms
+                    case mfs of
+                      Just fs -> return fs
+                      Nothing -> do
+                        logMsg "mount: fsck failed. Creating new filesystem."
+                        newfs' dev usr grp rdirPerms
          case erslt of
            Left err -> error $ "Internal error during fsck: " ++ show err
            Right fs -> return fs
@@ -192,8 +191,9 @@ fsck :: HalfsCapable b t r l m =>
      -> SuperBlock
      -> UserID
      -> GroupID
+     -> FileMode
      -> HalfsM b r l m (Maybe (HalfsState b r l m))
-fsck dev sb usr grp = do
+fsck dev sb usr grp rdirPerms = do
   used <- lift $ newUsedBitmap dev
   mbad <- fsck' dev sb used (rootDir sb) (rootDir sb)
   case mbad of
@@ -207,8 +207,8 @@ fsck dev sb usr grp = do
         , usedBlocks   = initFree - finalFree
         , fileCount    = fc
         }
-      logMsg $ "fsck: Complete. Bad inodes found: " ++ show bad
-      Just `fmap` newHalfsState dev usr grp sb bm
+      logMsg $ "fsck: OK. Bad inodes found: " ++ show (map unIR bad)
+      Just `fmap` mount dev usr grp rdirPerms
   where
     blks      = blockMapSizeBlks (bdNumBlocks dev) (bdBlockSize dev) 
     initFree  = bdNumBlocks dev - blks - 1 {- -1 for superblock -}
@@ -229,8 +229,8 @@ fsck' dev sb used pinr inr = do
       either return onValid eea
     --
     inv err = do
-      logMsg $ "fsck: corrupt inode " ++ show inr ++ ", marking bad. (Reason: "
-               ++ show err ++ ")"
+      logMsg $ "fsck: corrupt inode " ++ show (unIR inr) ++ ".\n\tReason: "
+               ++ show err
       if pinr /= inr
        then do
          -- We have a valid parent directory, so remove the dirent for this inr
@@ -238,14 +238,14 @@ fsck' dev sb used pinr inr = do
          contents <- readRef (dhContents pdh)
          case L.find (\de -> deInode de == inr) (M.elems contents) of
            Nothing -> do
-             logMsg "Internal fsck error: failed to find expected inode"
-             error  "Internal fsck error: failed to find expected inode"
+             logMsg "fsck internal: failed to find expected inode"
+             error  "fsck internal: failed to find expected inode"
            Just de -> do
              rmDirEnt_lckd pdh (deName de)
              syncDirectory_lckd pdh
          return $ Just ([inr], 0)
-       else
-         -- Critical failure: root directory couldn't be decoded
+       else do
+         logMsg "fsck: Critical failure: couldn't decode root directory" 
          return Nothing
     --
     val nd@Inode{ inoCont = cont, inoFileType = ftype } = do

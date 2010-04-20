@@ -837,7 +837,8 @@ truncUnalloc dev bm start len conts = do
   -- reconstitute them here by digging for contiguous address
   -- subsequences in allFreeBlks) before we can do better.
     
-  lift $ BM.unallocBlocks bm $ BM.Discontig $ map (`BM.Extent` 1) allFreeBlks
+  unless (null allFreeBlks) $ do
+    lift $ BM.unallocBlocks bm $ BM.Discontig $ map (`BM.Extent` 1) allFreeBlks
     
   return (retain', dirtyConts, numFreed)
 
