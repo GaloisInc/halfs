@@ -101,15 +101,13 @@ main = do
   uid <- (HP.UID . fromIntegral) `fmap` getRealUserID
   gid <- (HP.GID . fromIntegral) `fmap` getRealGroupID
 
-  when (not exists) $ do
-    execNoEnv $ newfs dev uid gid $
-      H.FileMode
-        [H.Read, H.Write, H.Execute]
-        [H.Read,          H.Execute]
-        [                          ]
-    return ()
+  let perms = H.FileMode [H.Read, H.Write, H.Execute]
+                         [H.Read,          H.Execute]
+                         [                          ]
 
-  fs <- execNoEnv $ mount dev uid gid
+  when (not exists) $ execNoEnv (newfs dev uid gid perms) >> return ()
+  fs <- execNoEnv $ mount dev uid gid perms
+
   let withLog act = case optLogFile opts of
                       Nothing -> act $ const $ return ()
                       Just lp -> System.IO.withFile lp WriteMode $ \h ->
