@@ -791,9 +791,9 @@ propM_profileMe = (,) stdArgs{maxSuccess = 1} $ monadicIO $ go $ \dev -> do
   where
     fn       = rootPath </> "theFile"
     go f     = run (memDev g) >>= (`whenDev` run . bdShutdown) f
-    g        = BDGeom 65536 4096             -- 256 MiB FS
+    g        = BDGeom 32768 4096             -- 128 MiB FS
     chunk    = BS.replicate 4096 0x42        -- 4k chunk
-    addrs    = [ i * 4096 | i <- [0..32767]] -- lower 128 MiB addrs
+    addrs    = [ i * 4096 | i <- [0..4095]] -- lower 16 MiB addrs
 
 
 --------------------------------------------------------------------------------

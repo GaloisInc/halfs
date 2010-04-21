@@ -433,7 +433,7 @@ writeStream_lckd :: HalfsCapable b t r l m =>
                  -> ByteString         -- ^ Data to write
                  -> HalfsM b r l m ()
 writeStream_lckd _ _ _ _ False bytes | 0 == BS.length bytes = return ()
-writeStream_lckd dev bm startIR start trunc bytes           = do
+writeStream_lckd dev bm startIR start trunc bytes           = {-# SCC "myWriteStream" #-} do
   -- ====================== Begin inode critical section ======================
 
   -- NB: The implementation currently 'flattens' Contig/Discontig block groups
@@ -905,7 +905,7 @@ expandConts :: HalfsCapable b t r l m =>
                BlockDevice m -> Cont -> HalfsM b r l m [Cont]
 expandConts dev start@Cont{ continuation = cr }
   | cr == nilContRef = return [start]
-  | otherwise        = (start:) `fmap` (drefCont dev cr >>= expandConts dev)
+  | otherwise        = {-# SCC "myExpandConts" #-} (start:) `fmap` (drefCont dev cr >>= expandConts dev)
 
 drefCont :: HalfsCapable b t r l m =>
             BlockDevice m -> ContRef -> HalfsM b r l m Cont
