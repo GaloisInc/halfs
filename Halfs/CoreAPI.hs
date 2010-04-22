@@ -227,7 +227,7 @@ fsck' :: HalfsCapable b t r l m =>
       -> InodeRef
       -> HalfsM b r l m (Maybe ([InodeRef], Word64))
 fsck' dev sb used pinr inr = do
-  whenValid (drefInode dev inr) val
+  whenValid (drefInode inr) val
   where
     -- Failed operations result in this inode being marked invalid
     whenValid act onValid = do
@@ -256,7 +256,7 @@ fsck' dev sb used pinr inr = do
     --
     val nd@Inode{ inoCont = cont, inoFileType = ftype } = do
       assert (inoAddress nd == inr) $ return ()
-      whenValid (drop 1 `fmap` expandConts dev Nothing cont) $ \conts -> do 
+      whenValid (drop 1 `fmap` expandConts Nothing cont) $ \conts -> do 
         let markUsed = mapM_ (setBit used) $
                          unIR inr : map (unCR . address) conts
         case ftype of
@@ -324,9 +324,8 @@ readDir dh = do
                     =<< fmap deInode `fmap` readRef (dhContents dh)
     thisStat   <- fileStat inr
     parentStat <- fileStat =<< do
-      dev <- hasks hsBlockDev
       withLockedInode inr $ do
-        p <- inoParent `fmap` drefInode dev inr
+        p <- inoParent `fmap` drefInode inr
         if p == nilInodeRef
          then fmap rootDir . readRef =<< hasks hsSuperBlock
          else return p
@@ -426,13 +425,11 @@ setFileSize :: (HalfsCapable b t r l m) =>
                FilePath -> Word64 -> HalfsM b r l m ()
 setFileSize fp len = 
   withFile fp (fofWriteOnly True) $ \fh -> do
-    dev <- hasks hsBlockDev
-    bm  <- hasks hsBlockMap
     withLock (fhLock fh) $ do 
       inr <- getFHINR_lckd fh
-      let wr  = writeStream_lckd dev bm inr
+      let wr  = writeStream_lckd inr
       withLockedInode inr $ do
-        sz <- fsSize `fmap` fileStat_lckd dev inr
+        sz <- fsSize `fmap` fileStat_lckd inr
         if sz > len
           then wr len True BS.empty                   -- truncate at len
           else wr sz False $ bsReplicate (len - sz) 0 -- pad up to len

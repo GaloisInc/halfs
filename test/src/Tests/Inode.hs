@@ -89,6 +89,7 @@ propM_basicWRWR _g dev = do
   exec "Stream trunc to 1 byte" $ writeStream rdirIR 0 True dummyByte
   checkWriteMD t0 1 2 -- expecting 1 inode block and 1 data block
 
+{-
   -- Expected error: write past end of 1-byte stream (beyond block boundary)
   e0 <- runH fs $ writeStream rdirIR (bdBlockSize dev) False testData
   case e0 of
@@ -101,9 +102,11 @@ propM_basicWRWR _g dev = do
     Left (HE_InvalidStreamIndex idx) -> assert (idx == 2)
     _                                -> assert False
 
+-}
   (_, _, api, apc) <- exec "Obtaining sizes" $ getSizes (bdBlockSize dev)
   let expBlks = calcExpBlockCount (bdBlockSize dev) api apc dataSz
 
+{-
   -- Check truncation to 0 bytes
   t1 <- time
   exec "Stream trunc to 0 bytes" $ writeStream rdirIR 0 True BS.empty
@@ -119,6 +122,8 @@ propM_basicWRWR _g dev = do
   assert (BS.length bs1 == BS.length testData)
   assert (bs1 == testData)
 
+-}
+{-
   -- Recheck truncation to 0 bytes
   t4 <- time
   exec "Stream trunc to 0 bytes" $ writeStream rdirIR 0 True BS.empty
@@ -129,25 +134,38 @@ propM_basicWRWR _g dev = do
   exec "Non-truncating write" $ writeStream rdirIR 0 False testData
   checkWriteMD t5 dataSzI expBlks
 
+  trace ("here0") $ do
   -- Non-truncating partial overwrite of new data & read-back
-  forAllM (choose (1, dataSz `div` 2))     $ \overwriteSz -> do 
-  forAllM (choose (0, dataSz `div` 2 - 1)) $ \startByte   -> do
+--  forAllM (choose (1, dataSz `div` 2))     $ \overwriteSz -> do 
+  let overwriteSz = 5186
+  let startByte   = 13677
+--   forAllM (choose (0, dataSz `div` 2 - 1)) $ \startByte   -> do
   forAllM (printableBytes overwriteSz)     $ \newData     -> do
   t6 <- time
+
+  trace ("here0.5: newData has length " ++ show (BS.length newData) ++ ", startByte = "
+         ++ show startByte) $ do
+
   exec "Non-trunc overwrite" $
     writeStream rdirIR (fromIntegral startByte) False newData
+  trace ("here1") $ do
   checkWriteMD t6 dataSzI expBlks
+  trace ("here2") $ do
   t7  <- time
   bs2 <- exec "Readback 2" $ readStream rdirIR 0 Nothing
+  trace ("here3") $ do
   checkReadMD t7 dataSz expBlks
   let expected = bsTake startByte testData
                  `BS.append`
                  newData
                  `BS.append`
                  bsDrop (startByte + overwriteSz) testData
+  trace ("here4") $ do
   assert (BS.length bs2 == BS.length expected)
   assert (bs2 == expected)
+-}
 
+{-
   -- Check truncation to a single byte again w/ read-back
   t8 <- time
   exec "Stream trunc to 1 byte" $ writeStream rdirIR 0 True dummyByte
@@ -156,6 +174,8 @@ propM_basicWRWR _g dev = do
   bs3 <- exec "Readback 3" $ readStream rdirIR 0 Nothing
   checkReadMD t9 1 2
   assert (bs3 == dummyByte)
+-}
+  return ()
   where
     dummyByte = BS.singleton 0
 
@@ -344,16 +364,12 @@ withData dev f = do
       hi        = maxBlocks `div` 4
       fbr       = FillBlocks `fmap` choose (lo, hi)
       scr       = SpillCnt   `fmap` choose (0, safeToInt nAddrs)
-  forAllM fbr $ \(FillBlocks fillBlocks) -> do
-  forAllM scr $ \(SpillCnt   spillCnt)   -> do
+--   forAllM fbr $ \(FillBlocks fillBlocks) -> do
+--   forAllM scr $ \(SpillCnt   spillCnt)   -> do
   -- fillBlocks is the number of blocks to fill on the write (1/8 - 1/4 of dev)
   -- spillCnt is the number of blocks to write into the last cont in the chain
 --  let dataSz = fillBlocks * safeToInt (bdBlockSize dev) + spillCnt
-
--- tmp
-  let dataSz = let fullConts = 2 in safeToInt (bdBlockSize dev) * (35 + fullConts * 57 + 1) 
--- tmp 
-
+  let dataSz = 35 * 512 + 19 * 512
   forAllM (printableBytes dataSz) (f dataSz)
           
 checkInodeMetadata :: (HalfsCapable b t r l m, Integral a) =>

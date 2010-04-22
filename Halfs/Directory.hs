@@ -132,10 +132,9 @@ removeDirectory mdname inr = do
       -- the parent directory.
       case mdname of
         Nothing    -> return ()
-        Just dname -> do 
-          dev <- hasks hsBlockDev
+        Just dname -> 
           withLockedInode inr $ do
-            pinr <- inoParent `fmap` drefInode dev inr
+            pinr <- inoParent `fmap` drefInode inr
             pdh  <- lookupRM pinr dhMapRef >>= maybe (newDirHandle pinr) return
             rmDirEnt pdh dname
     
