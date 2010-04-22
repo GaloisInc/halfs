@@ -28,7 +28,7 @@ import Tests.Instances           (printableBytes)
 import Tests.Types
 import Tests.Utils
 
--- import Debug.Trace
+import Debug.Trace
 
 
 --------------------------------------------------------------------------------
@@ -37,15 +37,15 @@ import Tests.Utils
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [ -- Inode module invariants
-    exec 10 "Inode module invariants" propM_inodeModuleInvs
-  , -- Inode stream write/read/(over)write/read property
-    exec 10 "Basic WRWR" propM_basicWRWR
-  , -- Inode stream write/read/(truncating)write/read property
-    exec 10 "Truncating WRWR" propM_truncWRWR
-  , -- Inode length-specific stream write/read
-    exec 10 "Length-specific WR" propM_lengthWR
-  , -- Inode single reader/writer lock testing
-    exec 10 "Inode single reader/write mutex" propM_inodeMutexOK
+--     exec 10 "Inode module invariants" propM_inodeModuleInvs
+--   , -- Inode stream write/read/(over)write/read property
+    exec 1 "Basic WRWR" propM_basicWRWR
+--   , -- Inode stream write/read/(truncating)write/read property
+--     exec 10 "Truncating WRWR" propM_truncWRWR
+--   , -- Inode length-specific stream write/read
+--     exec 10 "Length-specific WR" propM_lengthWR
+--   , -- Inode single reader/writer lock testing
+--     exec 10 "Inode single reader/write mutex" propM_inodeMutexOK
   ]
   where
     exec = mkMemDevExec quick "Inode"
@@ -88,7 +88,7 @@ propM_basicWRWR _g dev = do
   t0 <- time
   exec "Stream trunc to 1 byte" $ writeStream rdirIR 0 True dummyByte
   checkWriteMD t0 1 2 -- expecting 1 inode block and 1 data block
- 
+
   -- Expected error: write past end of 1-byte stream (beyond block boundary)
   e0 <- runH fs $ writeStream rdirIR (bdBlockSize dev) False testData
   case e0 of
@@ -348,7 +348,12 @@ withData dev f = do
   forAllM scr $ \(SpillCnt   spillCnt)   -> do
   -- fillBlocks is the number of blocks to fill on the write (1/8 - 1/4 of dev)
   -- spillCnt is the number of blocks to write into the last cont in the chain
-  let dataSz = fillBlocks * safeToInt (bdBlockSize dev) + spillCnt
+--  let dataSz = fillBlocks * safeToInt (bdBlockSize dev) + spillCnt
+
+-- tmp
+  let dataSz = let fullConts = 2 in safeToInt (bdBlockSize dev) * (35 + fullConts * 57 + 1) 
+-- tmp 
+
   forAllM (printableBytes dataSz) (f dataSz)
           
 checkInodeMetadata :: (HalfsCapable b t r l m, Integral a) =>

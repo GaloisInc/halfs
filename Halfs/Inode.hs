@@ -68,10 +68,10 @@ import Halfs.Utils
 
 import System.Device.BlockDevice
 
---import Debug.Trace
+import Debug.Trace
 dbug :: String -> a -> a
-dbug _ = id
---dbug = trace
+--dbug _ = id
+dbug = trace
 
 type HalfsM b r l m a = HalfsT HalfsError (Maybe (HalfsState b r l m)) m a
 
@@ -111,20 +111,20 @@ nilContRef = CR 0
 truncSentinel :: Word8
 truncSentinel = 0xBA
 
--- | The sentinel byte written to the padding region at the end of BlockCarriers
+-- | The sentinel byte written to the padded region at the end of Inodes/Conts
 padSentinel :: Word8
 padSentinel = 0xAD
 
 -- We semi-arbitrarily state that an Inode must be capable of maintaining a
--- minimum of 39 block addresses in its embedded Cont while the Cont must be
+-- minimum of 35 block addresses in its embedded Cont while the Cont must be
 -- capable of maintaining 57 block addresses.  These values, together with
 -- specific padding values for inodes and conts (4 and 0, respectively), give us
 -- a minimum inode AND cont size of 512 bytes each (in the IO monad variant,
 -- which uses the our Serialize instance for the UTCTime when writing the time
 -- fields).
 --
--- These can be adjusted as needed according to inode metadata sizes, but be
--- sure to ensure that (minimalInodeSize =<< getTime) and minimalContSize yield
+-- These can be adjusted as needed according to inode metadata sizes, but it's
+-- very important that (minimalInodeSize =<< getTime) and minimalContSize yield
 -- the same value!
 
 -- | The size, in bytes, of the padding region at the end of Inodes
@@ -136,7 +136,7 @@ cPadSize :: Int
 cPadSize = 0
 
 minInodeBlocks :: Word64
-minInodeBlocks = 37
+minInodeBlocks = 35
 
 minContBlocks :: Word64
 minContBlocks = 57
@@ -146,28 +146,32 @@ minContBlocks = 57
 -- references and use its continuation field to allow multiple runs of block
 -- addresses.
 data (Eq t, Ord t, Serialize t) => Inode t = Inode
-  { inoParent        :: InodeRef -- ^ block addr of parent directory inode:
-                                 --   This is nilInodeRef for the root
-                                 --   directory inode
-  -- begin fstat metadata
-  , inoAddress       :: InodeRef -- ^ block addr of this inode
-  , inoFileSize      :: Word64
-  , inoAllocBlocks   :: Word64   -- ^ number of blocks allocated to this inode
-                                 --   (includes its own allocated block, blocks
-                                 --   allocated for Conts, and and all blocks in
-                                 --   the cont chain itself)
-  , inoFileType      :: FileType 
-  , inoMode          :: FileMode
-  , inoNumLinks      :: Word64   -- ^ number of hardlinks to this inode
-  , inoCreateTime    :: t        -- ^ time of creation
-  , inoModifyTime    :: t        -- ^ time of last data modification
-  , inoAccessTime    :: t        -- ^ time of last data access
-  , inoChangeTime    :: t        -- ^ time of last change to inode data 
-  , inoUser          :: UserID   -- ^ userid of inode's owner
-  , inoGroup         :: GroupID  -- ^ groupid of inode's owner
+  { inoParent      :: InodeRef          -- ^ block addr of parent directory
+                                        -- inode: This is nilInodeRef for the
+                                        -- root directory inode
+
+  , inoLastCR      :: (ContRef, Word64) -- ^ The last-accessed CR and its cont
+                                        -- idx.  For the "faster end-of-stream
+                                        -- access" hack.
+    -- begin fstat metadata
+  , inoAddress     :: InodeRef -- ^ block addr of this inode
+  , inoFileSize    :: Word64   -- ^ in bytes
+  , inoAllocBlocks :: Word64   -- ^ number of blocks allocated to this inode
+                               --   (includes its own allocated block, blocks
+                               --   allocated for Conts, and and all blocks in
+                               --   the cont chain itself)
+  , inoFileType    :: FileType 
+  , inoMode        :: FileMode
+  , inoNumLinks    :: Word64   -- ^ number of hardlinks to this inode
+  , inoCreateTime  :: t        -- ^ time of creation
+  , inoModifyTime  :: t        -- ^ time of last data modification
+  , inoAccessTime  :: t        -- ^ time of last data access
+  , inoChangeTime  :: t        -- ^ time of last change to inode data 
+  , inoUser        :: UserID   -- ^ userid of inode's owner
+  , inoGroup       :: GroupID  -- ^ groupid of inode's owner
   -- end fstat metadata
 
-  , inoCont          :: Cont  
+  , inoCont          :: Cont   -- The "embedded" continuation  
   }
   deriving (Show, Eq)
 
@@ -198,7 +202,7 @@ minimalInodeSize t = do
     let e = emptyInode minInodeBlocks t RegularFile (FileMode [] [] [])
                        nilInodeRef nilInodeRef rootUser rootGroup
         c = inoCont e
-    in e{ inoCont = c{ blockAddrs = replicate (safeToInt minInodeBlocks) 0 } }
+    in e{ inoCont   = c{ blockAddrs = replicate (safeToInt minInodeBlocks) 0 } }
 
 -- | The size of a minimal Cont structure when serialized, in bytes.
 minimalContSize :: Monad m => m (Word64)
@@ -273,9 +277,12 @@ buildEmptyInode :: (Serialize t, Timed t m, Show t) =>
                 -> GroupID       -- ^ This inode's owner's groupid
                 -> m (Inode t)
 buildEmptyInode bd ftype fmode me mommy usr grp = do 
-  now     <- getTime
-  minSize <- minimalInodeSize =<< return now
-  nAddrs  <- computeNumAddrs (bdBlockSize bd) minInodeBlocks minSize
+  now       <- getTime
+  minSize   <- minimalInodeSize =<< return now
+
+  minimalContSize >>= (`assert` return ()) . (==) minSize
+
+  nAddrs    <- computeNumAddrs (bdBlockSize bd) minInodeBlocks minSize
   return $ emptyInode nAddrs now ftype fmode me mommy usr grp
 
 emptyInode :: (Ord t, Serialize t) => 
@@ -291,6 +298,7 @@ emptyInode :: (Ord t, Serialize t) =>
 emptyInode nAddrs now ftype fmode me mommy usr grp =
   Inode
   { inoParent       = mommy
+  , inoLastCR       = (nilContRef, 0)
   , inoAddress      = me
   , inoFileSize     = 0
   , inoAllocBlocks  = 1
@@ -360,7 +368,7 @@ readStream startIR start mlen =
    then return BS.empty
    else do 
      dbug ("==== readStream begin ===") $ do
-     conts                         <- expandConts dev (inoCont startInode)
+     conts                         <- expandConts dev Nothing (inoCont startInode)
      (sContIdx, sBlkOff, sByteOff) <- getStreamIdx bs fileSz start
      dbug ("start = " ++ show start) $ do
      dbug ("(sContIdx, sBlkOff, sByteOff) = " ++
@@ -443,21 +451,13 @@ writeStream_lckd dev bm startIR start trunc bytes           = do
   -- as needed to reduce the number of unallocation actions required, but we'll
   -- leave this as a TODO for now.
 
-  dbug ("==== writeStream begin ===") $ do
-
   startInode     <- drefInode dev startIR
   let fileSz      = inoFileSize startInode
   (_, _, _, apc) <- getSizes bs
 
-  -- NB: expandConts is probably not viable once cont chains get large, but the
-  -- continuation scheme in general may not be viable.  Revisit after stuff is
-  -- working.
-  conts0                        <- expandConts dev (inoCont startInode)
-  (sContIdx, sBlkOff, sByteOff) <- getStreamIdx bs fileSz start
+  conts0_removeMe <- expandConts dev Nothing (inoCont startInode)
 
-  dbug ("(sContIdx, sBlkOff, sByteOff) = " ++ show (sContIdx, sBlkOff, sByteOff)) $ do
-  dbug ("conts0                        = " ++ show conts0                       ) $ do
-  dbug ("blockCount stCont0            = " ++ show (blockCount (conts0 !! safeToInt sContIdx))) $ do
+  (sContIdx, sBlkOff, sByteOff) <- getStreamIdx bs fileSz start
 
   let newFileSz    = if trunc then start + len else max (start + len) fileSz
       fileSzRndBlk = (fileSz `divCeil` bs) * bs
@@ -465,20 +465,43 @@ writeStream_lckd dev bm startIR start trunc bytes           = do
                       then newFileSz - fileSzRndBlk
                       else 0 
       blksToAlloc  = bytesToAlloc `divCeil` bs
-      contsToAlloc = (blksToAlloc - availBlks (last conts0)) `divCeil` apc
+      contsToAlloc = (blksToAlloc - availBlks (last conts0_removeMe)) `divCeil` apc
       availBlks c  = numAddrs c - blockCount c
 
-  dbug ("len          = " ++ show len)           $ do
-  dbug ("trunc        = " ++ show trunc)         $ do
-  dbug ("fileSz       = " ++ show fileSz)        $ do
-  dbug ("newFileSz    = " ++ show newFileSz)     $ do
-  dbug ("fileSzRndBlk = " ++ show fileSzRndBlk)  $ do
-  dbug ("bytesToAlloc = " ++ show bytesToAlloc)  $ do
-  dbug ("blksToAlloc  = " ++ show blksToAlloc)   $ do
-  dbug ("contsToAlloc = " ++ show contsToAlloc)  $ do
+  dbug ("writeStream: " ++ show (sContIdx, sBlkOff, sByteOff)
+        ++ " len = " ++ show len ++ ", trunc = " ++ show trunc
+        ++ ", fileSz/newFileSz = " ++ show fileSz ++ "/" ++ show newFileSz
+        ++ ", toAlloc(bytes/blks/conts) = " ++ show bytesToAlloc ++ "/"
+        ++ show blksToAlloc ++ "/" ++ show contsToAlloc) $ do
+
+--   dbug ("len          = " ++ show len)           $ do
+--   dbug ("trunc        = " ++ show trunc)         $ do
+--   dbug ("fileSz       = " ++ show fileSz)        $ do
+--   dbug ("newFileSz    = " ++ show newFileSz)     $ do
+--   dbug ("fileSzRndBlk = " ++ show fileSzRndBlk)  $ do
+--   dbug ("bytesToAlloc = " ++ show bytesToAlloc)  $ do
+--   dbug ("blksToAlloc  = " ++ show blksToAlloc)   $ do
+--   dbug ("contsToAlloc = " ++ show contsToAlloc)  $ do
+
+  -- new cont stuff
+
+  startCont <- fmap last $ do
+    (n, c) <- case inoLastCR startInode of
+      (lcr, lci) | lcr == nilContRef || lci > sContIdx ->
+                     return (sContIdx + 1, inoCont startInode)
+                 | otherwise ->
+                     trace ("XXX (lcr,lci) = " ++ show (lcr,lci)) $ do
+                     (,) (lci - sContIdx + 1) `fmap` drefCont dev lcr
+    trace ("n = " ++ show n) $ do
+    expandConts dev (Just n) c    
+  dbug ("TMP: startCont = " ++ show (address startCont)
+        ++ ", map address (conts0_removeMe) = " ++ show (map address conts0_removeMe)
+       ) $ do
+
+  -- new cont stuff
 
   (conts1, allocDirtyConts) <-
-    allocFill dev bm availBlks blksToAlloc contsToAlloc conts0
+    allocFill dev bm availBlks blksToAlloc contsToAlloc conts0_removeMe
 
   let stCont1 = conts1 !! safeToInt sContIdx
 
@@ -528,7 +551,7 @@ writeStream_lckd dev bm startIR start trunc bytes           = do
                      Just c  -> startInode{ inoCont = c }
 
   -- Persist all non-embedded, dirty conts
-  dbug ("dirtyConts = " ++ show dirtyConts) $ return ()
+  -- dbug ("dirtyConts = " ++ show dirtyConts) $ return ()
   forM_ dirtyConts $ \c -> when (not $ isEmbedded c) $ lift $ writeCont dev c
 
   -- Metadata stuff
@@ -544,13 +567,14 @@ writeStream_lckd dev bm startIR start trunc bytes           = do
   -- Finally, update inode metadata and persist it
   now <- getTime 
   lift $ writeInode dev $
-    dirtyInode { inoFileSize    = newFileSz
+    dirtyInode { inoLastCR      = (address startCont, sContIdx)
+               , inoFileSize    = newFileSz
                , inoAllocBlocks = newBlockCount
                , inoAccessTime  = now
                , inoModifyTime  = now
                , inoChangeTime  = now
                }
-  dbug ("==== writeStream end ===") $ return ()
+  dbug ("writeStream: end") $ return ()
   -- ======================= End inode critical section =======================
   where
     isEmbedded  = (==) nilContRef . address
@@ -635,7 +659,7 @@ freeInode inr@(IR addr) =
   withLockedInode inr $ do
     dev <- hasks hsBlockDev
     bm  <- hasks hsBlockMap
-    conts <- expandConts dev =<< inoCont `fmap` drefInode dev inr
+    conts <- expandConts dev Nothing =<< inoCont `fmap` drefInode dev inr
     lift $ BM.unallocBlocks bm $ BM.Discontig $ map (`BM.Extent` 1) $
       concatMap blockAddrs conts ++ map (unCR . address) (tail conts)
       -- ^ all blocks in all conts; ^ blocks for non-embedded cont storage
@@ -826,6 +850,7 @@ truncUnalloc dev bm start len conts = do
             }
       ]
 
+{-
   dbug ("truncUnalloc: keepBlkCnt  = " ++ show keepBlkCnt)  $ return ()
   dbug ("truncUnalloc: retain      = " ++ show retain)      $ return ()
   dbug ("truncUnalloc: toFree      = " ++ show toFree)      $ return ()
@@ -833,6 +858,7 @@ truncUnalloc dev bm start len conts = do
   dbug ("truncUnalloc: retain'     = " ++ show retain')     $ return ()
   dbug ("truncUnalloc: freeNodes   = " ++ show toFree)      $ return ()
   dbug ("truncUnalloc: allFreeBlks = " ++ show allFreeBlks) $ return ()
+-}
 
   -- Freeing all of the blocks this way (as unit extents) is ugly and
   -- inefficient, but we need to be tracking BlockGroups (or
@@ -901,11 +927,25 @@ writeInode dev n = bdWriteBlock dev (unIR $ inoAddress n) (encode n)
 -- long continuation chain): we read the entire chain when examination of the
 -- stream from the start to end offsets would be sufficient.
 
+{-
 expandConts :: HalfsCapable b t r l m =>
                BlockDevice m -> Cont -> HalfsM b r l m [Cont]
 expandConts dev start@Cont{ continuation = cr }
   | cr == nilContRef = return [start]
   | otherwise        = (start:) `fmap` (drefCont dev cr >>= expandConts dev)
+-}
+
+expandConts :: HalfsCapable b t r l m =>
+      BlockDevice m -> Maybe Word64 -> Cont -> HalfsM b r l m [Cont]
+expandConts dev (Just bnd) start@Cont{ continuation = cr }
+  | bnd == 0          = return []
+  | cr  == nilContRef = return [start]
+  | otherwise         = do
+      (start:) `fmap` (drefCont dev cr >>= expandConts dev (Just (bnd - 1)))
+expandConts dev Nothing    start@Cont{ continuation = cr }
+  | cr == nilContRef = return [start]
+  | otherwise        = do
+      (start:) `fmap` (drefCont dev cr >>= expandConts dev Nothing)
 
 drefCont :: HalfsCapable b t r l m =>
             BlockDevice m -> ContRef -> HalfsM b r l m Cont
@@ -1016,6 +1056,7 @@ instance (Show t, Eq t, Ord t, Serialize t) => Serialize (Inode t) where
     putByteString $ magic1
 
     put           $ inoParent n           
+    put           $ inoLastCR n
     put           $ inoAddress n          
     putWord64be   $ inoFileSize n
     putWord64be   $ inoAllocBlocks n 
@@ -1047,6 +1088,7 @@ instance (Show t, Eq t, Ord t, Serialize t) => Serialize (Inode t) where
     checkMagic magic1
 
     par   <- get
+    lcr   <- get
     addr  <- get
     fsz   <- getWord64be
     blks  <- getWord64be
@@ -1075,6 +1117,7 @@ instance (Show t, Eq t, Ord t, Serialize t) => Serialize (Inode t) where
 
     return Inode
       { inoParent       = par
+      , inoLastCR       = lcr
       , inoAddress      = addr
       , inoFileSize     = fsz
       , inoAllocBlocks  = blks
@@ -1141,7 +1184,6 @@ instance Serialize Cont where
 
     let (numBlocks, check) = numBlockBytes `divMod` refSize
     unless (check == 0) $ fail "Cont: Bad remaining byte count for block list."
-
     unless (not isEmbedded && numBlocks >= minContBlocks ||
             isEmbedded     && numBlocks >= minInodeBlocks) $ 
       fail "Cont: Not enough space left for minimum number of blocks."

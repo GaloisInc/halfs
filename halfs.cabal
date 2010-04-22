@@ -38,6 +38,7 @@ library
                     System.Device.Memory,
                     System.Device.ST
   GHC-Options:      -O2 -Wall -fno-ignore-asserts -threaded
+  ghc-prof-options: -prof -auto-all
   extensions:       FlexibleContexts, FlexibleInstances,
                     ScopedTypeVariables,
                     GeneralizedNewtypeDeriving,
@@ -55,6 +56,7 @@ executable halfs-tests
   hs-source-dirs: test/src . 
   main-is: Driver.hs
   ghc-options: -O2 -Wall -fno-ignore-asserts -threaded 
+  ghc-prof-options: -prof -auto-all
 
 executable halfs
   build-depends:    HFuse >= 0.2.2
@@ -62,3 +64,4 @@ executable halfs
   hs-source-dirs: test/src fuse/src .
   main-is: Halfs.hs
   ghc-options: -O2 -Wall -fno-ignore-asserts -threaded
+  ghc-prof-options: -prof -auto-all

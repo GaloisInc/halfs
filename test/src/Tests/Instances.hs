@@ -206,6 +206,7 @@ instance (Arbitrary a, Ord a, Serialize a, Show a) => Arbitrary (Inode a) where
                         =<< minimalInodeSize createTm
     Inode
       <$> IR `fmap` arbitrary                -- inoParent
+      <*> return (nilContRef, 0)             -- inoLastCR
       <*> IR `fmap` arbitrary                -- inoAddress
       <*> arbitrary                          -- inoFileSize
       <*> arbitrary                          -- inoAllocBlocks

@@ -33,7 +33,7 @@ import qualified Halfs.File as F
 
 import System.Device.BlockDevice
 
--- import Debug.Trace
+import Debug.Trace
 
 type HalfsM b r l m a = HalfsT HalfsError (Maybe (HalfsState b r l m)) m a
 
@@ -93,6 +93,7 @@ newfs dev uid gid rdirPerms = do
       nilInodeRef
       uid
       gid
+  trace ("BS.length dirInode = " ++ show (BS.length dirInode)) $ do
   assert (BS.length dirInode == fromIntegral (bdBlockSize dev)) $ do
   lift $ bdWriteBlock dev rdirAddr dirInode
 
@@ -255,7 +256,7 @@ fsck' dev sb used pinr inr = do
     --
     val nd@Inode{ inoCont = cont, inoFileType = ftype } = do
       assert (inoAddress nd == inr) $ return ()
-      whenValid (drop 1 `fmap` expandConts dev cont) $ \conts -> do 
+      whenValid (drop 1 `fmap` expandConts dev Nothing cont) $ \conts -> do 
         let markUsed = mapM_ (setBit used) $
                          unIR inr : map (unCR . address) conts
         case ftype of
