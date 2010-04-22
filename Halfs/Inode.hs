@@ -448,8 +448,9 @@ writeStream_lckd startIR start trunc bytes              = do
   -- as needed to reduce the number of unallocation actions required, but we'll
   -- leave this as a TODO for now.
 
-  dev            <- hasks hsBlockDev
-  startInode     <- drefInode startIR
+  startInode@Inode{ inoLastCont = lcInfo } <- drefInode startIR
+  dev                                      <- hasks hsBlockDev
+
   let fileSz      = inoFileSize startInode
       bs          = bdBlockSize dev
   (_, _, _, apc) <- getSizes bs
@@ -484,28 +485,32 @@ writeStream_lckd startIR start trunc bytes              = do
 --   dbug ("blksToAlloc  = " ++ show blksToAlloc)   $ do
 --   dbug ("contsToAlloc = " ++ show contsToAlloc)  $ do
 
-  dbug ("inoLastCont startInode = " ++ show (inoLastCont startInode) ) $ do
-  stCont0 <- do 
-    (count, c) <- case inoLastCont startInode of
-                    (lcr, lci)
-                      | lcr == nilContRef || lci > sContIdx ->
-                          trace ("case 1") $ do
-                          return ({-if sContIdx > 1 then sContIdx - 1 else 1-} sContIdx+1, inoCont startInode)
-                      | otherwise -> -- lci <= sContIdx
-                          trace ("case 3") $ do
-                          (,) (sContIdx - lci + 1) `fmap` drefCont lcr
-    lastCont (Just count) c
+  dbug ("inoLastCont startInode = " ++ show (lcInfo) ) $ do
 
-  trace ("stCont0 = " ++ show stCont0) $ return ()
-  stCont1 <- do
-    st <- allocFill availBlks blksToAlloc contsToAlloc stCont0
-    let lastContIdx = snd (inoLastCont startInode)
+  -- Begin at the last-written Cont if it makes sense to do so
+  initCont <- do 
+    (cnt, c) <- case lcInfo of
+                  (lcr, lci)
+                    | lcr == nilContRef || lci > sContIdx ->
+                        trace ("case 1") $ do
+                        return (sContIdx+1, inoCont startInode)
+                    | otherwise ->
+                      (,) (sContIdx - lci + 1) `fmap` drefCont lcr
+    lastCont (Just cnt) c
+
+  trace ("initCont = " ++ show initCont) $ return ()
+  (stCont1, membedded) <- do
+    st <- allocFill availBlks blksToAlloc contsToAlloc initCont
+    let attachEmbed = flip (,) (if isEmbedded st then Just st else Nothing)
+        lastContIdx = snd lcInfo
     trace ("lastContIdx = " ++ show lastContIdx) $ return ()
     trace ("sContIdx = " ++ show sContIdx) $ return () 
     
+    -- Handle "rollover" for when we just allocated beyond a Cont boundary. 
     if lastContIdx < sContIdx
-     then (last . \x -> trace (show x) x) `fmap` expandConts (Just $ sContIdx - lastContIdx + 1) st
-     else return st
+     then attachEmbed `fmap` lastCont (Just $ sContIdx - lastContIdx + 1) st
+--(last . \x -> trace (show x) x) `fmap` expandConts (Just $ sContIdx - lastContIdx + 1) st
+     else return $ attachEmbed st
   
   trace ("stCont1 = " ++ show stCont1) $ return () 
 
@@ -593,12 +598,12 @@ writeStream_lckd startIR start trunc bytes              = do
     let eCont = last expanded
     dbug ("eCont = " ++ show eCont) $ return () 
 
-    let lastCont = if eContIdx == sContIdx
-                    then (address stCont2, sContIdx)
-                    else error "eContIdx /= sContIdx not yet supported"
+    let lcInfo' = if eContIdx == sContIdx
+                   then (address stCont2, sContIdx)
+                   else error "eContIdx /= sContIdx not yet supported"
 
     let dirtyInode = startInode
-                      { inoLastCont    = lastCont
+                      { inoLastCont    = lcInfo'
                       , inoFileSize    = newFileSz
                       , inoAllocBlocks = inoAllocBlocks startInode
                                          + blksToAlloc
@@ -607,9 +612,7 @@ writeStream_lckd startIR start trunc bytes              = do
                       , inoAccessTime  = now
                       , inoModifyTime  = now
                       , inoChangeTime  = now
-                      , inoCont        = if isEmbedded stCont2
-                                          then stCont2
-                                          else inoCont startInode
+                      , inoCont        = maybe (inoCont startInode) id membedded 
 
 {-
                         case find isEmbedded dirtyConts of -- TODO: fixme?
