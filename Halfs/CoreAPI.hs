@@ -93,7 +93,6 @@ newfs dev uid gid rdirPerms = do
       nilInodeRef
       uid
       gid
-  trace ("BS.length dirInode = " ++ show (BS.length dirInode)) $ do
   assert (BS.length dirInode == fromIntegral (bdBlockSize dev)) $ do
   lift $ bdWriteBlock dev rdirAddr dirInode
 

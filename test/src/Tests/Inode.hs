@@ -7,10 +7,11 @@ where
 
 import Control.Concurrent
 import Data.ByteString (ByteString)
-import qualified Data.ByteString as BS
 import Prelude hiding (read)
 import Test.QuickCheck hiding (numTests)
 import Test.QuickCheck.Monadic
+import qualified Data.ByteString   as BS
+import qualified Control.Exception as CE
 
 import Halfs.BlockMap
 import Halfs.Classes
@@ -76,102 +77,132 @@ propM_basicWRWR :: HalfsCapable b t r l m =>
                 -> PropertyM m ()
 propM_basicWRWR _g dev = do
   withFSData dev $ \fs rdirIR dataSz testData -> do
+
+  -- Make an inode to muck around with
+  inr <- run $ blockAddrToInodeRef `fmap`
+                 (alloc1 (hsBlockMap fs)
+                    >>= maybe (fail "can't alloc inode") return
+                 )
+  run $ bdWriteBlock dev (inodeRefToBlockAddr inr)
+          =<< buildEmptyInodeEnc dev RegularFile defaultFilePerms
+                inr rdirIR defaultUser defaultGroup
+
   let exec           = execH "propM_basicWRWR" fs
       time           = exec "obtain time" getTime
       dataSzI        = fromIntegral dataSz
       checkWriteMD t = \sz eb -> chk sz eb (t <=) (t <=) (t <=)
       checkReadMD  t = \sz eb -> chk sz eb (t <=) (t >=) (t <=)
-      chk            = checkInodeMetadata fs rdirIR Directory rootDirPerms
-                                          rootUser rootGroup
+      chk            = checkInodeMetadata fs inr RegularFile defaultFilePerms
+                         defaultUser defaultGroup
 
-  -- Check truncation of initial data (the root dir cruft) to a single byte
+  (_, _, api, apc) <- exec "Obtaining sizes" $ getSizes (bdBlockSize dev)
+  let expBlks = calcExpBlockCount (bdBlockSize dev) api apc dataSz
+
+  -- Check single-byte write
   t0 <- time
-  exec "Stream trunc to 1 byte" $ writeStream rdirIR 0 True dummyByte
+  exec "Write stream 1 byte" $ writeStream inr 0 True dummyByte
   checkWriteMD t0 1 2 -- expecting 1 inode block and 1 data block
 
-{-
   -- Expected error: write past end of 1-byte stream (beyond block boundary)
-  e0 <- runH fs $ writeStream rdirIR (bdBlockSize dev) False testData
+  e0 <- runH fs $ writeStream inr (bdBlockSize dev) False testData
   case e0 of
     Left (HE_InvalidStreamIndex idx) -> assert (idx == bdBlockSize dev)
     _                                -> assert False
                                         
   -- Expected error: write past end of 1-byte stream (beyond byte boundary)
-  e0' <- runH fs $ writeStream rdirIR 2 False testData
+  e0' <- runH fs $ writeStream inr 2 False testData
   case e0' of
     Left (HE_InvalidStreamIndex idx) -> assert (idx == 2)
     _                                -> assert False
 
--}
-  (_, _, api, apc) <- exec "Obtaining sizes" $ getSizes (bdBlockSize dev)
-  let expBlks = calcExpBlockCount (bdBlockSize dev) api apc dataSz
-
 {-
   -- Check truncation to 0 bytes
   t1 <- time
-  exec "Stream trunc to 0 bytes" $ writeStream rdirIR 0 True BS.empty
+  exec "Stream trunc to 0 bytes" $ writeStream inr 0 True BS.empty
   checkWriteMD t1 0 1 -- expecting 1 inode block only (no data blocks)
  
+  trace ("11111111111111111111111111111111111111111111111111") $ do
+  trace ("testData has length = " ++ show (BS.length testData)) $ do
+  
   -- Non-truncating write & read-back of generated data
   t2 <- time
-  exec "Non-truncating write" $ writeStream rdirIR 0 False testData
+  exec "Non-truncating write" $ writeStream inr 0 False testData
   checkWriteMD t2 dataSzI expBlks
   t3  <- time
-  bs1 <- exec "Readback 1" $ readStream rdirIR 0 Nothing
+  bs1 <- exec "Readback 1" $ readStream inr 0 Nothing
+  trace ("here0") $ do
   checkReadMD t3 dataSz expBlks 
+  trace ("here1") $ do
   assert (BS.length bs1 == BS.length testData)
+  trace ("here2") $ do
+
+  when (bs1 /= testData) $ CE.assert False $ return ()
   assert (bs1 == testData)
 
 -}
+
 {-
+
   -- Recheck truncation to 0 bytes
   t4 <- time
-  exec "Stream trunc to 0 bytes" $ writeStream rdirIR 0 True BS.empty
+  -- This is failing vvv?
+  trace ("here3") $ do
+  exec "Stream trunc to 0 bytes" $ writeStream inr 0 True BS.empty
+  trace ("here4") $ do
   checkWriteMD t4 0 1 -- expecting 1 inode block only (no data blocks)
-   
+  trace ("here5") $ do
+
   -- Non-truncating rewrite of generated data
   t5 <- time
-  exec "Non-truncating write" $ writeStream rdirIR 0 False testData
+  exec "Non-truncating write" $ writeStream inr 0 False testData
   checkWriteMD t5 dataSzI expBlks
 
-  trace ("here0") $ do
   -- Non-truncating partial overwrite of new data & read-back
 --  forAllM (choose (1, dataSz `div` 2))     $ \overwriteSz -> do 
-  let overwriteSz = 5186
-  let startByte   = 13677
---   forAllM (choose (0, dataSz `div` 2 - 1)) $ \startByte   -> do
-  forAllM (printableBytes overwriteSz)     $ \newData     -> do
+  let overwriteSz = 9201; startByte = 8721
+--  forAllM (choose (0, dataSz `div` 2 - 1)) $ \startByte   -> do
+--  forAllM (printableBytes overwriteSz)     $ \newData     -> do
+  let newData = BS.replicate overwriteSz 0x58
+
   t6 <- time
 
-  trace ("here0.5: newData has length " ++ show (BS.length newData) ++ ", startByte = "
-         ++ show startByte) $ do
+  trace ("overwriteSz = " ++ show overwriteSz ++ ", startByte = " ++ show startByte) $ do
+  trace ("===============================================================================") $ do
 
   exec "Non-trunc overwrite" $
-    writeStream rdirIR (fromIntegral startByte) False newData
-  trace ("here1") $ do
+    writeStream inr (fromIntegral startByte) False newData
   checkWriteMD t6 dataSzI expBlks
-  trace ("here2") $ do
+
   t7  <- time
-  bs2 <- exec "Readback 2" $ readStream rdirIR 0 Nothing
-  trace ("here3") $ do
+  bs2 <- exec "Readback 2" $ readStream inr 0 Nothing
   checkReadMD t7 dataSz expBlks
+
   let expected = bsTake startByte testData
                  `BS.append`
                  newData
                  `BS.append`
                  bsDrop (startByte + overwriteSz) testData
-  trace ("here4") $ do
+  trace ("here: BS.length bs2 = " ++ show (BS.length bs2) ++ ", BS.length expected = " ++ show (BS.length expected)) $ do
   assert (BS.length bs2 == BS.length expected)
+
+-- tmp
+  when (bs2 /= expected) $ do
+--    trace ("bs2      = " ++ show bs2) $ do
+--    trace ("expected = " ++ show expected) $ do
+      CE.assert False $ return ()
+-- tmp
+
   assert (bs2 == expected)
+
 -}
 
 {-
   -- Check truncation to a single byte again w/ read-back
   t8 <- time
-  exec "Stream trunc to 1 byte" $ writeStream rdirIR 0 True dummyByte
+  exec "Stream trunc to 1 byte" $ writeStream inr 0 True dummyByte
   checkWriteMD t8 1 2 -- expecting 1 inode block and 1 data block
   t9  <- time 
-  bs3 <- exec "Readback 3" $ readStream rdirIR 0 Nothing
+  bs3 <- exec "Readback 3" $ readStream inr 0 Nothing
   checkReadMD t9 1 2
   assert (bs3 == dummyByte)
 -}
@@ -192,7 +223,7 @@ propM_truncWRWR _g dev = do
       checkWriteMD t = \sz eb -> chk sz eb (t <=) (t <=) (t <=)
       checkReadMD  t = \sz eb -> chk sz eb (t <=) (t >=) (t <=)
       chk            = checkInodeMetadata fs rdirIR Directory rootDirPerms
-                                          rootUser rootGroup
+                         rootUser rootGroup
 
   (_, _, api, apc) <- exec "Obtaining sizes" $ getSizes (bdBlockSize dev)
   let expBlks = calcExpBlockCount (bdBlockSize dev) api apc
@@ -241,7 +272,7 @@ propM_lengthWR _g dev = do
       checkWriteMD t = \sz eb -> chk sz eb (t <=) (t <=) (t <=)
       checkReadMD  t = \sz eb -> chk sz eb (t <=) (t >=) (t <=)
       chk            = checkInodeMetadata fs rdirIR Directory rootDirPerms
-                                          rootUser rootGroup 
+                         rootUser rootGroup 
 
   (_, _, api, apc) <- exec "Obtaining sizes" $ getSizes (bdBlockSize dev)
   let expBlks = calcExpBlockCount blkSz api apc dataSz
@@ -369,9 +400,15 @@ withData dev f = do
   -- fillBlocks is the number of blocks to fill on the write (1/8 - 1/4 of dev)
   -- spillCnt is the number of blocks to write into the last cont in the chain
 --  let dataSz = fillBlocks * safeToInt (bdBlockSize dev) + spillCnt
-  let dataSz = 35 * 512 + 19 * 512
-  forAllM (printableBytes dataSz) (f dataSz)
+  let dataSz = 35 * 512 + 1 * 512
+  f dataSz (BS.replicate dataSz 0x2E)
+--  forAllM (printableBytes dataSz) (f dataSz)
           
+-- failure at: +8*512, overwriteSz = 10029, startByte = 9435
+-- failure at: +4*512, overwriteSz = 9313, startByte = 9298
+-- failure at: +2*512, overwriteSz = 8900, startByte = 9207
+-- failure at: +1*512, overwriteSz = 9201, startByte = 8721 (rare/hard to find), also overwriteSz = 8886, startByte = 9170
+
 checkInodeMetadata :: (HalfsCapable b t r l m, Integral a) =>
                       HalfsState b r l m
                    -> InodeRef
@@ -388,5 +425,6 @@ checkInodeMetadata :: (HalfsCapable b t r l m, Integral a) =>
 checkInodeMetadata fs inr expFileTy expMode expUsr expGrp
                    expFileSz expNumBlocks accessp modifyp changep = do
   st <- execH "checkInodeMetadata" fs "filestat" $ fileStat inr
+--  trace ("checkInodeMetadata: st = " ++ show st ++ ", expecting fsz = " ++ show expFileSz ++ ", #blks = " ++ show expNumBlocks) $ do
   checkFileStat st expFileSz expFileTy expMode
-                expUsr expGrp expNumBlocks accessp modifyp changep
+    expUsr expGrp expNumBlocks accessp modifyp changep
