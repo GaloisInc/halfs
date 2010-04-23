@@ -71,8 +71,8 @@ import System.Device.BlockDevice
 
 import Debug.Trace
 dbug :: String -> a -> a
---dbug _ = id
-dbug = trace
+dbug _ = id
+--dbug = trace
 
 type HalfsM b r l m a = HalfsT HalfsError (Maybe (HalfsState b r l m)) m a
 
@@ -486,31 +486,31 @@ writeStream_lckd startIR start trunc bytes              = do
 --   dbug ("contsToAlloc = " ++ show contsToAlloc)  $ do
 
   dbug ("inoLastCont startInode = " ++ show (lcInfo) ) $ do
-  trace ("inoCont startInode = " ++ show (inoCont startInode)) $ return ()   
+  dbug ("inoCont startInode = " ++ show (inoCont startInode)) $ return ()   
 
   -- Begin at the last-written Cont if it makes sense to do so
   initCont <- do 
     (cnt, c) <- case lcInfo of
       (lcr, lci) 
         | lcr == nilContRef || lci > sContIdx ->
-            trace ("case 1") $ do
+            dbug ("case 1") $ do
             return (sContIdx+1, inoCont startInode)
         | otherwise ->
             (,) (sContIdx - lci + 1) `fmap` drefCont lcr
-    trace ("cnt = " ++ show cnt) $ return ()
-    trace ("c = " ++ show c) $ return () 
+    dbug ("cnt = " ++ show cnt) $ return ()
+    dbug ("c = " ++ show c) $ return () 
     lastCont (Just cnt) c
 
-  trace ("initCont = " ++ show initCont) $ return ()
+  dbug ("initCont = " ++ show initCont) $ return ()
   (stCont1, dirtyAlloc) <- do
     if blksToAlloc > 0
      then do
        st <- allocFill availBlks blksToAlloc contsToAlloc initCont
-       trace ("st = " ++ show st) $ return () 
+       dbug ("st = " ++ show st) $ return () 
        let attachEmbed = flip (,) (if isEmbedded st then Just st else Nothing)
            lastContIdx = snd lcInfo
-       trace ("lastContIdx = " ++ show lastContIdx) $ return ()
-       trace ("sContIdx = " ++ show sContIdx) $ return () 
+       dbug ("lastContIdx = " ++ show lastContIdx) $ return ()
+       dbug ("sContIdx = " ++ show sContIdx) $ return () 
        -- Handle "rollover" for when we just allocated beyond a Cont boundary. 
        if lastContIdx < sContIdx 
         then attachEmbed `fmap` lastCont (Just $ sContIdx - lastContIdx + 1) st
@@ -518,8 +518,8 @@ writeStream_lckd startIR start trunc bytes              = do
      else
        return (initCont, Nothing)
   
-  trace ("stCont1 = " ++ show stCont1) $ return ()
-  trace ("dirtyAlloc = " ++ show dirtyAlloc) $ return () 
+  dbug ("stCont1 = " ++ show stCont1) $ return ()
+  dbug ("dirtyAlloc = " ++ show dirtyAlloc) $ return () 
 
   when (sBlkOff < blockCount stCont1) $ do 
     sBlk <- lift $ readBlock dev stCont1 sBlkOff
@@ -540,9 +540,9 @@ writeStream_lckd startIR start trunc bytes              = do
   
     -- Destination block addresses starting at the the start block
     hack_remove_me <- drop 1 `fmap` expandConts Nothing stCont1 -- replace with iteration over conts
-    trace ("hack_remove_me = " ++ show hack_remove_me) $ return () 
+    dbug ("hack_remove_me = " ++ show hack_remove_me) $ return () 
 
-    trace ("here3") $ do
+    dbug ("here3") $ do
     let blkAddrs = genericDrop sBlkOff (blockAddrs stCont1)
                      ++ concatMap blockAddrs hack_remove_me
 
@@ -558,8 +558,8 @@ writeStream_lckd startIR start trunc bytes              = do
                    -- are themselves
                    -- dirty
 
---     allConts <- contFoldM (\acc cont -> trace ("being folded, cont = " ++ show cont) $ return (cont:acc)) [] stCont1
---     trace ("allConts = " ++ show allConts) $ do
+--     allConts <- contFoldM (\acc cont -> dbug ("being folded, cont = " ++ show cont) $ return (cont:acc)) [] stCont1
+--     dbug ("allConts = " ++ show allConts) $ do
 
     (chunks, remaining) <- do
       (cs, rems) <- unzip `fmap` unfoldrM (lift . getBlockContents dev trunc)
@@ -569,8 +569,8 @@ writeStream_lckd startIR start trunc bytes              = do
     assert (all ((== safeToInt bs) . BS.length) chunks) $ do
     assert (BS.null remaining)                          $ do
 
-    trace ("blkAddrs = " ++ show blkAddrs ++ " " ++ show (length blkAddrs) ++ " of them)") $ do 
-    trace ("Have " ++ show (length blkAddrs) ++ " chunks)") $ do 
+    dbug ("blkAddrs = " ++ show blkAddrs ++ " " ++ show (length blkAddrs) ++ " of them)") $ do 
+    dbug ("Have " ++ show (length blkAddrs) ++ " chunks)") $ do 
 
 {-
     forM (blkAddrs `zip` chunks) $ \(a,ch) -> do
@@ -589,32 +589,34 @@ writeStream_lckd startIR start trunc bytes              = do
        else return (stCont1, 0, Nothing)
 
     dbug ("stCont2 = " ++ show stCont2) $ do
-    trace ("dirtyUnalloc = " ++ show dirtyUnalloc) $ return () 
+    dbug ("dirtyUnalloc = " ++ show dirtyUnalloc) $ return () 
 
     conts1_removeMe <- expandConts Nothing stCont2
     dbug ("all from stCont2 onwards (post alloc/trunc): " ++ show conts1_removeMe) $ do
-    trace ("here5") $ do  
 
     assert (blksToAlloc + contsToAlloc == 0 || numBlksFreed == 0) $ return ()
 
+
+
     now <- getTime 
-    eIdx@(eContIdx, _, _) <- decompStreamOffset (bdBlockSize dev) (if start + len == 0 then 0 else start + len - 1)
+    eIdx@(eContIdx, _, _) <-
+      decompStreamOffset (bdBlockSize dev)
+        (if start + len == 0 then 0 else max (start + len - 1) start)
     dbug ("eIdx = " ++ show eIdx) $ do
 
     -- Obtain the (new) end of the cont chain.
-
     let contDist = eContIdx - sContIdx
-    trace ("contDist = " ++ show contDist) $ return () 
+    dbug ("contDist = " ++ show contDist) $ return () 
     expanded <- expandConts (Just $ contDist + 1) stCont2
-    trace ("expanded = " ++ show expanded) $ do
+    dbug ("expanded = " ++ show expanded) $ do
     let eCont = last expanded
     dbug ("eCont = " ++ show eCont) $ return () 
 
     let lcInfo' = if eContIdx == sContIdx
                    then (address stCont2, sContIdx)
-                   else (address eCont, eContIdx) -- error "eContIdx /= sContIdx not yet supported"
+                   else (address eCont, eContIdx)
 
-    trace ("lcInfo' = " ++ show lcInfo') $ return ()
+    dbug ("lcInfo' = " ++ show lcInfo') $ return ()
           
     -- Finally, persist the inode
     lift $ writeInode dev $ 
@@ -882,7 +884,7 @@ truncUnalloc start len (stCont, sContIdx) = do
 
   let truncToZero = start + len == 0
   eIdx@(eContIdx, eBlkOff, _) <- decompStreamOffset (bdBlockSize dev) 
-                                   (if truncToZero then 0 else start + len - 1)
+                                   (if truncToZero then 0 else max (start + len - 1) start)
   dbug ("eContIdx = " ++ show eContIdx ++ ", sContIdx = " ++ show sContIdx) $ do
   assert (eContIdx >= sContIdx) $ return ()
   
@@ -988,7 +990,7 @@ readBlock dev c i = do
 writeCont :: Monad m =>
              BlockDevice m -> Cont -> m ()
 writeCont dev c =
-  trace ("  ==> Writing cont: " ++ show c ) $ 
+  dbug ("  ==> Writing cont: " ++ show c ) $ 
   bdWriteBlock dev (unCR $ address c) (encode c)
 
 writeInode :: (Monad m, Ord t, Serialize t, Show t) =>

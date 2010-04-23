@@ -52,40 +52,41 @@ type HalfsProp =
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [
---     exec 10 "Init and mount"         propM_initAndMountOK
---   ,
---     exec 10 "fsck"                   propM_fsckOK
---   ,
---     exec 10 "Mount/unmount"          propM_mountUnmountOK
---   ,
---     exec 10 "Unmount mutex"          propM_unmountMutexOK
---   ,
---     exec 10 "Directory construction" propM_dirConstructionOK
---   ,
---     exec 10 "Simple file creation"   propM_fileBasicsOK
---   ,
---     exec 10 "Simple file ops"        propM_simpleFileOpsOK
---   ,
---     exec 10 "chmod/chown ops"        propM_chmodchownOK
---   ,
---     exec 5  "File WR 1"              (propM_fileWROK "myfile")
---   ,
---     exec 5  "File WR 2"              (propM_fileWROK "foo/bar/baz")
---   ,
---     exec 10 "Directory mutex"        propM_dirMutexOK
---   ,
---     exec 10 "Hardlink creation"      propM_hardlinksOK
---   ,
---     exec 10 "Simple rmdir"           propM_simpleRmdirOK
---   ,
---     exec 10 "rmdir mutex"            propM_rmdirMutexOK
---   ,
---     exec 10 "Simple rmlink"          propM_simpleRmlinkOK
---   ,
---     exec 10 "Simple rename"          propM_simpleRenameOK
---   ,
-    propM_profileMe
---      propM_stressDealloc
+    exec 10 "Init and mount"         propM_initAndMountOK
+  ,
+    exec 10 "fsck"                   propM_fsckOK
+  ,
+    exec 10 "Mount/unmount"          propM_mountUnmountOK
+  ,
+    exec 10 "Unmount mutex"          propM_unmountMutexOK
+  ,
+    exec 10 "Directory construction" propM_dirConstructionOK
+  ,
+    exec 10 "Simple file creation"   propM_fileBasicsOK
+  ,
+    exec 10 "Simple file ops"        propM_simpleFileOpsOK
+  ,
+    exec 10 "chmod/chown ops"        propM_chmodchownOK
+  ,
+    exec 5  "File WR 1"              (propM_fileWROK "myfile")
+  ,
+    exec 5  "File WR 2"              (propM_fileWROK "foo/bar/baz")
+  ,
+    exec 10 "Directory mutex"        propM_dirMutexOK
+  ,
+    exec 10 "Hardlink creation"      propM_hardlinksOK
+  ,
+    exec 10 "Simple rmdir"           propM_simpleRmdirOK
+  ,
+    exec 10 "rmdir mutex"            propM_rmdirMutexOK
+  ,
+    exec 10 "Simple rmlink"          propM_simpleRmlinkOK
+  ,
+    exec 10 "Simple rename"          propM_simpleRenameOK
+  ,
+    propM_stressEndAllocs
+  ,
+    propM_stressEndDeallocs
   ]
   where
     exec = mkMemDevExec quick "CoreAPI"
@@ -776,11 +777,11 @@ propM_simpleRenameOK _g dev = do
     [d1, d2, d3, f1, f2, f3] =
       map (rootPath </>) ["d1", "d2", "d3", "f1", "f2", "f3"]
 
--- TODO: turn this into a proper 'usage pattern' test case
-propM_profileMe :: (Args, Property)
-propM_profileMe = (,) stdArgs{maxSuccess = 1} $ monadicIO $ go $ \dev -> do
+-- TODO: turn this into a proper 'allocation pattern pattern' test case
+propM_stressEndAllocs :: (Args, Property)
+propM_stressEndAllocs = (,) stdArgs{maxSuccess = 1} $ monadicIO $ go $ \dev -> do
   fs <- mkNewFS dev >> mountOK dev
-  execH "propM_profileMe" fs "create and write" $ do
+  execH "propM_stressEndAllocs" fs "mash end" $ do
     createFile fn defaultFilePerms 
     withFile fn (fofWriteOnly True) $ \fh -> do
       forM addrs $ \addr -> write fh addr chunk
@@ -794,18 +795,17 @@ propM_profileMe = (,) stdArgs{maxSuccess = 1} $ monadicIO $ go $ \dev -> do
 --  chunk = BS.replicate 4096 0x42        -- 4K chunk
 --  addrs = [ i * 4096 | i <- [0..4095]]  -- lower 16 MiB addrs
 
-propM_stressDealloc :: (Args, Property)
-propM_stressDealloc = (,) stdArgs{maxSuccess = 1} $ monadicIO $ go $ \dev -> do
+propM_stressEndDeallocs :: (Args, Property)
+propM_stressEndDeallocs = (,) stdArgs{maxSuccess = 1} $ monadicIO $ go $ \dev -> do
   fs <- mkNewFS dev >> mountOK dev
-  execH "propM_stressDealloc" fs "create and dealloc" $ do
+  execH "propM_stressEndDeallocs" fs "mash end" $ do
     createFile fn defaultFilePerms 
     withFile fn (fofWriteOnly True) $ \fh -> do
       write fh 0 (BS.concat $ replicate blkSz chunk)
 
     -- Repeatedly trunc the file in block-size increments to push on
-    -- deallocation.
+    -- deallocation from the end.
     mapM_ (setFileSize fn) sizes
-
   where
     fn     = rootPath </> "theFile"
     go f   = run (memDev g) >>= (`whenDev` run . bdShutdown) f
@@ -814,10 +814,6 @@ propM_stressDealloc = (,) stdArgs{maxSuccess = 1} $ monadicIO $ go $ \dev -> do
     g      = BDGeom 32768 (fromIntegral blkSz)
     chunk  = BS.replicate blkSz 0x42   
     sizes  = [ i * blkSzI | i <- reverse [0..(blkSzI-1)]]
-
---     g        = BDGeom 32768 4096             -- 128 MiB FS
---     chunk    = BS.replicate 4096 0x42        -- 4K chunk
---     addrs    = [ i * 4096 | i <- [0..4095]]  -- lower 16 MiB addrs
 
 
 --------------------------------------------------------------------------------

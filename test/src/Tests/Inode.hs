@@ -38,15 +38,15 @@ import Debug.Trace
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [ -- Inode module invariants
---     exec 10 "Inode module invariants" propM_inodeModuleInvs
---   , -- Inode stream write/read/(over)write/read property
-    exec 1 "Basic WRWR" propM_basicWRWR
---   , -- Inode stream write/read/(truncating)write/read property
---     exec 10 "Truncating WRWR" propM_truncWRWR
---   , -- Inode length-specific stream write/read
---     exec 10 "Length-specific WR" propM_lengthWR
---   , -- Inode single reader/writer lock testing
---     exec 10 "Inode single reader/write mutex" propM_inodeMutexOK
+    exec 10 "Inode module invariants" propM_inodeModuleInvs
+  , -- Inode stream write/read/(over)write/read property
+    exec 10 "Basic WRWR" propM_basicWRWR
+  , -- Inode stream write/read/(truncating)write/read property
+    exec 10 "Truncating WRWR" propM_truncWRWR
+  , -- Inode length-specific stream write/read
+    exec 10 "Length-specific WR" propM_lengthWR
+  , -- Inode single reader/writer lock testing
+    exec 10 "Inode single reader/write mutex" propM_inodeMutexOK
   ]
   where
     exec = mkMemDevExec quick "Inode"
@@ -139,11 +139,8 @@ propM_basicWRWR _g dev = do
   checkWriteMD t4 dataSzI expBlks
   t5  <- time
   bs1 <- exec "Readback 1" $ readStream inr 0 Nothing
-  trace ("here0") $ do
   checkReadMD t5 dataSz expBlks 
-  trace ("here1") $ do
   assert (BS.length bs1 == BS.length testData)
-  trace ("here2") $ do
 
   when (bs1 /= testData) $ CE.assert False $ return ()
   assert (bs1 == testData)
@@ -159,16 +156,16 @@ propM_basicWRWR _g dev = do
   checkWriteMD t7 dataSzI expBlks
 
   -- Non-truncating partial overwrite of new data & read-back
---  forAllM (choose (1, dataSz `div` 2))     $ \overwriteSz -> do 
-  let overwriteSz = 9201; startByte = 8721
---  forAllM (choose (0, dataSz `div` 2 - 1)) $ \startByte   -> do
---  forAllM (printableBytes overwriteSz)     $ \newData     -> do
-  let newData = BS.replicate overwriteSz 0x58
+  forAllM (choose (1, dataSz `div` 2))     $ \overwriteSz -> do 
+--  let overwriteSz = 9201; startByte = 8721
+  forAllM (choose (0, dataSz `div` 2 - 1)) $ \startByte   -> do
+  forAllM (printableBytes overwriteSz)     $ \newData     -> do
+--  let newData = BS.replicate overwriteSz 0x58
 
   t8 <- time
 
-  trace ("overwriteSz = " ++ show overwriteSz ++ ", startByte = " ++ show startByte) $ do
-  trace ("===============================================================================") $ do
+--   trace ("overwriteSz = " ++ show overwriteSz ++ ", startByte = " ++ show startByte) $ do
+--   trace ("===============================================================================") $ do
 
   exec "Non-trunc overwrite" $
     writeStream inr (fromIntegral startByte) False newData
@@ -183,7 +180,6 @@ propM_basicWRWR _g dev = do
                  newData
                  `BS.append`
                  bsDrop (startByte + overwriteSz) testData
-  trace ("here: BS.length bs2 = " ++ show (BS.length bs2) ++ ", BS.length expected = " ++ show (BS.length expected)) $ do
   assert (BS.length bs2 == BS.length expected)
 
 -- tmp
@@ -391,14 +387,14 @@ withData dev f = do
       hi        = maxBlocks `div` 4
       fbr       = FillBlocks `fmap` choose (lo, hi)
       scr       = SpillCnt   `fmap` choose (0, safeToInt nAddrs)
---   forAllM fbr $ \(FillBlocks fillBlocks) -> do
---   forAllM scr $ \(SpillCnt   spillCnt)   -> do
+  forAllM fbr $ \(FillBlocks fillBlocks) -> do
+  forAllM scr $ \(SpillCnt   spillCnt)   -> do
   -- fillBlocks is the number of blocks to fill on the write (1/8 - 1/4 of dev)
   -- spillCnt is the number of blocks to write into the last cont in the chain
---  let dataSz = fillBlocks * safeToInt (bdBlockSize dev) + spillCnt
-  let dataSz = 35 * 512 + 1 * 512
-  f dataSz (BS.replicate dataSz 0x2E)
---  forAllM (printableBytes dataSz) (f dataSz)
+  let dataSz = fillBlocks * safeToInt (bdBlockSize dev) + spillCnt
+--  let dataSz = 35 * 512 + 1 * 512
+--  f dataSz (BS.replicate dataSz 0x2E)
+  forAllM (printableBytes dataSz) (f dataSz)
           
 -- failure at: +8*512, overwriteSz = 10029, startByte = 9435
 -- failure at: +4*512, overwriteSz = 9313, startByte = 9298
