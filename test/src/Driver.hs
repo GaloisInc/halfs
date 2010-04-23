@@ -18,9 +18,9 @@ qcProps =
 --   ++
 --   SD.qcProps True -- run in "quick" mode for Serdes
 --   ++
---   IN.qcProps True -- run in "quick" mode for Inode
+   IN.qcProps True -- run in "quick" mode for Inode
 --   ++
-  CA.qcProps True -- run in "quick" mode for CoreAPI
+--  CA.qcProps True -- run in "quick" mode for CoreAPI
 
 main :: IO ()
 main = do

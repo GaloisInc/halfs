@@ -486,6 +486,7 @@ writeStream_lckd startIR start trunc bytes              = do
 --   dbug ("contsToAlloc = " ++ show contsToAlloc)  $ do
 
   dbug ("inoLastCont startInode = " ++ show (lcInfo) ) $ do
+  trace ("inoCont startInode = " ++ show (inoCont startInode)) $ return ()   
 
   -- Begin at the last-written Cont if it makes sense to do so
   initCont <- do 
@@ -496,23 +497,29 @@ writeStream_lckd startIR start trunc bytes              = do
                         return (sContIdx+1, inoCont startInode)
                     | otherwise ->
                       (,) (sContIdx - lci + 1) `fmap` drefCont lcr
+    trace ("cnt = " ++ show cnt) $ return ()
+    trace ("c = " ++ show c) $ return () 
     lastCont (Just cnt) c
 
   trace ("initCont = " ++ show initCont) $ return ()
-  (stCont1, membedded) <- do
-    st <- allocFill availBlks blksToAlloc contsToAlloc initCont
-    let attachEmbed = flip (,) (if isEmbedded st then Just st else Nothing)
-        lastContIdx = snd lcInfo
-    trace ("lastContIdx = " ++ show lastContIdx) $ return ()
-    trace ("sContIdx = " ++ show sContIdx) $ return () 
-    
-    -- Handle "rollover" for when we just allocated beyond a Cont boundary. 
-    if lastContIdx < sContIdx
-     then attachEmbed `fmap` lastCont (Just $ sContIdx - lastContIdx + 1) st
---(last . \x -> trace (show x) x) `fmap` expandConts (Just $ sContIdx - lastContIdx + 1) st
-     else return $ attachEmbed st
+  (stCont1, dirtyAlloc) <- do
+    if blksToAlloc > 0
+     then do
+       st <- allocFill availBlks blksToAlloc contsToAlloc initCont
+       trace ("st = " ++ show st) $ return () 
+       let attachEmbed = flip (,) (if isEmbedded st then Just st else Nothing)
+           lastContIdx = snd lcInfo
+       trace ("lastContIdx = " ++ show lastContIdx) $ return ()
+       trace ("sContIdx = " ++ show sContIdx) $ return () 
+       -- Handle "rollover" for when we just allocated beyond a Cont boundary. 
+       if lastContIdx < sContIdx 
+        then attachEmbed `fmap` lastCont (Just $ sContIdx - lastContIdx + 1) st
+        else return $ attachEmbed st
+     else
+       return (initCont, Nothing)
   
-  trace ("stCont1 = " ++ show stCont1) $ return () 
+  trace ("stCont1 = " ++ show stCont1) $ return ()
+  trace ("dirtyAlloc = " ++ show dirtyAlloc) $ return () 
 
   when (sBlkOff < blockCount stCont1) $ do 
     sBlk <- lift $ readBlock dev stCont1 sBlkOff
@@ -533,6 +540,9 @@ writeStream_lckd startIR start trunc bytes              = do
   
     -- Destination block addresses starting at the the start block
     hack_remove_me <- drop 1 `fmap` expandConts Nothing stCont1 -- replace with iteration over conts
+    trace ("hack_remove_me = " ++ show hack_remove_me) $ return () 
+
+    trace ("here3") $ do
     let blkAddrs = genericDrop sBlkOff (blockAddrs stCont1)
                      ++ concatMap blockAddrs hack_remove_me
 
@@ -559,10 +569,8 @@ writeStream_lckd startIR start trunc bytes              = do
     assert (all ((== safeToInt bs) . BS.length) chunks) $ do
     assert (BS.null remaining)                          $ do
 
-{-
     trace ("blkAddrs = " ++ show blkAddrs ++ " " ++ show (length blkAddrs) ++ " of them)") $ do 
     trace ("Have " ++ show (length blkAddrs) ++ " chunks)") $ do 
--}
 
 {-
     forM (blkAddrs `zip` chunks) $ \(a,ch) -> do
@@ -573,15 +581,19 @@ writeStream_lckd startIR start trunc bytes              = do
     -- Write the data into the appropriate blocks
     mapM_ (\(a,d) -> lift $ bdWriteBlock dev a d) (blkAddrs `zip` chunks)
 
-    (stCont2, numBlksFreed) <-
+    (stCont2, numBlksFreed, dirtyUnalloc) <-
       if trunc && bytesToAlloc == 0
-       then error "temp disable for clarity" -- truncUnalloc start len (stCont1, sContIdx)
-       else return (stCont1, 0)
+       then do
+         (st, nbf) <- truncUnalloc start len (stCont1, sContIdx)
+         return (st, nbf, if isEmbedded st then Just st else Nothing)
+       else return (stCont1, 0, Nothing)
 
     dbug ("stCont2 = " ++ show stCont2) $ do
+    trace ("dirtyUnalloc = " ++ show dirtyUnalloc) $ return () 
 
     conts1_removeMe <- expandConts Nothing stCont2
     dbug ("all from stCont2 onwards (post alloc/trunc): " ++ show conts1_removeMe) $ do
+    trace ("here5") $ do  
 
     assert (blksToAlloc + contsToAlloc == 0 || numBlksFreed == 0) $ return ()
 
@@ -600,40 +612,33 @@ writeStream_lckd startIR start trunc bytes              = do
 
     let lcInfo' = if eContIdx == sContIdx
                    then (address stCont2, sContIdx)
-                   else error "eContIdx /= sContIdx not yet supported"
+                   else (address eCont, eContIdx) -- error "eContIdx /= sContIdx not yet supported"
 
-    let dirtyInode = startInode
-                      { inoLastCont    = lcInfo'
-                      , inoFileSize    = newFileSz
-                      , inoAllocBlocks = inoAllocBlocks startInode
-                                         + blksToAlloc
-                                         + contsToAlloc
-                                         - numBlksFreed
-                      , inoAccessTime  = now
-                      , inoModifyTime  = now
-                      , inoChangeTime  = now
-                      , inoCont        = maybe (inoCont startInode) id membedded 
-
-{-
-                        case find isEmbedded dirtyConts of -- TODO: fixme?
-                                                                           -- can't we
-                                                                           -- just look at
-                                                                           -- the first
-                                                                           -- dirty cont?
-                                                                           -- it's the
-                                                                           -- only one
-                                                                           -- that can be
-                                                                           -- embedded...
-                                          Nothing -> inoCont startInode
-                                          Just c  -> c
--}
-
-                     }
-
+    trace ("lcInfo' = " ++ show lcInfo') $ return ()
+          
     -- Finally, persist the inode
---    dbug ("dirtyInode = " ++ show dirtyInode) $ return ()
-    lift $ writeInode dev $ dirtyInode 
-
+    lift $ writeInode dev $ 
+      startInode
+      { inoLastCont    = lcInfo'
+      , inoFileSize    = newFileSz
+      , inoAllocBlocks = inoAllocBlocks startInode
+                         + blksToAlloc
+                         + contsToAlloc
+                         - numBlksFreed
+      , inoAccessTime  = now
+      , inoModifyTime  = now
+      , inoChangeTime  = now
+      , inoCont        =
+          case (dirtyAlloc, dirtyUnalloc) of
+            (Nothing, Nothing) -> inoCont startInode
+            (Just _,  Just _)  ->
+              error $ "Internal: embedded "
+              ++ "cont modification from "
+              ++ "both allocFill & truncUnalloc"
+              -- ^ "Can't happen"
+            (Just c, _)        -> c
+            (_, Just c)        -> c
+      }
   -- ======================= End inode critical section =======================
   where
     len = fromIntegral $ BS.length bytes
@@ -839,8 +844,6 @@ allocFill avail blksToAlloc contsToAlloc stCont = do
 
   assert (null blks') $ return ()
 
-  -- HERE: this is the culprit for why all conts(entry) isn't being computed
-  -- properly -- modified embedded conts are not being serialized.
   forM_ (dirtyConts)  $ \c -> unless (isEmbedded c) $ lift $ writeCont dev c
   return stCont'
   where
@@ -935,59 +938,8 @@ truncUnalloc start len (stCont, sContIdx) = do
                 }
         ]
   dbug ("truncUnalloc: dirtyConts  = " ++ show dirtyConts)  $ return () 
-  forM_ (dirtyConts)  $ \c -> unless (isEmbedded c) $ lift $ writeCont dev c
+  forM_ (dirtyConts) $ \c -> unless (isEmbedded c) $ lift $ writeCont dev c
   return (stCont', numFreed)
-
-{-
-  let truncToZero = start + len == 0
-  eIdx@(eContIdx, eBlkOff, _) <- decompStreamOffset (bdBlockSize dev) 
-                                   (if truncToZero then 0 else start + len - 1)
-  let 
-    (retain, toFree) = genericSplitAt (eContIdx + 1) conts
-    trm              = last retain 
-    retain'          = init retain ++ dirtyConts
-    keepBlkCnt       = if truncToZero then 0 else eBlkOff + 1
-    allFreeBlks      = genericDrop keepBlkCnt (blockAddrs trm)
-                       -- ^ The remaining blocks in the terminator
-                       ++ concatMap blockAddrs toFree
-                       -- ^ The remaining blocks in rest of chain
-                       ++ map (unCR . address) toFree
-                       -- ^ Block addrs for the cont blocks themselves
-    numFreed         = genericLength allFreeBlks
-
-    -- Currently, only the last Cont in the chain is considered dirty; we do not
-    -- do any writes to any of the Conts that are detached from the chain &
-    -- freed; this may have implications for fsck!
-    dirtyConts =
-      [
-        -- The new terminator Cont, adjusted to discard the freed blocks
-        -- and clear the continuation field
-        trm { blockCount   = keepBlkCnt
-            , blockAddrs   = genericTake keepBlkCnt (blockAddrs trm)
-            , continuation = nilContRef
-            }
-      ]
-
-{-
-  dbug ("truncUnalloc: keepBlkCnt  = " ++ show keepBlkCnt)  $ return ()
-  dbug ("truncUnalloc: retain      = " ++ show retain)      $ return ()
-  dbug ("truncUnalloc: toFree      = " ++ show toFree)      $ return ()
-  dbug ("truncUnalloc: eIdx        = " ++ show eIdx)        $ return ()
-  dbug ("truncUnalloc: retain'     = " ++ show retain')     $ return ()
-  dbug ("truncUnalloc: freeNodes   = " ++ show toFree)      $ return ()
-  dbug ("truncUnalloc: allFreeBlks = " ++ show allFreeBlks) $ return ()
--}
-
-  -- Freeing all of the blocks this way (as unit extents) is ugly and
-  -- inefficient, but we need to be tracking BlockGroups (or
-  -- reconstitute them here by digging for contiguous address
-  -- subsequences in allFreeBlks) before we can do better.
-    
-  unless (null allFreeBlks) $ do
-    lift $ BM.unallocBlocks bm $ BM.Discontig $ map (`BM.Extent` 1) allFreeBlks
-    
-  return (retain', dirtyConts, numFreed)
--}
 
 -- | Splits the input bytestring into block-sized chunks; may read from the
 -- block device in order to preserve contents of blocks if needed.
@@ -1045,14 +997,11 @@ writeInode dev n = bdWriteBlock dev (unIR $ inoAddress n) (encode n)
 
 -- | Expands the given Cont into a Cont list containing itself followed by all
 -- of its continuation inodes; can be bounded by a positive nonzero value to
--- only retrieve (up to) the given number of conts.
-
--- NB/TODO: We need to optimize/fix this function. The worst case is, e.g.,
--- writing a small number of bytes at a low offset into a huge file (and hence a
--- long continuation chain): we read the entire chain when examination of the
--- stream from the start to end offsets would be sufficient. (WIP, not quite
--- there yet).
-
+-- only retrieve (up to) the given number of conts.  NB/TODO: We need to
+-- optimize/fix this function. The worst case is, e.g., writing a small number
+-- of bytes at a low offset into a huge file (and hence a long continuation
+-- chain): we read the entire chain when examination of the stream from the
+-- start to end offsets would be sufficient. (WIP, not quite there yet).
 expandConts :: HalfsCapable b t r l m =>
                Maybe Word64 -> Cont -> HalfsM b r l m [Cont]
 expandConts (Just bnd) start@Cont{ continuation = cr }
@@ -1067,6 +1016,9 @@ expandConts (Just bnd) start@Cont{ continuation = cr }
 expandConts Nothing start@Cont{ continuation = cr }
   | cr == nilContRef = return [start]
   | otherwise        = do
+      trace ("recursive case of expandConts, unbounded, cr = " ++ show cr) $ do
+      tmp <- drefCont cr
+      trace ("dref of cr ok" ) $ do
       (start:) `fmap` (drefCont cr >>= expandConts Nothing)
 
 lastCont :: HalfsCapable b t r l m =>

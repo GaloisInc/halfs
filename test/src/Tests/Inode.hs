@@ -115,23 +115,32 @@ propM_basicWRWR _g dev = do
     Left (HE_InvalidStreamIndex idx) -> assert (idx == 2)
     _                                -> assert False
 
-{-
+  -- The repeated operations may seem odd here, but their repetition and
+  -- order push on a few inode data persistence bugs.
+
   -- Check truncation to 0 bytes
   t1 <- time
   exec "Stream trunc to 0 bytes" $ writeStream inr 0 True BS.empty
   checkWriteMD t1 0 1 -- expecting 1 inode block only (no data blocks)
  
-  trace ("11111111111111111111111111111111111111111111111111") $ do
-  trace ("testData has length = " ++ show (BS.length testData)) $ do
-  
-  -- Non-truncating write & read-back of generated data
+  -- Check single-byte write
   t2 <- time
+  exec "Write stream 1 byte" $ writeStream inr 0 True dummyByte
+  checkWriteMD t2 1 2 -- expecting 1 inode block and 1 data block
+
+  -- Check truncation to 0 bytes again
+  t3 <- time
+  exec "Stream trunc to 0 bytes" $ writeStream inr 0 True BS.empty
+  checkWriteMD t3 0 1 -- expecting 1 inode block only (no data blocks)
+
+  -- Non-truncating write & read-back of generated data
+  t4 <- time
   exec "Non-truncating write" $ writeStream inr 0 False testData
-  checkWriteMD t2 dataSzI expBlks
-  t3  <- time
+  checkWriteMD t4 dataSzI expBlks
+  t5  <- time
   bs1 <- exec "Readback 1" $ readStream inr 0 Nothing
   trace ("here0") $ do
-  checkReadMD t3 dataSz expBlks 
+  checkReadMD t5 dataSz expBlks 
   trace ("here1") $ do
   assert (BS.length bs1 == BS.length testData)
   trace ("here2") $ do
@@ -139,23 +148,15 @@ propM_basicWRWR _g dev = do
   when (bs1 /= testData) $ CE.assert False $ return ()
   assert (bs1 == testData)
 
--}
-
-{-
-
   -- Recheck truncation to 0 bytes
-  t4 <- time
-  -- This is failing vvv?
-  trace ("here3") $ do
+  t6 <- time
   exec "Stream trunc to 0 bytes" $ writeStream inr 0 True BS.empty
-  trace ("here4") $ do
-  checkWriteMD t4 0 1 -- expecting 1 inode block only (no data blocks)
-  trace ("here5") $ do
+  checkWriteMD t6 0 1 -- expecting 1 inode block only (no data blocks)
 
   -- Non-truncating rewrite of generated data
-  t5 <- time
+  t7 <- time
   exec "Non-truncating write" $ writeStream inr 0 False testData
-  checkWriteMD t5 dataSzI expBlks
+  checkWriteMD t7 dataSzI expBlks
 
   -- Non-truncating partial overwrite of new data & read-back
 --  forAllM (choose (1, dataSz `div` 2))     $ \overwriteSz -> do 
@@ -164,18 +165,18 @@ propM_basicWRWR _g dev = do
 --  forAllM (printableBytes overwriteSz)     $ \newData     -> do
   let newData = BS.replicate overwriteSz 0x58
 
-  t6 <- time
+  t8 <- time
 
   trace ("overwriteSz = " ++ show overwriteSz ++ ", startByte = " ++ show startByte) $ do
   trace ("===============================================================================") $ do
 
   exec "Non-trunc overwrite" $
     writeStream inr (fromIntegral startByte) False newData
-  checkWriteMD t6 dataSzI expBlks
+  checkWriteMD t8 dataSzI expBlks
 
-  t7  <- time
+  t9  <- time
   bs2 <- exec "Readback 2" $ readStream inr 0 Nothing
-  checkReadMD t7 dataSz expBlks
+  checkReadMD t9 dataSz expBlks
 
   let expected = bsTake startByte testData
                  `BS.append`
@@ -194,19 +195,14 @@ propM_basicWRWR _g dev = do
 
   assert (bs2 == expected)
 
--}
-
-{-
   -- Check truncation to a single byte again w/ read-back
-  t8 <- time
+  t10 <- time
   exec "Stream trunc to 1 byte" $ writeStream inr 0 True dummyByte
-  checkWriteMD t8 1 2 -- expecting 1 inode block and 1 data block
-  t9  <- time 
+  checkWriteMD t10 1 2 -- expecting 1 inode block and 1 data block
+  t11  <- time 
   bs3 <- exec "Readback 3" $ readStream inr 0 Nothing
-  checkReadMD t9 1 2
+  checkReadMD t11 1 2
   assert (bs3 == dummyByte)
--}
-  return ()
   where
     dummyByte = BS.singleton 0
 

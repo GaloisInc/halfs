@@ -1,4 +1,4 @@
-{-# LANGUAGE Rank2Types, FlexibleContexts #-}
+{-# LANGUAGE Rank2Types, FlexibleContexts, ScopedTypeVariables #-}
 module Tests.CoreAPI
   (
    qcProps
@@ -85,6 +85,7 @@ qcProps quick =
 --     exec 10 "Simple rename"          propM_simpleRenameOK
 --   ,
     propM_profileMe
+--      propM_stressDealloc
   ]
   where
     exec = mkMemDevExec quick "CoreAPI"
@@ -775,24 +776,44 @@ propM_simpleRenameOK _g dev = do
     [d1, d2, d3, f1, f2, f3] =
       map (rootPath </>) ["d1", "d2", "d3", "f1", "f2", "f3"]
 
+-- TODO: turn this into a proper 'usage pattern' test case
 propM_profileMe :: (Args, Property)
 propM_profileMe = (,) stdArgs{maxSuccess = 1} $ monadicIO $ go $ \dev -> do
   fs <- mkNewFS dev >> mountOK dev
-  trace ("created fs") $ do
   execH "propM_profileMe" fs "create and write" $ do
     createFile fn defaultFilePerms 
-    trace ("created file") $ do
     withFile fn (fofWriteOnly True) $ \fh -> do
-      forM addrs $ \addr -> do
---        trace ("Writing " ++ show (BS.length chunk) ++ " bytes to "
---               ++ fn ++ " at offset " ++ show addr) $ do
-        write fh addr chunk
+      forM addrs $ \addr -> write fh addr chunk
   where
-    fn       = rootPath </> "theFile"
-    go f     = run (memDev g) >>= (`whenDev` run . bdShutdown) f
-    g        = BDGeom 32768 512
-    chunk    = BS.replicate 512 0x42      -- 512B chunk
-    addrs    = [ i * 512 | i <- [0..511]] -- 256 KiB addrs
+    fn    = rootPath </> "theFile"
+    go f  = run (memDev g) >>= (`whenDev` run . bdShutdown) f
+    g     = BDGeom 32768 512
+    chunk = BS.replicate 512 0x42      -- 512B chunk
+    addrs = [ i * 512 | i <- [0..511]] -- 256 KiB addrs
+--  g     = BDGeom 32768 4096             -- 128 MiB FS
+--  chunk = BS.replicate 4096 0x42        -- 4K chunk
+--  addrs = [ i * 4096 | i <- [0..4095]]  -- lower 16 MiB addrs
+
+propM_stressDealloc :: (Args, Property)
+propM_stressDealloc = (,) stdArgs{maxSuccess = 1} $ monadicIO $ go $ \dev -> do
+  fs <- mkNewFS dev >> mountOK dev
+  execH "propM_stressDealloc" fs "create and dealloc" $ do
+    createFile fn defaultFilePerms 
+    withFile fn (fofWriteOnly True) $ \fh -> do
+      write fh 0 (BS.concat $ replicate blkSz chunk)
+
+    -- Repeatedly trunc the file in block-size increments to push on
+    -- deallocation.
+    mapM_ (setFileSize fn) sizes
+
+  where
+    fn     = rootPath </> "theFile"
+    go f   = run (memDev g) >>= (`whenDev` run . bdShutdown) f
+    blkSz  = (512 :: Int) -- 16MiB FS, 512B chunks, 256 KiB total write
+    blkSzI = fromIntegral blkSz
+    g      = BDGeom 32768 (fromIntegral blkSz)
+    chunk  = BS.replicate blkSz 0x42   
+    sizes  = [ i * blkSzI | i <- reverse [0..(blkSzI-1)]]
 
 --     g        = BDGeom 32768 4096             -- 128 MiB FS
 --     chunk    = BS.replicate 4096 0x42        -- 4K chunk
