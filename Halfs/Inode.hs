@@ -491,12 +491,12 @@ writeStream_lckd startIR start trunc bytes              = do
   -- Begin at the last-written Cont if it makes sense to do so
   initCont <- do 
     (cnt, c) <- case lcInfo of
-                  (lcr, lci)
-                    | lcr == nilContRef || lci > sContIdx ->
-                        trace ("case 1") $ do
-                        return (sContIdx+1, inoCont startInode)
-                    | otherwise ->
-                      (,) (sContIdx - lci + 1) `fmap` drefCont lcr
+      (lcr, lci) 
+        | lcr == nilContRef || lci > sContIdx ->
+            trace ("case 1") $ do
+            return (sContIdx+1, inoCont startInode)
+        | otherwise ->
+            (,) (sContIdx - lci + 1) `fmap` drefCont lcr
     trace ("cnt = " ++ show cnt) $ return ()
     trace ("c = " ++ show c) $ return () 
     lastCont (Just cnt) c
@@ -995,47 +995,29 @@ writeInode :: (Monad m, Ord t, Serialize t, Show t) =>
               BlockDevice m -> Inode t -> m ()
 writeInode dev n = bdWriteBlock dev (unIR $ inoAddress n) (encode n)
 
--- | Expands the given Cont into a Cont list containing itself followed by all
--- of its continuation inodes; can be bounded by a positive nonzero value to
--- only retrieve (up to) the given number of conts.  NB/TODO: We need to
--- optimize/fix this function. The worst case is, e.g., writing a small number
--- of bytes at a low offset into a huge file (and hence a long continuation
--- chain): we read the entire chain when examination of the stream from the
--- start to end offsets would be sufficient. (WIP, not quite there yet).
+-- | Expands the given Cont into a Cont list containing itself followed by zero
+-- or more Conts; can be bounded by a positive nonzero value to only retrieve
+-- (up to) the given number of conts.  
 expandConts :: HalfsCapable b t r l m =>
                Maybe Word64 -> Cont -> HalfsM b r l m [Cont]
 expandConts (Just bnd) start@Cont{ continuation = cr }
   | bnd == 0                      = throwError HE_InvalidContIdx
   | cr  == nilContRef || bnd == 1 = return [start]
   | otherwise                     = do
-      trace ("recursive csae of expandConts, bnd is " ++ show bnd) $ do
-      blah <- (drefCont cr >>= expandConts (Just (bnd - 1)))
-      trace ("blah = " ++ show blah) $ do
-      return (start:blah)
---      (start:) `fmap` (drefCont cr >>= expandConts (Just (bnd - 1)))
+      (start:) `fmap` (drefCont cr >>= expandConts (Just (bnd - 1)))
 expandConts Nothing start@Cont{ continuation = cr }
   | cr == nilContRef = return [start]
   | otherwise        = do
-      trace ("recursive case of expandConts, unbounded, cr = " ++ show cr) $ do
-      tmp <- drefCont cr
-      trace ("dref of cr ok" ) $ do
       (start:) `fmap` (drefCont cr >>= expandConts Nothing)
 
 lastCont :: HalfsCapable b t r l m =>
             Maybe Word64 -> Cont -> HalfsM b r l m Cont
 lastCont mbnd c = last `fmap` expandConts mbnd c
 
--- foldM             :: (Monad m) => (a -> b -> m a) -> a -> [b] -> m a
--- foldM _ a []      =  return a
--- foldM f a (x:xs)  =  f a x >>= \fax -> foldM f fax xs
--- foldM_            :: (Monad m) => (a -> b -> m a) -> a -> [b] -> m ()
--- foldM_ f a xs     = foldM f a xs >> return ()
-
 contFoldM :: HalfsCapable b t r l m =>
              (a -> Cont -> HalfsM b r l m a) -> a -> Cont -> HalfsM b r l m a
 contFoldM f a c@Cont{ continuation = cr } | cr == nilContRef = f a c
 contFoldM f a c@Cont{ continuation = cr } = do
-  trace ("in recursive case of contFoldM, cont = " ++ show c) $ do 
   next <- drefCont cr
   f a c >>= \fac -> contFoldM f fac next
 
