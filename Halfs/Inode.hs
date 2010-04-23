@@ -455,7 +455,8 @@ writeStream_lckd startIR start trunc bytes              = do
       bs          = bdBlockSize dev
   (_, _, _, apc) <- getSizes bs
 
-  conts0_removeMe <- expandConts Nothing (inoCont startInode)
+  -- conts0_removeMe <- expandConts Nothing (inoCont startInode)
+  conts0_removeMe <- contMapM return (inoCont startInode)
 
   (sContIdx, sBlkOff, sByteOff) <- getStreamIdx bs fileSz start
 
@@ -467,6 +468,12 @@ writeStream_lckd startIR start trunc bytes              = do
       blksToAlloc  = bytesToAlloc `divCeil` bs
       contsToAlloc = (blksToAlloc - availBlks (last conts0_removeMe)) `divCeil` apc
       availBlks c  = numAddrs c - blockCount c
+
+  availBlksLastCont <- availBlks `fmap` if nilContRef == fst lcInfo
+                                         then return $ inoCont startInode
+                                         else drefCont (fst lcInfo)
+  let contsToAlloc' = (blksToAlloc - availBlksLastCont) `divCeil` apc
+  assert (contsToAlloc == contsToAlloc') $ return () 
 
   dbug ("\nwriteStream: " ++ show (sContIdx, sBlkOff, sByteOff)
         ++ " (start=" ++ show start ++ ")"
@@ -511,6 +518,7 @@ writeStream_lckd startIR start trunc bytes              = do
            lastContIdx = snd lcInfo
        dbug ("lastContIdx = " ++ show lastContIdx) $ return ()
        dbug ("sContIdx = " ++ show sContIdx) $ return () 
+
        -- Handle "rollover" for when we just allocated beyond a Cont boundary. 
        if lastContIdx < sContIdx 
         then attachEmbed `fmap` lastCont (Just $ sContIdx - lastContIdx + 1) st
@@ -521,127 +529,126 @@ writeStream_lckd startIR start trunc bytes              = do
   dbug ("stCont1 = " ++ show stCont1) $ return ()
   dbug ("dirtyAlloc = " ++ show dirtyAlloc) $ return () 
 
-  when (sBlkOff < blockCount stCont1) $ do 
-    sBlk <- lift $ readBlock dev stCont1 sBlkOff
-  
-    let (sData, bytes') = bsSplitAt (bs - sByteOff) bytes
-        -- The first block-sized chunk to write is the region in the start block
-        -- prior to the start byte offset (header), followed by the first bytes
-        -- of the data.  The trailer is nonempty and must be included when
-        -- BS.length bytes < bs.
-        firstChunk =
-          let header   = bsTake sByteOff sBlk
-              trailLen = sByteOff + fromIntegral (BS.length sData)
-              trailer  = if trunc
-                          then bsReplicate (bs - trailLen) truncSentinel
-                          else bsDrop trailLen sBlk
-              r        = header `BS.append` sData `BS.append` trailer
-          in assert (fromIntegral (BS.length r) == bs) r
-  
-    -- Destination block addresses starting at the the start block
-    hack_remove_me <- drop 1 `fmap` expandConts Nothing stCont1 -- replace with iteration over conts
-    dbug ("hack_remove_me = " ++ show hack_remove_me) $ return () 
 
-    dbug ("here3") $ do
-    let blkAddrs = genericDrop sBlkOff (blockAddrs stCont1)
-                     ++ concatMap blockAddrs hack_remove_me
+  if (sBlkOff >= blockCount stCont1) then trace ("sBlkOff >= blockCount stCont1!!!") $ return () else return () 
+                                                                                          
+  assert (sBlkOff < blockCount stCont1) $ return () 
 
-    -- dirtyConts0 <<<< HERE: don't use dirtyConts here! that only tracks what
-                   -- CONTS to write
-                   -- and is
-                   -- essentially
-                   -- unrelated to
-                   -- collecting block
-                   -- addrs. (think of
-                   -- the situation in
-                   -- which no CONTs
-                   -- are themselves
-                   -- dirty
+  sBlk <- lift $ readBlock dev stCont1 sBlkOff
 
---     allConts <- contFoldM (\acc cont -> dbug ("being folded, cont = " ++ show cont) $ return (cont:acc)) [] stCont1
---     dbug ("allConts = " ++ show allConts) $ do
+  let (sData, bytes') = bsSplitAt (bs - sByteOff) bytes
+      -- The first block-sized chunk to write is the region in the start block
+      -- prior to the start byte offset (header), followed by the first bytes
+      -- of the data.  The trailer is nonempty and must be included when
+      -- BS.length bytes < bs.
+      firstChunk =
+        let header   = bsTake sByteOff sBlk
+            trailLen = sByteOff + fromIntegral (BS.length sData)
+            trailer  = if trunc
+                        then bsReplicate (bs - trailLen) truncSentinel
+                        else bsDrop trailLen sBlk
+            r        = header `BS.append` sData `BS.append` trailer
+        in assert (fromIntegral (BS.length r) == bs) r
 
-    (chunks, remaining) <- do
-      (cs, rems) <- unzip `fmap` unfoldrM (lift . getBlockContents dev trunc)
-                                          (bytes', drop 1 blkAddrs)
-      return (firstChunk:cs, last (BS.empty{-parity-}:rems))
+  -- Destination block addresses starting at the the start block
+  hack_remove_me <- drop 1 `fmap` expandConts Nothing stCont1 -- replace with iteration over conts
+  dbug ("hack_remove_me = " ++ show hack_remove_me) $ return () 
 
-    assert (all ((== safeToInt bs) . BS.length) chunks) $ do
-    assert (BS.null remaining)                          $ do
+  let blkAddrs = genericDrop sBlkOff (blockAddrs stCont1)
+                   ++ concatMap blockAddrs hack_remove_me
 
-    dbug ("blkAddrs = " ++ show blkAddrs ++ " " ++ show (length blkAddrs) ++ " of them)") $ do 
-    dbug ("Have " ++ show (length blkAddrs) ++ " chunks)") $ do 
+  -- dirtyConts0 <<<< HERE: don't use dirtyConts here! that only tracks what
+                 -- CONTS to write
+                 -- and is
+                 -- essentially
+                 -- unrelated to
+                 -- collecting block
+                 -- addrs. (think of
+                 -- the situation in
+                 -- which no CONTs
+                 -- are themselves
+                 -- dirty
 
-{-
-    forM (blkAddrs `zip` chunks) $ \(a,ch) -> do
-      dbug ("Chunk (" ++ show a ++ ", " ++ show (BS.length ch) ++ " bytes):\n\t" ++ show ch ++ "\n") $ do
-      return ()                                          
--}
+--   allConts <- contFoldM (\acc cont -> dbug ("being folded, cont = " ++ show cont) $ return (cont:acc)) [] stCont1
+--   dbug ("allConts = " ++ show allConts) $ do
 
-    -- Write the data into the appropriate blocks
-    mapM_ (\(a,d) -> lift $ bdWriteBlock dev a d) (blkAddrs `zip` chunks)
+  (chunks, remaining) <- do
+    (cs, rems) <- unzip `fmap` unfoldrM (lift . getBlockContents dev trunc)
+                                        (bytes', drop 1 blkAddrs)
+    return (firstChunk:cs, last (BS.empty{-parity-}:rems))
 
-    (stCont2, numBlksFreed, dirtyUnalloc) <-
-      if trunc && bytesToAlloc == 0
-       then do
-         (st, nbf) <- truncUnalloc start len (stCont1, sContIdx)
-         return (st, nbf, if isEmbedded st then Just st else Nothing)
-       else return (stCont1, 0, Nothing)
+  assert (all ((== safeToInt bs) . BS.length) chunks) $ do
+  assert (BS.null remaining)                          $ do
 
-    dbug ("stCont2 = " ++ show stCont2) $ do
-    dbug ("dirtyUnalloc = " ++ show dirtyUnalloc) $ return () 
+  dbug ("blkAddrs = " ++ show blkAddrs ++ " " ++ show (length blkAddrs) ++ " of them)") $ do 
+  dbug ("Have " ++ show (length blkAddrs) ++ " chunks)") $ do 
 
-    conts1_removeMe <- expandConts Nothing stCont2
-    dbug ("all from stCont2 onwards (post alloc/trunc): " ++ show conts1_removeMe) $ do
+--   forM (blkAddrs `zip` chunks) $ \(a,ch) -> do
+--     dbug ("Chunk (" ++ show a ++ ", " ++ show (BS.length ch) ++ " bytes):\n\t" ++ show ch ++ "\n") $ do
+--     return ()                                          
 
-    assert (blksToAlloc + contsToAlloc == 0 || numBlksFreed == 0) $ return ()
+  -- Write the data into the appropriate blocks
+  mapM_ (\(a,d) -> lift $ bdWriteBlock dev a d) (blkAddrs `zip` chunks)
 
+  (stCont2, numBlksFreed, dirtyUnalloc) <-
+    if trunc && bytesToAlloc == 0
+     then do
+       (st, nbf) <- truncUnalloc start len (stCont1, sContIdx)
+       return (st, nbf, if isEmbedded st then Just st else Nothing)
+     else return (stCont1, 0, Nothing)
 
+  dbug ("stCont2 = " ++ show stCont2) $ do
+  dbug ("dirtyUnalloc = " ++ show dirtyUnalloc) $ return () 
 
-    now <- getTime 
-    eIdx@(eContIdx, _, _) <-
-      decompStreamOffset (bdBlockSize dev)
-        (if start + len == 0 then 0 else max (start + len - 1) start)
-    dbug ("eIdx = " ++ show eIdx) $ do
+  conts1_removeMe <- expandConts Nothing stCont2
+  dbug ("all from stCont2 onwards (post alloc/trunc): " ++ show conts1_removeMe) $ do
 
-    -- Obtain the (new) end of the cont chain.
-    let contDist = eContIdx - sContIdx
-    dbug ("contDist = " ++ show contDist) $ return () 
-    expanded <- expandConts (Just $ contDist + 1) stCont2
-    dbug ("expanded = " ++ show expanded) $ do
-    let eCont = last expanded
-    dbug ("eCont = " ++ show eCont) $ return () 
+  assert (blksToAlloc + contsToAlloc == 0 || numBlksFreed == 0) $ return ()
 
-    let lcInfo' = if eContIdx == sContIdx
-                   then (address stCont2, sContIdx)
-                   else (address eCont, eContIdx)
+  now <- getTime 
+  eIdx@(eContIdx, _, _) <-
+    decompStreamOffset (bdBlockSize dev)
+      (if start + len == 0 then 0 else max (start + len - 1) start)
+  dbug ("eIdx = " ++ show eIdx) $ do
 
-    dbug ("lcInfo' = " ++ show lcInfo') $ return ()
-          
-    -- Finally, persist the inode
-    lift $ writeInode dev $ 
-      startInode
-      { inoLastCont    = lcInfo'
-      , inoFileSize    = newFileSz
-      , inoAllocBlocks = inoAllocBlocks startInode
-                         + blksToAlloc
-                         + contsToAlloc
-                         - numBlksFreed
-      , inoAccessTime  = now
-      , inoModifyTime  = now
-      , inoChangeTime  = now
-      , inoCont        =
-          case (dirtyAlloc, dirtyUnalloc) of
-            (Nothing, Nothing) -> inoCont startInode
-            (Just _,  Just _)  ->
-              error $ "Internal: embedded "
-              ++ "cont modification from "
-              ++ "both allocFill & truncUnalloc"
-              -- ^ "Can't happen"
-            (Just c, _)        -> c
-            (_, Just c)        -> c
-      }
-  -- ======================= End inode critical section =======================
+  -- Obtain the (new) end of the cont chain.
+  let contDist = eContIdx - sContIdx
+  dbug ("contDist = " ++ show contDist) $ return () 
+  expanded <- expandConts (Just $ contDist + 1) stCont2
+  dbug ("expanded = " ++ show expanded) $ do
+  let eCont = last expanded
+  dbug ("eCont = " ++ show eCont) $ return () 
+
+  let lcInfo' = if eContIdx == sContIdx
+                 then (address stCont2, sContIdx)
+                 else (address eCont, eContIdx)
+
+  dbug ("lcInfo' = " ++ show lcInfo') $ return ()
+        
+  -- Finally, persist the inode
+  lift $ writeInode dev $ 
+    startInode
+    { inoLastCont    = lcInfo'
+    , inoFileSize    = newFileSz
+    , inoAllocBlocks = inoAllocBlocks startInode
+                       + blksToAlloc
+                       + contsToAlloc
+                       - numBlksFreed
+    , inoAccessTime  = now
+    , inoModifyTime  = now
+    , inoChangeTime  = now
+    , inoCont        =
+        case (dirtyAlloc, dirtyUnalloc) of
+          (Nothing, Nothing) -> inoCont startInode
+          (Just _,  Just _)  ->
+            error $ "Internal: embedded "
+            ++ "cont modification from "
+            ++ "both allocFill & truncUnalloc"
+            -- ^ "Can't happen"
+          (Just c, _)        -> c
+          (_, Just c)        -> c
+    }
+-- ======================= End inode critical section =======================
   where
     len = fromIntegral $ BS.length bytes
 
@@ -1018,15 +1025,19 @@ lastCont mbnd c = last `fmap` expandConts mbnd c
 
 contFoldM :: HalfsCapable b t r l m =>
              (a -> Cont -> HalfsM b r l m a) -> a -> Cont -> HalfsM b r l m a
-contFoldM f a c@Cont{ continuation = cr } | cr == nilContRef = f a c
-contFoldM f a c@Cont{ continuation = cr } = do
-  next <- drefCont cr
-  f a c >>= \fac -> contFoldM f fac next
+contFoldM f a c@Cont{ continuation = cr }
+  | cr == nilContRef = f a c
+  | otherwise        = f a c >>= \fac -> drefCont cr >>= contFoldM f fac
+
+contMapM :: HalfsCapable b t r l m =>
+            (Cont -> HalfsM b r l m a) -> Cont -> HalfsM b r l m [a]
+contMapM f c@Cont{ continuation = cr }
+  | cr == nilContRef = liftM (:[]) (f c)
+  | otherwise        = liftM2 (:) (f c) (drefCont cr >>= contMapM f)
 
 drefCont :: HalfsCapable b t r l m =>
             ContRef -> HalfsM b r l m Cont
-drefCont cr@(CR addr)
-  | cr == nilContRef = throwError HE_InvalidContIdx
+drefCont cr@(CR addr) | cr == nilContRef = throwError HE_InvalidContIdx 
   | otherwise        = do  
       dev <- hasks hsBlockDev
       lift (bdReadBlock dev addr) >>= decodeCont (bdBlockSize dev)

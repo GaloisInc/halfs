@@ -38,15 +38,15 @@ import Debug.Trace
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [ -- Inode module invariants
-    exec 10 "Inode module invariants" propM_inodeModuleInvs
+    exec 1 "Inode module invariants" propM_inodeModuleInvs
   , -- Inode stream write/read/(over)write/read property
-    exec 10 "Basic WRWR" propM_basicWRWR
+    exec 1 "Basic WRWR" propM_basicWRWR
   , -- Inode stream write/read/(truncating)write/read property
-    exec 10 "Truncating WRWR" propM_truncWRWR
+    exec 1 "Truncating WRWR" propM_truncWRWR
   , -- Inode length-specific stream write/read
-    exec 10 "Length-specific WR" propM_lengthWR
+    exec 1 "Length-specific WR" propM_lengthWR
   , -- Inode single reader/writer lock testing
-    exec 10 "Inode single reader/write mutex" propM_inodeMutexOK
+    exec 1 "Inode single reader/write mutex" propM_inodeMutexOK
   ]
   where
     exec = mkMemDevExec quick "Inode"
