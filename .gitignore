@@ -2,7 +2,9 @@ TAGS
 *.o
 *.hi
 *.a
+*_flymake*
 /dist/*
+/test/src/Driver*
 /test/dist/*
 /deps/hfuse/dist
 /deps/hfuse/examples/HelloFS

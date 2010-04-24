@@ -487,8 +487,9 @@ writeStream_lckd startIR start trunc bytes              = do
         ++ show blksToAlloc ++ "/" ++ show bytesToAlloc) $ do
   dbug ("inoLastCont startInode = " ++ show (lcInfo) )            $ return ()
   dbug ("inoCont startInode     = " ++ show (inoCont startInode)) $ return ()   
-  dbug ("all conts on entry:") $ return ()
-  contMapM_ (return . dbug . ((++) "  ") . show) (inoCont startInode)
+
+  dbug ("Conts on entry, from inode cont:") $ return ()
+  dumpConts (inoCont startInode)
 
   --------------------------------------------------------------------------------
   -- Allocation 
@@ -510,82 +511,30 @@ writeStream_lckd startIR start trunc bytes              = do
     if blksToAlloc == 0
      then return (sCont, Nothing)
      else do 
-       st <- allocFill availBlks blksToAlloc contsToAlloc sCont
-       dbug ("st = " ++ show st) $ return () 
-       let attachEmbed = flip (,) (if isEmbedded st then Just st else Nothing)
+       cont <- allocFill availBlks blksToAlloc contsToAlloc sCont
+       dbug ("cont = " ++ show cont) $ return () 
+       let attachEmbed = flip (,) (if isEmbedded cont then Just cont else Nothing)
            lci         = snd lcInfo
        dbug ("lci = " ++ show lci) $ return ()
        dbug ("sContI = " ++ show sContI) $ return () 
 
        -- Handle "rollover" for when we just allocated beyond a Cont boundary. 
        if lci < sContI 
-        then attachEmbed `fmap` getLastCont (Just $ sContI - lci + 1) st
-        else return $ attachEmbed st
+        then attachEmbed `fmap` getLastCont (Just $ sContI - lci + 1) cont
+        else return $ attachEmbed cont
   
   dbug ("sCont' = " ++ show sCont') $ return ()
   dbug ("dirtyAlloc = " ++ show dirtyAlloc) $ return () 
+  dbug ("Conts immediately after alloc, from sCont'") $ return ()
+  dumpConts (sCont')
 
   assert (sBlkOff < blockCount sCont') $ return () 
 
-  -----------------------------------------------------------------------------------------
-  -- Data streaming
+  --------------------------------------------------------------------------------
+  -- Truncation 
 
-  sBlk <- lift $ readBlock dev sCont' sBlkOff
-
-  let (sData, bytes') = bsSplitAt (bs - sByteOff) bytes
-      -- The first block-sized chunk to write is the region in the start block
-      -- prior to the start byte offset (header), followed by the first bytes
-      -- of the data.  The trailer is nonempty and must be included when
-      -- BS.length bytes < bs.
-      firstChunk =
-        let header   = bsTake sByteOff sBlk
-            trailLen = sByteOff + fromIntegral (BS.length sData)
-            trailer  = if trunc
-                        then bsReplicate (bs - trailLen) truncSentinel
-                        else bsDrop trailLen sBlk
-            r        = header `BS.append` sData `BS.append` trailer
-        in assert (fromIntegral (BS.length r) == bs) r
-
-  -- Destination block addresses starting at the the start block
-  hack_remove_me <- drop 1 `fmap` expandConts Nothing sCont' -- replace with iteration over conts
-  dbug ("hack_remove_me = " ++ show hack_remove_me) $ return () 
-
-  let blkAddrs = genericDrop sBlkOff (blockAddrs sCont')
-                   ++ concatMap blockAddrs hack_remove_me
-
-  -- dirtyConts0 <<<< HERE: don't use dirtyConts here! that only tracks what
-                 -- CONTS to write
-                 -- and is
-                 -- essentially
-                 -- unrelated to
-                 -- collecting block
-                 -- addrs. (think of
-                 -- the situation in
-                 -- which no CONTs
-                 -- are themselves
-                 -- dirty
-
---   allConts <- contFoldM (\acc cont -> dbug ("being folded, cont = " ++ show cont) $ return (cont:acc)) [] sCont'
---   dbug ("allConts = " ++ show allConts) $ do
-
-  (chunks, remaining) <- do
-    (cs, rems) <- unzip `fmap` unfoldrM (lift . getBlockContents dev trunc)
-                                        (bytes', drop 1 blkAddrs)
-    return (firstChunk:cs, last (BS.empty{-parity-}:rems))
-
-  assert (all ((== safeToInt bs) . BS.length) chunks) $ do
-  assert (BS.null remaining)                          $ do
-
-  dbug ("blkAddrs = " ++ show blkAddrs ++ " " ++ show (length blkAddrs) ++ " of them)") $ do 
-  dbug ("Have " ++ show (length blkAddrs) ++ " chunks)") $ do 
-
---   forM (blkAddrs `zip` chunks) $ \(a,ch) -> do
---     dbug ("Chunk (" ++ show a ++ ", " ++ show (BS.length ch) ++ " bytes):\n\t" ++ show ch ++ "\n") $ do
---     return ()                                          
-
-  -- Write the data into the appropriate blocks
-  mapM_ (\(a,d) -> lift $ bdWriteBlock dev a d) (blkAddrs `zip` chunks)
-
+  -- Truncate if needed and obtain (1) the new start cont at which to start
+  -- writing data and (2) possibly a dirty cont to write back into the inode
   (sCont'', numBlksFreed, dirtyUnalloc) <-
     if trunc && bytesToAlloc == 0
      then do
@@ -595,16 +544,13 @@ writeStream_lckd startIR start trunc bytes              = do
 
   dbug ("sCont'' = " ++ show sCont'') $ do
   dbug ("dirtyUnalloc = " ++ show dirtyUnalloc) $ return () 
-
-  conts1_removeMe <- expandConts Nothing sCont''
-  dbug ("all from sCont'' onwards (post alloc/trunc): " ++ show conts1_removeMe) $ do
+  dbug ("Conts immediately after unalloc, from sCont''") $ return ()
+  dumpConts (sCont'')
 
   assert (blksToAlloc + contsToAlloc == 0 || numBlksFreed == 0) $ return ()
 
-  now <- getTime 
-  eIdx@(eContI, _, _) <-
-    decompStreamOffset (bdBlockSize dev)
-      (if start + len == 0 then 0 else max (start + len - 1) start)
+  eIdx@(eContI, _, _) <- decompStreamOffset (bdBlockSize dev)
+                           (bytesToEnd start len)
   dbug ("eIdx = " ++ show eIdx) $ do
 
   -- Obtain the (new) end of the cont chain.
@@ -621,7 +567,74 @@ writeStream_lckd startIR start trunc bytes              = do
 
   dbug ("lcInfo' = " ++ show lcInfo') $ return ()
         
+  -----------------------------------------------------------------------------------------
+  -- Data streaming
+
+  when (len > 0) $ do 
+    
+--     trace ("sBlkOff = " ++ show sBlkOff) $ return ()
+--     trace ("sCont'' = " ++ show sCont'') $ return ()
+--     trace ("here0") $ return ()
+
+    sBlk <- lift $ readBlock dev sCont'' sBlkOff
+--     trace ("here1") $ return ()
+  
+    let (sData, bytes') = bsSplitAt (bs - sByteOff) bytes
+        -- The first block-sized chunk to write is the region in the start block
+        -- prior to the start byte offset (header), followed by the first bytes
+        -- of the data.  The trailer is nonempty and must be included when
+        -- BS.length bytes < bs.
+        firstChunk =
+          let header   = bsTake sByteOff sBlk
+              trailLen = sByteOff + fromIntegral (BS.length sData)
+              trailer  = if trunc
+                          then bsReplicate (bs - trailLen) truncSentinel
+                          else bsDrop trailLen sBlk
+              r        = header `BS.append` sData `BS.append` trailer
+          in assert (fromIntegral (BS.length r) == bs) r
+  
+    -- Destination block addresses starting at the the start block
+    hack_remove_me <- drop 1 `fmap` expandConts Nothing sCont'' -- replace with iteration over conts
+    dbug ("hack_remove_me = " ++ show hack_remove_me) $ return () 
+  
+    let blkAddrs = genericDrop sBlkOff (blockAddrs sCont'')
+                     ++ concatMap blockAddrs hack_remove_me
+  
+    -- dirtyConts0 <<<< HERE: don't use dirtyConts here! that only tracks what
+                   -- CONTS to write
+                   -- and is
+                   -- essentially
+                   -- unrelated to
+                   -- collecting block
+                   -- addrs. (think of
+                   -- the situation in
+                   -- which no CONTs
+                   -- are themselves
+                   -- dirty
+  
+  --   allConts <- contFoldM (\acc cont -> dbug ("being folded, cont = " ++ show cont) $ return (cont:acc)) [] sCont''
+  --   dbug ("allConts = " ++ show allConts) $ do
+  
+    (chunks, remaining) <- do
+      (cs, rems) <- unzip `fmap` unfoldrM (lift . getBlockContents dev trunc)
+                                          (bytes', drop 1 blkAddrs)
+      return (firstChunk:cs, last (BS.empty{-parity-}:rems))
+  
+    assert (all ((== safeToInt bs) . BS.length) chunks) $ do
+    assert (BS.null remaining)                          $ do
+  
+    dbug ("blkAddrs = " ++ show blkAddrs ++ " " ++ show (length blkAddrs) ++ " of them)") $ do 
+    dbug ("Have " ++ show (length blkAddrs) ++ " chunks)") $ do 
+  
+  --   forM (blkAddrs `zip` chunks) $ \(a,ch) -> do
+  --     dbug ("Chunk (" ++ show a ++ ", " ++ show (BS.length ch) ++ " bytes):\n\t" ++ show ch ++ "\n") $ do
+  --     return ()                                          
+  
+    -- Write the data into the appropriate blocks
+    mapM_ (\(a,d) -> lift $ bdWriteBlock dev a d) (blkAddrs `zip` chunks)
+
   -- Finally, persist the inode
+  now <- getTime 
   lift $ writeInode dev $ 
     startInode
     { inoLastCont    = lcInfo'
@@ -885,10 +898,8 @@ truncUnalloc start len (stCont, sContI) = do
   dev <- hasks hsBlockDev
   bm  <- hasks hsBlockMap
 
-  let truncToZero = start + len == 0
   eIdx@(eContI, eBlkOff, _) <-
-    decompStreamOffset (bdBlockSize dev)
-      (if truncToZero then 0 else max (start + len - 1) start)
+    decompStreamOffset (bdBlockSize dev) (bytesToEnd start len)
   dbug ("eContI = " ++ show eContI ++ ", sContI = " ++ show sContI) $ do
   assert (eContI >= sContI) $ return ()
   
@@ -908,7 +919,7 @@ truncUnalloc start len (stCont, sContI) = do
 
   dbug ("contsToFree = " ++ show contsToFree) $ do
 
-  let keepBlkCnt  = if truncToZero then 0 else eBlkOff + 1
+  let keepBlkCnt  = if start + len == 0 then 0 else eBlkOff + 1
       allFreeBlks = genericDrop keepBlkCnt (blockAddrs eCont)
                     -- ^ The remaining blocks in the end cont
                     ++ concatMap blockAddrs contsToFree
@@ -934,7 +945,7 @@ truncUnalloc start len (stCont, sContI) = do
   -- Currently, only eCont is considered dirty; we do *not* do any writes to any
   -- of the Conts that are detached from the chain & freed; this may have
   -- implications for fsck.
-  let dirtyConts@(stCont':_) =
+  let dirtyConts@(firstDirty:_) =
         [
           -- eCont, adjusted to discard the freed blocks and clear the
           -- continuation field.
@@ -943,8 +954,12 @@ truncUnalloc start len (stCont, sContI) = do
                 , continuation = nilCR
                 }
         ]
+      stCont' = if sContI == eContI then firstDirty else stCont
+
   dbug ("truncUnalloc: dirtyConts  = " ++ show dirtyConts)  $ return () 
   forM_ (dirtyConts) $ \c -> unless (isEmbedded c) $ lift $ writeCont dev c
+--  trace ("stCont = " ++ show stCont) $ return ()
+--  trace ("yielding new cont = " ++ show (if sContI == eContI then stCont' else stCont)) $ do
   return (stCont', numFreed)
 
 -- | Splits the input bytestring into block-sized chunks; may read from the
@@ -1043,7 +1058,7 @@ contMapM_ f c = contMapM f c >> return ()
 drefCont :: HalfsCapable b t r l m =>
             ContRef -> HalfsM b r l m Cont
 drefCont cr@(CR addr) | cr == nilCR = throwError HE_InvalidContIdx 
-  | otherwise        = do  
+                      | otherwise        = do  
       dev <- hasks hsBlockDev
       lift (bdReadBlock dev addr) >>= decodeCont (bdBlockSize dev)
 
@@ -1083,6 +1098,11 @@ getStreamIdx :: HalfsCapable b t r l m =>
 getStreamIdx blkSz fileSz start = do
   when (start > fileSz) $ throwError $ HE_InvalidStreamIndex start
   decompStreamOffset blkSz start
+
+bytesToEnd :: Word64 -> Word64 -> Word64
+bytesToEnd start len
+  | start + len == 0 = 0
+  | otherwise        = max (start + len - 1) start
 
 -- "Safe" (i.e., emits runtime assertions on overflow) versions of
 -- BS.{take,drop,replicate}.  We want the efficiency of these functions without
@@ -1304,3 +1324,20 @@ instance Serialize Cont where
     checkMagic x = do
       magic <- getBytes 8
       unless (magic == x) $ fail "Invalid Cont: magic number mismatch"
+
+--------------------------------------------------------------------------------
+-- Debugging cruft
+
+dumpConts :: HalfsCapable b t r l m =>
+             Cont -> HalfsM b r l m ()
+dumpConts stCont = do
+  conts <- expandConts Nothing stCont
+  if null conts
+   then dbug ("=== No conts ===") $ return ()
+   else do
+     dbug ("=== Conts ===") $ return ()
+--     dbug (show conts) $ do
+     mapM_ (\c -> dbug ("  " ++ show c) $ return ()) conts
+  -- dbug
+
+             
