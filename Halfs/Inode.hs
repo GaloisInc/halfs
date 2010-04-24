@@ -559,14 +559,13 @@ writeStream_lckd startIR start trunc bytes              = do
   ------------------------------------------------------------------------------
   -- Data streaming
 
-  when (len > 0) $ writeInodeData (sIdx, sCont'') trunc bytes
-
-  --------------------------------------------------------------------------------
-  -- Inode metadata fixup & persist: Obtain the (new) end of the cont chain so
-  -- we can track it for "shortcut" (haha) writes.
-
   (eContI, _, _) <- decompStreamOffset (bdBlockSize dev) (bytesToEnd start len)
   eCont          <- getLastCont (Just $ (eContI - sContI) + 1) sCont''
+  when (len > 0) $ writeInodeData (sIdx, sCont'') eContI trunc bytes
+
+  --------------------------------------------------------------------------------
+  -- Inode metadata adjustments & persist
+
   now            <- getTime 
   lift $ writeInode dev $ 
     startInode
@@ -887,29 +886,80 @@ truncUnalloc start len (stCont, sContI) = do
   return (stCont', numFreed)
 
 -- | Write the given bytes to the already-allocated/truncated inode data stream
--- starting at the given start cont & blk/byte offsets.  Assumes the inode lock
--- is held.
-
+-- starting at the given start indices (cont/blk/byte offsets) and ending when
+-- we have traversed up (and including) to the end cont index.  Assumes the
+-- inode lock is held.
 writeInodeData :: HalfsCapable b t r l m =>
-                  (StreamIdx, Cont) -> Bool -> ByteString -> HalfsM b r l m ()
-writeInodeData ((_, sBlkOff, sByteOff), sCont) trunc bytes = do
+                  (StreamIdx, Cont)
+               -> Word64
+               -> Bool
+               -> ByteString
+               -> HalfsM b r l m ()
+writeInodeData ((sContI, sBlkOff, sByteOff), sCont) eContI trunc bytes = do
   dev  <- hasks hsBlockDev
   sBlk <- lift $ readBlock dev sCont sBlkOff
-  let bs              = bdBlockSize dev
-      (sData, bytes') = bsSplitAt (bs - sByteOff) bytes
-      -- The first block-sized chunk to write is the region in the start block
-      -- prior to the start byte offset (header), followed by the first bytes
-      -- of the data.  The trailer is nonempty and must be included when
-      -- BS.length bytes < bs.
-      firstChunk =
-        let header   = bsTake sByteOff sBlk
-            trailLen = sByteOff + fromIntegral (BS.length sData)
-            trailer  = if trunc
-                        then bsReplicate (bs - trailLen) truncSentinel
-                        else bsDrop trailLen sBlk
-            r        = header `BS.append` sData `BS.append` trailer
-        in assert (fromIntegral (BS.length r) == bs) r
+  let bs      = bdBlockSize dev
+      toWrite =
+        -- The first block-sized chunk to write is the region in the start block
+        -- prior to the start byte offset (header), followed by the first bytes
+        -- of the data.  The trailer is nonempty and must be included when
+        -- BS.length bytes < bs.  We adjust the input bytestring by this
+        -- first-block padding below.
+        let (sData, bytes') = bsSplitAt (bs - sByteOff) bytes
+            header          = bsTake sByteOff sBlk            
+            trailLen        = sByteOff + fromIntegral (BS.length sData)
+            trailer         = if trunc
+                               then bsReplicate (bs - trailLen) truncSentinel
+                               else bsDrop trailLen sBlk
+            fstBlk          = header `BS.append` sData `BS.append` trailer
+        in assert (fromIntegral (BS.length fstBlk) == bs) $
+             fstBlk `BS.append` bytes'
 
+  -- unfoldrM :: (Monad m) => (b -> m (Maybe (a, b))) -> b -> m [a]
+  -- unfold over conts so we don't have to make a fucking bounded fold function
+  
+  -- The unfoldr seed is: current cont/idx, a block offset "supply", and the
+  -- data that remains to be written.
+  trace ("here0") $ return ()
+  unfoldrM (fillCont dev) ((sCont, sContI), sBlkOff : repeat 0,  toWrite)
+  trace ("here1") $ return ()
+    -- ^ need: decreasing start cont index (we're moving rightwards), block offset supply, data remaining to write
+
+  trace ("writeInodeData to write " ++ show (BS.length toWrite) ++ " bytes") $ do
+  fail "end of the putative world"
+  return ()
+  where
+    -- fillCont :: ((Cont, Word64), [Word64], ByteString) 
+    --          -> m (Maybe ((), (Word64, [Word64], ByteString))
+    -- NB: no accumulation of values needed so, the accumulated type is just ()
+    fillCont dev (_, [], _) = error "The impossible happened"
+    fillCont dev ((cCont, cContI), blkOff:boffs, toWrite)
+      | cContI > eContI || BS.null toWrite = (trace "fillCont returning Nothing from base case") $ return Nothing
+      | otherwise                          = do
+          trace ("****************************** recursive case") $ return ()
+          let blkAddrs = genericDrop blkOff (blockAddrs cCont)
+          (chunks, remBytes) <- ((\(cs, rems) -> (cs, last rems)) . unzip)
+                                `fmap`
+                                unfoldrM (lift . getBlockContents dev trunc)
+                                         (toWrite, blkAddrs)
+          trace ("past inner unfoldr, remBytes has length " ++ show (BS.length remBytes) ++ ", chunks has length " ++ show (length chunks)) $ return ()
+          trace ("(length blkAddrs) = " ++ show (length blkAddrs)) $ return ()
+          assert (length chunks == length blkAddrs) $ return ()
+
+          trace ("(blkAddrs `zip` chunks) = " ++ show (blkAddrs `zip` chunks)) $ return ()
+
+          mapM_ (lift . uncurry (bdWriteBlock dev)) (blkAddrs `zip` chunks)
+          
+          if isNilCR (continuation cCont)
+           then return Nothing
+           else do
+             nextCont <- drefCont (continuation cCont)
+             return $ Just $ ((), ((nextCont, cContI+1), boffs, remBytes))
+
+          -- NB/TODO: if no continuation in cont, return Nothing, otherwise dref & "recurse"
+          -- return Nothing
+
+{-
   -- Destination block addresses starting at the the start block
   hack_remove_me <- drop 1 `fmap` expandConts Nothing sCont -- replace with iteration over conts
   dbug ("hack_remove_me = " ++ show hack_remove_me) $ return () 
@@ -926,6 +976,8 @@ writeInodeData ((_, sBlkOff, sByteOff), sCont) trunc bytes = do
 
   -- Write the data into the appropriate blocks
   mapM_ (\(a,d) -> lift $ bdWriteBlock dev a d) (blkAddrs `zip` chunks)
+
+-}
 
 -- | Splits the input bytestring into block-sized chunks; may read from the
 -- block device in order to preserve contents of blocks if needed.
