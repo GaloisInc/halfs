@@ -90,7 +90,7 @@ newfs dev uid gid rdirPerms = do
       Directory
       rdirPerms
       rdirIR
-      nilInodeRef
+      nilIR
       uid
       gid
   assert (BS.length dirInode == fromIntegral (bdBlockSize dev)) $ do
@@ -325,7 +325,7 @@ readDir dh = do
     parentStat <- fileStat =<< do
       withLockedInode inr $ do
         p <- inoParent `fmap` drefInode inr
-        if p == nilInodeRef
+        if isNilIR p
          then fmap rootDir . readRef =<< hasks hsSuperBlock
          else return p
     return $ (dotPath, thisStat) : (dotdotPath, parentStat) : contents

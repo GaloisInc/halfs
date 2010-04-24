@@ -29,7 +29,7 @@ import Halfs.Inode               ( Cont(..)
                                  , minimalInodeSize
                                  , minContBlocks
                                  , minInodeBlocks
-                                 , nilContRef
+                                 , nilCR
                                  )
 import Halfs.Directory
 import Halfs.Protection          (UserID(..), GroupID(..))
@@ -206,7 +206,7 @@ instance (Arbitrary a, Ord a, Serialize a, Show a) => Arbitrary (Inode a) where
                         =<< minimalInodeSize createTm
     Inode
       <$> IR `fmap` arbitrary                -- inoParent
-      <*> return (nilContRef, 0)             -- inoLastCR
+      <*> return (nilCR, 0)                  -- inoLastCR
       <*> IR `fmap` arbitrary                -- inoAddress
       <*> arbitrary                          -- inoFileSize
       <*> arbitrary                          -- inoAllocBlocks
@@ -222,7 +222,7 @@ instance (Arbitrary a, Ord a, Serialize a, Show a) => Arbitrary (Inode a) where
       <*> (arbitrary >>= \cont -> do         -- inoCont
              let blockCount' = min (blockCount cont) addrCnt
              return
-               cont{ address    = nilContRef
+               cont{ address    = nilCR
                    , blockCount = blockCount'
                    , blockAddrs = genericTake blockCount' (blockAddrs cont)
                    , numAddrs   = min (numAddrs cont) addrCnt
