@@ -448,12 +448,12 @@ writeStream_lckd _ _ False bytes | 0 == BS.length bytes = return ()
 writeStream_lckd startIR start trunc bytes              = do
   -- ====================== Begin inode critical section ======================
 
-  -- NB: The implementation currently 'flattens' Contig/Discontig block groups
-  -- from the BlockMap allocator (see allocFill and truncUnalloc), which will
-  -- force us to treat them as Discontig when we unallocate.  We may want to
-  -- have the Conts hold onto these block groups directly and split/merge them
-  -- as needed to reduce the number of unallocation actions required, but we
-  -- leave this as a TODO for now.
+  -- NB: This implementation currently 'flattens' Contig/Discontig block groups
+  -- from the BlockMap allocator (see allocFill and truncUnalloc below), which
+  -- will force us to treat them as Discontig when we unallocate, which is more
+  -- expensive.  We may want to have the Conts hold onto these block groups
+  -- directly and split/merge them as needed to reduce the number of
+  -- unallocation actions required, but we leave this as a TODO for now.
 
   startInode@Inode{ inoLastCont = lcInfo } <- drefInode startIR
   dev                                      <- hasks hsBlockDev
@@ -477,7 +477,7 @@ writeStream_lckd startIR start trunc bytes              = do
                          else drefCont (fst lcInfo)                                      
     return $ (blksToAlloc - availInLast) `divCeil` apc
 
-  --------------------------------------------------------------------------------
+  ------------------------------------------------------------------------------
   -- Debugging miscellany
 
   dbug ("\nwriteStream: " ++ show (sContI, sBlkOff, sByteOff)
@@ -492,12 +492,12 @@ writeStream_lckd startIR start trunc bytes              = do
   dbug ("Conts on entry, from inode cont:") $ return ()
   dumpConts (inoCont startInode)
 
-  --------------------------------------------------------------------------------
-  -- Allocation 
+  ------------------------------------------------------------------------------
+  -- Allocation: 
 
   -- Obtain the initial cont by traversing Conts from either the inode's
-  -- embedded cont or from the cont from the last operation, whichever is
-  -- closest.
+  -- embedded cont or from the (saved) cont from the last operation, whichever
+  -- is closest.
   sCont <- do 
     (cnt, c) <- case lcInfo of
       (lcr, lci) | isNilCR lcr || lci > sContI ->
@@ -526,22 +526,6 @@ writeStream_lckd startIR start trunc bytes              = do
                else return st
        return (st', if isEmbedded st then Just st else Nothing)
 
-{-
-       cont <- allocFill availBlks blksToAlloc contsToAlloc sCont
-       dbug ("cont = " ++ show cont) $ return () 
-       let attachEmbed = flip (,) (if isEmbedded cont then Just cont else Nothing)
-           lci         = snd lcInfo
-       dbug ("lci = " ++ show lci) $ return ()
-       dbug ("sContI = " ++ show sContI) $ return () 
-
-       -- If we just allocated outside the a cont boundary, 
-       -- Handle "rollover" for when we just allocated beyond a Cont boundary. 
-       if lci < sContI 
-        then do
-          trace ("in rollover: sContI - lci + 1 = " ++ show (sContI - lci + 1)) $ do
-          attachEmbed `fmap` getLastCont (Just $ sContI - lci + 1) cont
-        else return $ attachEmbed cont
--}  
   dbug ("sCont' = " ++ show sCont') $ return ()
   dbug ("minodeCont = " ++ show minodeCont) $ return () 
   dbug ("Conts immediately after alloc, from sCont'") $ return ()
@@ -549,7 +533,7 @@ writeStream_lckd startIR start trunc bytes              = do
 
   assert (sBlkOff < blockCount sCont') $ return () 
 
-  --------------------------------------------------------------------------------
+  ------------------------------------------------------------------------------
   -- Truncation 
 
   -- Truncate if needed and obtain (1) the new start cont at which to start
@@ -572,7 +556,7 @@ writeStream_lckd startIR start trunc bytes              = do
 
   assert (blksToAlloc + contsToAlloc == 0 || numBlksFreed == 0) $ return ()
 
-  -----------------------------------------------------------------------------------------
+  ------------------------------------------------------------------------------
   -- Data streaming
 
   when (len > 0) $ writeInodeData (sIdx, sCont'') trunc bytes
@@ -598,17 +582,6 @@ writeStream_lckd startIR start trunc bytes              = do
     , inoModifyTime  = now
     , inoChangeTime  = now
     , inoCont        = maybe (inoCont startInode) id minodeCont'
-{-
-        case (minodeCont, minodeCont') of
-          (Nothing, Nothing) -> inoCont startInode
-          (Just _,  Just _)  ->
-            error $ "Internal: embedded "
-            ++ "cont modification from "
-            ++ "both allocFill & truncUnalloc"
-            -- ^ "Can't happen"
-          (Just c, _)        -> c
-          (_, Just c)        -> c
--}
     }
 -- ======================= End inode critical section =======================
 
@@ -913,9 +886,12 @@ truncUnalloc start len (stCont, sContI) = do
 --  trace ("yielding new cont = " ++ show (if sContI == eContI then stCont' else stCont)) $ do
   return (stCont', numFreed)
 
--- | Write the given bytes to the already-allocated/truncated inode data stream.
--- Assumes the inode lock is held.
+-- | Write the given bytes to the already-allocated/truncated inode data stream
+-- starting at the given start cont & blk/byte offsets.  Assumes the inode lock
+-- is held.
 
+writeInodeData :: HalfsCapable b t r l m =>
+                  (StreamIdx, Cont) -> Bool -> ByteString -> HalfsM b r l m ()
 writeInodeData ((_, sBlkOff, sByteOff), sCont) trunc bytes = do
   dev  <- hasks hsBlockDev
   sBlk <- lift $ readBlock dev sCont sBlkOff
@@ -935,10 +911,8 @@ writeInodeData ((_, sBlkOff, sByteOff), sCont) trunc bytes = do
         in assert (fromIntegral (BS.length r) == bs) r
 
   -- Destination block addresses starting at the the start block
-
   hack_remove_me <- drop 1 `fmap` expandConts Nothing sCont -- replace with iteration over conts
   dbug ("hack_remove_me = " ++ show hack_remove_me) $ return () 
-
   let blkAddrs = genericDrop sBlkOff (blockAddrs sCont)
                    ++ concatMap blockAddrs hack_remove_me
 
@@ -1327,8 +1301,4 @@ dumpConts stCont = do
    then dbug ("=== No conts ===") $ return ()
    else do
      dbug ("=== Conts ===") $ return ()
---     dbug (show conts) $ do
      mapM_ (\c -> dbug ("  " ++ show c) $ return ()) conts
-  -- dbug
-
-             
