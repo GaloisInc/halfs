@@ -497,6 +497,8 @@ writeStream_lckd startIR start trunc bytes              = do
   -- Obtain the initial cont by traversing Conts from either the inode's
   -- embedded cont or from the (saved) cont from the last operation, whichever
   -- is closest.
+  sCont <- findCont startInode sContI
+{-
   sCont <- do 
     (cnt, c) <- case lcInfo of
       (lcr, lci) | isNilCR lcr || lci > sContI ->
@@ -504,8 +506,8 @@ writeStream_lckd startIR start trunc bytes              = do
                  | otherwise -> 
                      (,) (sContI - lci + 1) `fmap` drefCont lcr
     getLastCont (Just cnt) c
-
   dbug ("sCont = " ++ show sCont) $ return ()
+-}
 
   -- Allocate if needed and obtain (1) the post-alloc start cont and (2)
   -- possibly a dirty cont to write back into the inode (ie, in case its
@@ -760,6 +762,16 @@ decodeCont blkSz bs = do
   case decode bs of
     Left s  -> throwError $ HE_DecodeFail_Cont s
     Right c -> return c{ numAddrs = numAddrs' }
+
+-- | Obtain the cont with the given cont index in the cont chain.
+-- Currently traverses Conts from either the inode's embedded cont or
+-- from the (saved) cont from the last operation, whichever is
+-- closest.
+findCont :: HalfsCapable b t r l m =>
+            Inode t -> Word64 -> HalfsM b r l m Cont
+findCont Inode{ inoLastCont = (lcr, lci), inoCont = defCont } sci
+  | isNilCR lcr || lci > sci = getLastCont (Just $ sci + 1) defCont
+  | otherwise = getLastCont (Just $ sci - lci + 1) =<< drefCont lcr
 
 -- | Allocate the given number of Conts and blocks, and fill blocks into the
 -- cont chain starting at the given cont.  Persists dirty conts and yields a new
