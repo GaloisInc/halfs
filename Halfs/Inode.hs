@@ -49,7 +49,7 @@ import Control.Exception
 import Data.ByteString(ByteString)
 import qualified Data.ByteString as BS
 import Data.Char
-import Data.List (find, genericDrop, genericLength, genericTake)
+import Data.List (genericDrop, genericLength, genericTake)
 import Data.Maybe
 import Data.Serialize 
 import Data.Serialize.Get hiding (skip, remaining)
@@ -70,7 +70,7 @@ import Halfs.Utils
 
 import System.Device.BlockDevice
 
-import Debug.Trace
+-- import Debug.Trace
 dbug :: String -> a -> a
 dbug _ = id
 -- dbug = trace
@@ -472,7 +472,7 @@ writeStream_lckd startIR start trunc bytes              = do
   contsToAlloc <- do 
     (_, _, _, apc) <- getSizes bs                                        
     availInLast    <- availBlks `fmap`                                 
-                        if nilCR == fst lcInfo                                      
+                        if isNilCR (fst lcInfo)
                          then return $ inoCont startInode                                
                          else drefCont (fst lcInfo)                                      
     return $ (blksToAlloc - availInLast) `divCeil` apc
@@ -659,13 +659,40 @@ freeInode :: HalfsCapable b t r l m =>
           -> HalfsM b r l m ()
 freeInode inr@(IR addr) = 
   withLockedInode inr $ do
-    bm  <- hasks hsBlockMap
+    bm    <- hasks hsBlockMap
+    start <- inoCont `fmap` drefInode inr
+    freeBlocks bm (blockAddrs start)
+    _numFreed :: Word64 <- freeConts bm start
+    BM.unalloc1 bm addr
+    
+{-
     conts <- expandConts Nothing =<< inoCont `fmap` drefInode inr
     lift $ BM.unallocBlocks bm $ BM.Discontig $ map (`BM.Extent` 1) $
       concatMap blockAddrs conts ++ map (unCR . address) (tail conts)
       -- ^ all blocks in all conts; ^ blocks for non-embedded cont storage
     BM.unalloc1 bm addr
+-}
 
+freeBlocks :: HalfsCapable b t r l m =>
+              BlockMap b r l -> [Word64] -> HalfsM b r l m ()
+freeBlocks _ []     = return ()
+freeBlocks bm addrs =
+  lift $ BM.unallocBlocks bm $ BM.Discontig $ map (`BM.Extent` 1) addrs
+  -- NB: Freeing all of the blocks this way (as unit extents) is ugly and
+  -- inefficient, but we need to be tracking BlockGroups (or reconstitute them
+  -- here by digging for contiguous address subsequences in addrs) before we can
+  -- do better.
+
+-- | Frees all conts after the given cont, returning the number of blocks freed.
+freeConts :: (HalfsCapable b t r l m, Num a) =>
+             BlockMap b r l -> Cont -> HalfsM b r l m a
+freeConts bm Cont{ continuation = cr }
+  | isNilCR cr = return $ fromInteger 0
+  | otherwise  = drefCont cr >>= contFoldM freeCont (fromInteger 0) 
+  where
+    freeCont acc c = freeBlocks bm toFree >> return (acc + genericLength toFree)
+                     where toFree = unCR (address c) : blockAddrs c
+  
 withLockedInode :: HalfsCapable b t r l m =>
                    InodeRef         -- ^ reference to inode to lock
                 -> HalfsM b r l m a -- ^ action to take while holding lock
@@ -826,20 +853,9 @@ truncUnalloc start len (stCont, sContI) = do
 
   let keepBlkCnt  = if start + len == 0 then 0 else eBlkOff + 1
       endContRem  = genericDrop keepBlkCnt (blockAddrs eCont)
-      freeC acc c = free toFree >> return (acc + genericLength toFree)
-                    where toFree = unCR (address c) : blockAddrs c
-      free addrs  = unless (null addrs) $ lift $ BM.unallocBlocks bm $
-                      BM.Discontig $ map (`BM.Extent` 1) addrs
-                    -- Freeing all of the blocks this way (as unit extents) is
-                    -- ugly and inefficient, but we need to be tracking
-                    -- BlockGroups (or reconstitute them here by digging for
-                    -- contiguous address subsequences in allFreeBlks) before we
-                    -- can do better.
 
-  -- Free all remaining blocks in the end cont & all blocks in following conts
-  free endContRem
-  numFreed <- let cr = continuation eCont; l = genericLength endContRem in
-              if isNilCR cr then return l else contFoldM freeC l =<< drefCont cr
+  freeBlocks bm endContRem
+  numFreed <- (+ (genericLength endContRem)) `fmap` freeConts bm eCont 
 
   -- Currently, only eCont is considered dirty; we do *not* do any writes to any
   -- of the Conts that are detached from the chain & freed (we just toss them
@@ -975,11 +991,11 @@ expandConts :: HalfsCapable b t r l m =>
                Maybe Word64 -> Cont -> HalfsM b r l m [Cont]
 expandConts (Just bnd) start@Cont{ continuation = cr }
   | bnd == 0                      = throwError HE_InvalidContIdx
-  | cr  == nilCR || bnd == 1 = return [start]
+  | isNilCR cr || bnd == 1 = return [start]
   | otherwise                     = do
       (start:) `fmap` (drefCont cr >>= expandConts (Just (bnd - 1)))
 expandConts Nothing start@Cont{ continuation = cr }
-  | cr == nilCR = return [start]
+  | isNilCR cr = return [start]
   | otherwise        = do
       (start:) `fmap` (drefCont cr >>= expandConts Nothing)
 
@@ -990,19 +1006,19 @@ getLastCont mbnd c = last `fmap` expandConts mbnd c
 contFoldM :: HalfsCapable b t r l m =>
              (a -> Cont -> HalfsM b r l m a) -> a -> Cont -> HalfsM b r l m a
 contFoldM f a c@Cont{ continuation = cr }
-  | cr == nilCR = f a c
-  | otherwise   = f a c >>= \fac -> drefCont cr >>= contFoldM f fac
+  | isNilCR cr = f a c
+  | otherwise  = f a c >>= \fac -> drefCont cr >>= contFoldM f fac
 
 contMapM :: HalfsCapable b t r l m =>
             (Cont -> HalfsM b r l m a) -> Cont -> HalfsM b r l m [a]
 contMapM f c@Cont{ continuation = cr }
-  | cr == nilCR = liftM (:[]) (f c)
-  | otherwise   = liftM2 (:) (f c) (drefCont cr >>= contMapM f)
+  | isNilCR cr = liftM (:[]) (f c)
+  | otherwise  = liftM2 (:) (f c) (drefCont cr >>= contMapM f)
 
 drefCont :: HalfsCapable b t r l m =>
             ContRef -> HalfsM b r l m Cont
-drefCont cr@(CR addr) | cr == nilCR = throwError HE_InvalidContIdx 
-                      | otherwise        = do  
+drefCont cr@(CR addr) | isNilCR cr = throwError HE_InvalidContIdx 
+                      | otherwise  = do  
       dev <- hasks hsBlockDev
       lift (bdReadBlock dev addr) >>= decodeCont (bdBlockSize dev)
 
@@ -1281,3 +1297,7 @@ _dumpConts stCont = do
    else do
      dbug ("=== Conts ===") $ return ()
      mapM_ (\c -> dbug ("  " ++ show c) $ return ()) conts
+
+_allowNoUsesOf :: HalfsCapable b t r l m => HalfsM b r l m ()
+_allowNoUsesOf = do 
+  contMapM undefined undefined >> return ()
