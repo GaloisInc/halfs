@@ -558,7 +558,7 @@ writeStream_lckd startIR start trunc bytes              = do
   ------------------------------------------------------------------------------
   -- Data streaming
 
-  (eContI, _, _) <- decompStreamOffset (bdBlockSize dev) (bytesToEnd start len)
+  (eContI, _, _) <- decomp (bdBlockSize dev) (bytesToEnd start len)
   eCont          <- getLastCont (Just $ (eContI - sContI) + 1) sCont''
   when (len > 0) $ writeInodeData (sIdx, sCont'') eContI trunc bytes
 
@@ -818,16 +818,11 @@ truncUnalloc start len (stCont, sContI) = do
   dev <- hasks hsBlockDev
   bm  <- hasks hsBlockMap
 
-  eIdx@(eContI, eBlkOff, _) <-
-    decompStreamOffset (bdBlockSize dev) (bytesToEnd start len)
+  (eContI, eBlkOff, _) <- decomp (bdBlockSize dev) (bytesToEnd start len)
   assert (eContI >= sContI) $ return ()
   
-  -- we retain [sContI .. eContI] inclusive.
-  -- we free everthing after eContI.
-  -- we need to obtain eCont by reading (eContI - sContI) conts ahead
-
   -- Get the (new) end of the cont chain. Retain all conts in [sContI, eContI].
-  eCont <- getLastCont (Just (eContI - sContI + 1)) stCont
+  eCont <- getLastCont (Just $ eContI - sContI + 1) stCont
 
   let keepBlkCnt  = if start + len == 0 then 0 else eBlkOff + 1
       endContRem  = genericDrop keepBlkCnt (blockAddrs eCont)
@@ -845,38 +840,6 @@ truncUnalloc start len (stCont, sContI) = do
   free endContRem
   numFreed <- let cr = continuation eCont; l = genericLength endContRem in
               if isNilCR cr then return l else contFoldM freeC l =<< drefCont cr
-
-{-
-
-  contsToFree <- drop 1 `fmap` expandConts Nothing eCont
-
-  dbug ("contsToFree = " ++ show contsToFree) $ do
-
-  let keepBlkCnt  = if start + len == 0 then 0 else eBlkOff + 1
-      allFreeBlks = genericDrop keepBlkCnt (blockAddrs eCont)
-                    -- ^ The remaining blocks in the end cont
-                    ++ concatMap blockAddrs contsToFree
-                    -- ^ The remaining blocks in rest of chain
-                    ++ map (unCR . address) contsToFree
-                    -- ^ Block addrs for the cont blocks themselves
-      numFreed    = genericLength allFreeBlks
-                    
-  dbug ("truncUnalloc: keepBlkCnt  = " ++ show keepBlkCnt)  $ return ()
-  dbug ("truncUnalloc: contsToFree = " ++ show contsToFree) $ return ()
-  dbug ("truncUnalloc: eIdx        = " ++ show eIdx)        $ return ()
-  dbug ("truncUnalloc: allFreeBlks = " ++ show allFreeBlks) $ return ()
-  dbug ("truncUnalloc: numFreed    = " ++ show numFreed)    $ return ()
- 
-  unless (null allFreeBlks) $ do
-    lift $ BM.unallocBlocks bm $ BM.Discontig $ map (`BM.Extent` 1) allFreeBlks
-
-    -- Freeing all of the blocks this way (as unit extents) is
-    -- ugly and inefficient, but we need to be tracking
-    -- BlockGroups (or reconstitute them here by digging for
-    -- contiguous address subsequences in allFreeBlks) before we
-    -- can do better.
-
--}
 
   -- Currently, only eCont is considered dirty; we do *not* do any writes to any
   -- of the Conts that are detached from the chain & freed (we just toss them
@@ -929,7 +892,7 @@ writeInodeData ((sContI, sBlkOff, sByteOff), sCont) eContI trunc bytes = do
   -- data that remains to be written.
   unfoldrM_ (fillCont dev) ((sCont, sContI), sBlkOff : repeat 0,  toWrite)
   where
-    fillCont dev (_, [], _) = error "The impossible happened"
+    fillCont _ (_, [], _) = error "The impossible happened"
     fillCont dev ((cCont, cContI), blkOff:boffs, toWrite)
       | cContI > eContI || BS.null toWrite = return Nothing
       | otherwise                          = do
@@ -1030,19 +993,11 @@ contFoldM f a c@Cont{ continuation = cr }
   | cr == nilCR = f a c
   | otherwise   = f a c >>= \fac -> drefCont cr >>= contFoldM f fac
 
-contFoldM_ :: HalfsCapable b t r l m =>
-              (a -> Cont -> HalfsM b r l m a) -> a -> Cont -> HalfsM b r l m ()
-contFoldM_ f a c = contFoldM f a c >> return ()
-
 contMapM :: HalfsCapable b t r l m =>
             (Cont -> HalfsM b r l m a) -> Cont -> HalfsM b r l m [a]
 contMapM f c@Cont{ continuation = cr }
   | cr == nilCR = liftM (:[]) (f c)
   | otherwise   = liftM2 (:) (f c) (drefCont cr >>= contMapM f)
-
-contMapM_ :: HalfsCapable b t r l m =>
-            (Cont -> HalfsM b r l m a) -> Cont -> HalfsM b r l m ()
-contMapM_ f c = contMapM f c >> return ()
 
 drefCont :: HalfsCapable b t r l m =>
             ContRef -> HalfsM b r l m Cont
@@ -1063,11 +1018,11 @@ setChangeTime t nd = nd{ inoChangeTime = t }
 -- | Decompose the given absolute byte offset into an inode's data stream into
 -- Cont index (i.e., 0-based index into the cont chain), a block offset within
 -- that Cont, and a byte offset within that block.  
-decompStreamOffset :: (Serialize t, Timed t m, Monad m, Show t) => 
-                      Word64 -- ^ Block size, in bytes
-                   -> Word64 -- ^ Offset into the data stream
-                   -> HalfsM b r l m StreamIdx
-decompStreamOffset blkSz streamOff = do
+decomp :: (Serialize t, Timed t m, Monad m, Show t) => 
+          Word64 -- ^ Block size, in bytes
+       -> Word64 -- ^ Offset into the data stream
+       -> HalfsM b r l m StreamIdx
+decomp blkSz streamOff = do
   -- Note that the first Cont in a Cont chain always gets embedded in an Inode,
   -- and thus has differing capacity than the rest of the Conts, which are of
   -- uniform size.
@@ -1086,7 +1041,7 @@ getStreamIdx :: HalfsCapable b t r l m =>
              -> HalfsM b r l m StreamIdx
 getStreamIdx blkSz fileSz start = do
   when (start > fileSz) $ throwError $ HE_InvalidStreamIndex start
-  decompStreamOffset blkSz start
+  decomp blkSz start
 
 bytesToEnd :: Word64 -> Word64 -> Word64
 bytesToEnd start len
@@ -1317,9 +1272,9 @@ instance Serialize Cont where
 --------------------------------------------------------------------------------
 -- Debugging cruft
 
-dumpConts :: HalfsCapable b t r l m =>
-             Cont -> HalfsM b r l m ()
-dumpConts stCont = do
+_dumpConts :: HalfsCapable b t r l m =>
+              Cont -> HalfsM b r l m ()
+_dumpConts stCont = do
   conts <- expandConts Nothing stCont
   if null conts
    then dbug ("=== No conts ===") $ return ()
