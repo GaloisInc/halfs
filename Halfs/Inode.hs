@@ -826,11 +826,28 @@ truncUnalloc start len (stCont, sContI) = do
   -- we free everthing after eContI.
   -- we need to obtain eCont by reading (eContI - sContI) conts ahead
 
-  -- Obtain the (new) end of the cont chain.  We retain all conts from
-  -- sContI..eContI, inclusive.
+  -- Get the (new) end of the cont chain. Retain all conts in [sContI, eContI].
   eCont <- getLastCont (Just (eContI - sContI + 1)) stCont
 
-  -- All conts after the end cont: TODO replace with incremental iteration
+  let keepBlkCnt  = if start + len == 0 then 0 else eBlkOff + 1
+      endContRem  = genericDrop keepBlkCnt (blockAddrs eCont)
+      freeC acc c = free toFree >> return (acc + genericLength toFree)
+                    where toFree = unCR (address c) : blockAddrs c
+      free addrs  = unless (null addrs) $ lift $ BM.unallocBlocks bm $
+                      BM.Discontig $ map (`BM.Extent` 1) addrs
+                    -- Freeing all of the blocks this way (as unit extents) is
+                    -- ugly and inefficient, but we need to be tracking
+                    -- BlockGroups (or reconstitute them here by digging for
+                    -- contiguous address subsequences in allFreeBlks) before we
+                    -- can do better.
+
+  -- Free all remaining blocks in the end cont & all blocks in following conts
+  free endContRem
+  numFreed <- let cr = continuation eCont; l = genericLength endContRem in
+              if isNilCR cr then return l else contFoldM freeC l =<< drefCont cr
+
+{-
+
   contsToFree <- drop 1 `fmap` expandConts Nothing eCont
 
   dbug ("contsToFree = " ++ show contsToFree) $ do
@@ -850,17 +867,20 @@ truncUnalloc start len (stCont, sContI) = do
   dbug ("truncUnalloc: allFreeBlks = " ++ show allFreeBlks) $ return ()
   dbug ("truncUnalloc: numFreed    = " ++ show numFreed)    $ return ()
  
-  -- Freeing all of the blocks this way (as unit extents) is ugly and
-  -- inefficient, but we need to be tracking BlockGroups (or reconstitute them
-  -- here by digging for contiguous address subsequences in allFreeBlks) before
-  -- we can do better.
-    
   unless (null allFreeBlks) $ do
     lift $ BM.unallocBlocks bm $ BM.Discontig $ map (`BM.Extent` 1) allFreeBlks
-    
+
+    -- Freeing all of the blocks this way (as unit extents) is
+    -- ugly and inefficient, but we need to be tracking
+    -- BlockGroups (or reconstitute them here by digging for
+    -- contiguous address subsequences in allFreeBlks) before we
+    -- can do better.
+
+-}
+
   -- Currently, only eCont is considered dirty; we do *not* do any writes to any
-  -- of the Conts that are detached from the chain & freed; this may have
-  -- implications for fsck.
+  -- of the Conts that are detached from the chain & freed (we just toss them
+  -- out); this may have implications for fsck.
   let dirtyConts@(firstDirty:_) =
         [
           -- eCont, adjusted to discard the freed blocks and clear the
