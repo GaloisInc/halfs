@@ -70,10 +70,10 @@ import Halfs.Utils
 
 import System.Device.BlockDevice
 
--- import Debug.Trace
+import Debug.Trace
 dbug :: String -> a -> a
-dbug _ = id
--- dbug = trace
+--dbug _ = id
+dbug = trace
 
 type HalfsM b r l m a = HalfsT HalfsError (Maybe (HalfsState b r l m)) m a
 
@@ -347,6 +347,7 @@ emptyCont nAddrs me =
 --------------------------------------------------------------------------------
 -- Inode stream functions
 
+{-
 -- | Provides a stream over the bytes governed by a given Inode and its
 -- continuations.  This function performs a write to update inode metadata
 -- (e.g., access time).
@@ -416,6 +417,116 @@ readStream startIR start mlen =
              return $ bsTake (maybe (fileSz - start) id mlen) $
                header `BS.append` fullBlocks
      
+     now <- getTime
+     lift $ writeInode dev $
+       startInode { inoAccessTime = now, inoChangeTime = now }
+     dbug ("==== readStream end ===") $ return ()
+     return rslt                                         
+  -- ======================= End inode critical section =======================
+-}
+
+-- | Provides a stream over the bytes governed by a given Inode and its
+-- continuations.  This function performs a write to update inode metadata
+-- (e.g., access time).
+readStream :: HalfsCapable b t r l m => 
+              InodeRef                  -- ^ Starting inode reference
+           -> Word64                    -- ^ Starting stream (byte) offset
+           -> Maybe Word64              -- ^ Stream length (Nothing => read
+                                        --   until end of stream, including
+                                        --   entire last block)
+           -> HalfsM b r l m ByteString -- ^ Stream contents
+readStream startIR start mlen = do
+  withLockedInode startIR $ do  
+  -- ====================== Begin inode critical section ======================
+  dev        <- hasks hsBlockDev
+  startInode <- drefInode startIR
+  let bs        = bdBlockSize dev
+      readB c b = lift $ readBlock dev c b
+      fileSz    = inoFileSize startInode
+      gsi       = getStreamIdx (bdBlockSize dev) fileSz
+
+  if 0 == blockCount (inoCont startInode)
+   then return BS.empty
+   else do
+     dbug ("==== readStream begin ===") $ do
+     (sContI, sBlkOff, sByteOff) <- gsi start
+     sCont                       <- findCont startInode sContI
+     (eContI, _, _)              <- gsi $ case mlen of
+                                            Nothing  -> fileSz - 1
+                                            Just len -> start + len - 1
+     dbug ("start = " ++ show start) $ do
+     dbug ("(sContI, sBlkOff, sByteOff) = " ++ show (sContI, sBlkOff, sByteOff)) $ do
+     dbug ("eContI = " ++ show eContI) $ do                              
+
+     rslt <- case mlen of
+       Just len | len == 0 -> return BS.empty
+       _                   -> do
+         assert (maybe True (> 0) mlen) $ return ()
+
+         -- 'hdr' is the (possibly partial) first block
+         hdr <- bsDrop sByteOff `fmap` readB sCont sBlkOff
+         
+         -- 'rest' is the list of block-sized bytestrings containing the
+         -- requested content from blocks in subsequent conts, accounting for
+         -- the (Maybe) maximum length requested.
+         rest <- do
+           let hdrLen      = fromIntegral (BS.length hdr)
+               totalToRead = maybe (fileSz - start) id mlen
+               --
+               howManyBlks cont bsf blkOff =
+                 let bc = blockCount cont - blkOff
+                 in
+                 maybe bc (\len -> min bc ((len - bsf) `divCeil` bs)) mlen
+               --
+               readCont (_, [], _) = error "The impossible happened"
+               readCont ((cCont, cContI), blkOff:boffs, bytesSoFar)
+                 | cContI > eContI =
+                     assert (bytesSoFar >= totalToRead) $ return Nothing
+                 | bytesSoFar >= totalToRead =
+                     return Nothing
+                 | otherwise = do
+                     let remBlks = howManyBlks cCont bytesSoFar blkOff
+                         range   = if remBlks > 0
+                                    then [blkOff .. blkOff + remBlks - 1]
+                                    else []
+
+                     theData <- BS.concat `fmap` mapM (readB cCont) range
+                     assert (fromIntegral (BS.length theData) == remBlks * bs) $ return ()
+
+                     let rslt c = return $ Just $
+                                  ( theData -- accumulated by unfoldr
+                                  , ( (c, cContI+1)
+                                    , boffs
+                                    , bytesSoFar + remBlks * bs
+                                    )
+                                  )
+                     if isNilCR (continuation cCont)
+                      then rslt (error "Cont DNE and expected termination!")
+                      else rslt =<< drefCont (continuation cCont)
+{-
+                     if isNilCR (continuation cCont)
+                      then trace ("readCont terminating: bytesSoFar = " ++ show bytesSoFar ++ ", totalToRead = " ++ show totalToRead) $ do
+                           return $ Just $
+                             ( theData -- accuml
+                           assert (bytesSoFar' >= totalToRead) $ return Nothing
+                      else do
+                        nextCont <- drefCont (continuation cCont)
+                        return $ Just $
+                           ( theData -- accumulated by unfoldr
+                           , ( (nextCont, cContI+1)
+                             , boffs
+                             , bytesSoFar'
+                             )
+                           )
+-}
+           -- ==> Bulk reading starts here <== 
+           if (sBlkOff + 1 < blockCount sCont || sContI < eContI)
+            then unfoldrM readCont ((sCont, sContI), (sBlkOff+1):repeat 0, hdrLen)
+            else return []
+           
+         return $ bsTake (maybe (fileSz - start) id mlen) $
+           hdr `BS.append` BS.concat rest
+
      now <- getTime
      lift $ writeInode dev $
        startInode { inoAccessTime = now, inoChangeTime = now }
@@ -902,7 +1013,7 @@ writeInodeData ((sContI, sBlkOff, sByteOff), sCont) eContI trunc bytes = do
     fillCont _ (_, [], _) = error "The impossible happened"
     fillCont dev ((cCont, cContI), blkOff:boffs, toWrite)
       | cContI > eContI || BS.null toWrite = return Nothing
-      | otherwise                          = do
+      | otherwise = do
           let blkAddrs  = genericDrop blkOff (blockAddrs cCont)
               split crs = let (cs, rems) = unzip crs in (cs, last rems)
               gbc       = lift . getBlockContents dev trunc
