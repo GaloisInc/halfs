@@ -488,9 +488,8 @@ writeStream_lckd startIR start trunc bytes              = do
         ++ show blksToAlloc ++ "/" ++ show bytesToAlloc) $ do
   dbug ("inoLastCont startInode = " ++ show (lcInfo) )            $ return ()
   dbug ("inoCont startInode     = " ++ show (inoCont startInode)) $ return ()   
-
-  dbug ("Conts on entry, from inode cont:") $ return ()
-  dumpConts (inoCont startInode)
+--   dbug ("Conts on entry, from inode cont:") $ return ()
+--   dumpConts (inoCont startInode)
 
   ------------------------------------------------------------------------------
   -- Allocation: 
@@ -526,10 +525,10 @@ writeStream_lckd startIR start trunc bytes              = do
                else return st
        return (st', if isEmbedded st then Just st else Nothing)
 
-  dbug ("sCont' = " ++ show sCont') $ return ()
-  dbug ("minodeCont = " ++ show minodeCont) $ return () 
-  dbug ("Conts immediately after alloc, from sCont'") $ return ()
-  dumpConts (sCont')
+--   dbug ("sCont' = " ++ show sCont') $ return ()
+--   dbug ("minodeCont = " ++ show minodeCont) $ return () 
+--   dbug ("Conts immediately after alloc, from sCont'") $ return ()
+--   dumpConts (sCont')
 
   assert (sBlkOff < blockCount sCont') $ return () 
 
@@ -759,8 +758,6 @@ allocFill avail blksToAlloc contsToAlloc stCont = do
   newConts <- allocConts dev bm
   blks     <- allocBlocks bm 
 
---  dbug ("allocFill: newConts = " ++ show newConts ++ ", blks = " ++ show blks) $ do
-
   -- Fill continuation fields to form the region that we'll fill with the newly
   -- allocated blocks (i.e., starting at the start cont but including the newly
   -- allocated conts as well).
@@ -792,7 +789,7 @@ allocFill avail blksToAlloc contsToAlloc stCont = do
       -- currently "flattens" BlockGroup; see comment in writeStream
       mbg <- lift $ BM.allocBlocks bm blksToAlloc
       case mbg of
-        Nothing -> dbug ("allocBlocks alloc fail") $ throwError HE_AllocFailed
+        Nothing -> throwError HE_AllocFailed
         Just bg -> return $ BM.blkRangeBG bg
     -- 
     allocConts dev bm =
@@ -823,7 +820,6 @@ truncUnalloc start len (stCont, sContI) = do
 
   eIdx@(eContI, eBlkOff, _) <-
     decompStreamOffset (bdBlockSize dev) (bytesToEnd start len)
-  dbug ("eContI = " ++ show eContI ++ ", sContI = " ++ show sContI) $ do
   assert (eContI >= sContI) $ return ()
   
   -- we retain [sContI .. eContI] inclusive.
@@ -832,11 +828,8 @@ truncUnalloc start len (stCont, sContI) = do
 
   -- Obtain the (new) end of the cont chain.  We retain all conts from
   -- sContI..eContI, inclusive.
-  eCont <- let f 0 c = return c
-               f k c = drefCont (continuation c) >>= f (k-1)
-           in f (eContI - sContI) stCont
-  dbug ("eCont = " ++ show eCont) $ do
-    
+  eCont <- getLastCont (Just (eContI - sContI + 1)) stCont
+
   -- All conts after the end cont: TODO replace with incremental iteration
   contsToFree <- drop 1 `fmap` expandConts Nothing eCont
 
@@ -879,10 +872,7 @@ truncUnalloc start len (stCont, sContI) = do
         ]
       stCont' = if sContI == eContI then firstDirty else stCont
 
-  dbug ("truncUnalloc: dirtyConts  = " ++ show dirtyConts)  $ return () 
   forM_ (dirtyConts) $ \c -> unless (isEmbedded c) $ lift $ writeCont dev c
---  trace ("stCont = " ++ show stCont) $ return ()
---  trace ("yielding new cont = " ++ show (if sContI == eContI then stCont' else stCont)) $ do
   return (stCont', numFreed)
 
 -- | Write the given bytes to the already-allocated/truncated inode data stream
@@ -915,68 +905,31 @@ writeInodeData ((sContI, sBlkOff, sByteOff), sCont) eContI trunc bytes = do
         in assert (fromIntegral (BS.length fstBlk) == bs) $
              fstBlk `BS.append` bytes'
 
-  -- trace ("writeInodeData to write " ++ show (BS.length toWrite) ++ " bytes") $ do
-
   -- The unfoldr seed is: current cont/idx, a block offset "supply", and the
   -- data that remains to be written.
-  unfoldrM (fillCont dev) ((sCont, sContI), sBlkOff : repeat 0,  toWrite)
-    -- ^ need: decreasing start cont index (we're moving rightwards), block offset supply, data remaining to write
-
-  return ()
+  unfoldrM_ (fillCont dev) ((sCont, sContI), sBlkOff : repeat 0,  toWrite)
   where
-    -- fillCont :: ((Cont, Word64), [Word64], ByteString) 
-    --          -> m (Maybe ((), (Word64, [Word64], ByteString))
-    -- NB: no accumulation of values needed so, the accumulated type is just ()
     fillCont dev (_, [], _) = error "The impossible happened"
     fillCont dev ((cCont, cContI), blkOff:boffs, toWrite)
       | cContI > eContI || BS.null toWrite = return Nothing
       | otherwise                          = do
---           trace ("****************************** recursive case") $ return ()
           let blkAddrs  = genericDrop blkOff (blockAddrs cCont)
               split crs = let (cs, rems) = unzip crs in (cs, last rems)
               gbc       = lift . getBlockContents dev trunc
+
           (chunks, remBytes) <- split `fmap` unfoldrM gbc (toWrite, blkAddrs)
-            
---           trace "past inner infoldr" $ return ()
---           trace ("(BS.length remBytes) = " ++ show (BS.length remBytes)) $ return ()
---           trace ("(length chunks) = " ++ show (length chunks)) $ return ()
---           trace ("(length blkAddrs) = " ++ show (length blkAddrs)) $ return ()
 
           assert (let lc = length chunks; lb = length blkAddrs
                   in lc == lb || (BS.length remBytes == 0 && lc < lb)) $ return ()
 
---          mapM_ (\(a,c) -> trace ("\nAddress: " ++ show a ++ ", chunk: " ++ show c) $ return ()) (blkAddrs `zip` chunks)
-
           mapM_ (lift . uncurry (bdWriteBlock dev)) (blkAddrs `zip` chunks)
-          
+
           if isNilCR (continuation cCont)
            then assert (BS.null remBytes) $ return Nothing
            else do
              nextCont <- drefCont (continuation cCont)
              return $ Just $ ((), ((nextCont, cContI+1), boffs, remBytes))
 
-          -- NB/TODO: if no continuation in cont, return Nothing, otherwise dref & "recurse"
-          -- return Nothing
-
-{-
-  -- Destination block addresses starting at the the start block
-  hack_remove_me <- drop 1 `fmap` expandConts Nothing sCont -- replace with iteration over conts
-  dbug ("hack_remove_me = " ++ show hack_remove_me) $ return () 
-  let blkAddrs = genericDrop sBlkOff (blockAddrs sCont)
-                   ++ concatMap blockAddrs hack_remove_me
-
-  (chunks, remaining) <- do
-    (cs, rems) <- unzip `fmap` unfoldrM (lift . getBlockContents dev trunc)
-                                        (bytes', drop 1 blkAddrs)
-    return (firstChunk:cs, last (BS.empty{-parity-}:rems))
-
-  assert (all ((== safeToInt bs) . BS.length) chunks) $ do
-  assert (BS.null remaining)                          $ do
-
-  -- Write the data into the appropriate blocks
-  mapM_ (\(a,d) -> lift $ bdWriteBlock dev a d) (blkAddrs `zip` chunks)
-
--}
 
 -- | Splits the input bytestring into block-sized chunks; may read from the
 -- block device in order to preserve contents of blocks if needed.
