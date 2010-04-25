@@ -665,14 +665,6 @@ freeInode inr@(IR addr) =
     _numFreed :: Word64 <- freeConts bm start
     BM.unalloc1 bm addr
     
-{-
-    conts <- expandConts Nothing =<< inoCont `fmap` drefInode inr
-    lift $ BM.unallocBlocks bm $ BM.Discontig $ map (`BM.Extent` 1) $
-      concatMap blockAddrs conts ++ map (unCR . address) (tail conts)
-      -- ^ all blocks in all conts; ^ blocks for non-embedded cont storage
-    BM.unalloc1 bm addr
--}
-
 freeBlocks :: HalfsCapable b t r l m =>
               BlockMap b r l -> [Word64] -> HalfsM b r l m ()
 freeBlocks _ []     = return ()
