@@ -915,18 +915,13 @@ writeInodeData ((sContI, sBlkOff, sByteOff), sCont) eContI trunc bytes = do
         in assert (fromIntegral (BS.length fstBlk) == bs) $
              fstBlk `BS.append` bytes'
 
-  -- unfoldrM :: (Monad m) => (b -> m (Maybe (a, b))) -> b -> m [a]
-  -- unfold over conts so we don't have to make a fucking bounded fold function
-  
+  -- trace ("writeInodeData to write " ++ show (BS.length toWrite) ++ " bytes") $ do
+
   -- The unfoldr seed is: current cont/idx, a block offset "supply", and the
   -- data that remains to be written.
-  trace ("here0") $ return ()
   unfoldrM (fillCont dev) ((sCont, sContI), sBlkOff : repeat 0,  toWrite)
-  trace ("here1") $ return ()
     -- ^ need: decreasing start cont index (we're moving rightwards), block offset supply, data remaining to write
 
-  trace ("writeInodeData to write " ++ show (BS.length toWrite) ++ " bytes") $ do
-  fail "end of the putative world"
   return ()
   where
     -- fillCont :: ((Cont, Word64), [Word64], ByteString) 
@@ -934,24 +929,28 @@ writeInodeData ((sContI, sBlkOff, sByteOff), sCont) eContI trunc bytes = do
     -- NB: no accumulation of values needed so, the accumulated type is just ()
     fillCont dev (_, [], _) = error "The impossible happened"
     fillCont dev ((cCont, cContI), blkOff:boffs, toWrite)
-      | cContI > eContI || BS.null toWrite = (trace "fillCont returning Nothing from base case") $ return Nothing
+      | cContI > eContI || BS.null toWrite = return Nothing
       | otherwise                          = do
-          trace ("****************************** recursive case") $ return ()
-          let blkAddrs = genericDrop blkOff (blockAddrs cCont)
-          (chunks, remBytes) <- ((\(cs, rems) -> (cs, last rems)) . unzip)
-                                `fmap`
-                                unfoldrM (lift . getBlockContents dev trunc)
-                                         (toWrite, blkAddrs)
-          trace ("past inner unfoldr, remBytes has length " ++ show (BS.length remBytes) ++ ", chunks has length " ++ show (length chunks)) $ return ()
-          trace ("(length blkAddrs) = " ++ show (length blkAddrs)) $ return ()
-          assert (length chunks == length blkAddrs) $ return ()
+--           trace ("****************************** recursive case") $ return ()
+          let blkAddrs  = genericDrop blkOff (blockAddrs cCont)
+              split crs = let (cs, rems) = unzip crs in (cs, last rems)
+              gbc       = lift . getBlockContents dev trunc
+          (chunks, remBytes) <- split `fmap` unfoldrM gbc (toWrite, blkAddrs)
+            
+--           trace "past inner infoldr" $ return ()
+--           trace ("(BS.length remBytes) = " ++ show (BS.length remBytes)) $ return ()
+--           trace ("(length chunks) = " ++ show (length chunks)) $ return ()
+--           trace ("(length blkAddrs) = " ++ show (length blkAddrs)) $ return ()
 
-          trace ("(blkAddrs `zip` chunks) = " ++ show (blkAddrs `zip` chunks)) $ return ()
+          assert (let lc = length chunks; lb = length blkAddrs
+                  in lc == lb || (BS.length remBytes == 0 && lc < lb)) $ return ()
+
+--          mapM_ (\(a,c) -> trace ("\nAddress: " ++ show a ++ ", chunk: " ++ show c) $ return ()) (blkAddrs `zip` chunks)
 
           mapM_ (lift . uncurry (bdWriteBlock dev)) (blkAddrs `zip` chunks)
           
           if isNilCR (continuation cCont)
-           then return Nothing
+           then assert (BS.null remBytes) $ return Nothing
            else do
              nextCont <- drefCont (continuation cCont)
              return $ Just $ ((), ((nextCont, cContI+1), boffs, remBytes))
