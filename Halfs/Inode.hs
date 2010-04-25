@@ -494,20 +494,7 @@ writeStream_lckd startIR start trunc bytes              = do
   ------------------------------------------------------------------------------
   -- Allocation: 
 
-  -- Obtain the initial cont by traversing Conts from either the inode's
-  -- embedded cont or from the (saved) cont from the last operation, whichever
-  -- is closest.
   sCont <- findCont startInode sContI
-{-
-  sCont <- do 
-    (cnt, c) <- case lcInfo of
-      (lcr, lci) | isNilCR lcr || lci > sContI ->
-                     return (sContI + 1, inoCont startInode)
-                 | otherwise -> 
-                     (,) (sContI - lci + 1) `fmap` drefCont lcr
-    getLastCont (Just cnt) c
-  dbug ("sCont = " ++ show sCont) $ return ()
--}
 
   -- Allocate if needed and obtain (1) the post-alloc start cont and (2)
   -- possibly a dirty cont to write back into the inode (ie, in case its
