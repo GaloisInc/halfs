@@ -823,12 +823,6 @@ allocFill avail blksToAlloc contsToAlloc eCont = do
         in
           (drop cnt remBlks, k' . (c':))
 
---   dbug ("eCont    = " ++ show eCont) $ return ()
---   dbug ("eCont'   = " ++ show eCont') $ return ()
---   dbug ("region   = " ++ show region) $ return ()
---   dbug ("blks     = " ++ show blks) $ return ()
---   dbug ("newConts = " ++ show newConts) $ return ()
-
   assert (null blks') $ return ()
 
   forM_ (dirtyConts)  $ \c -> unless (isEmbedded c) $ lift $ writeCont dev c
@@ -938,15 +932,7 @@ writeInodeData ((sContI, sBlkOff, sByteOff), sCont) eContI trunc bytes = do
               split crs = let (cs, rems) = unzip crs in (cs, last rems)
               gbc       = lift . getBlockContents dev trunc
 
---           dbug ("cCont = " ++ show cCont)   $ return ()
---           dbug ("cContI = " ++ show cContI) $ return ()
---           dbug ("blkOff = " ++ show blkOff) $ return ()
-
           (chunks, remBytes) <- split `fmap` unfoldrM gbc (toWrite, blkAddrs)
-
---           dbug ("blkAddrs        = " ++ show blkAddrs)             $ return ()
---           dbug ("length chunks   = " ++ show (length chunks))      $ return ()
---           dbug ("length remBytes = " ++ show (BS.length remBytes)) $ return ()
 
           assert (let lc = length chunks; lb = length blkAddrs
                   in lc == lb || (BS.length remBytes == 0 && lc < lb)) $ return ()
