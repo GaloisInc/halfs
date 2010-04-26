@@ -70,10 +70,10 @@ import Halfs.Utils
 
 import System.Device.BlockDevice
 
-import Debug.Trace
+-- import Debug.Trace
 dbug :: String -> a -> a
---dbug _ = id
-dbug = trace
+dbug _ = id
+--dbug = trace
 
 type HalfsM b r l m a = HalfsT HalfsError (Maybe (HalfsState b r l m)) m a
 
@@ -376,9 +376,10 @@ readStream startIR start mlen = do
      (eContI, _, _)              <- gsi $ case mlen of
                                             Nothing  -> fileSz - 1
                                             Just len -> start + len - 1
-     dbug ("start = " ++ show start) $ do
+
+     dbug ("start                       = " ++ show start) $ do
      dbug ("(sContI, sBlkOff, sByteOff) = " ++ show (sContI, sBlkOff, sByteOff)) $ do
-     dbug ("eContI = " ++ show eContI) $ do                              
+     dbug ("eContI                      = " ++ show eContI) $ do                              
 
      rslt <- case mlen of
        Just len | len == 0 -> return BS.empty
@@ -473,6 +474,7 @@ writeStream_lckd startIR start trunc bytes              = do
   -- directly and split/merge them as needed to reduce the number of
   -- unallocation actions required, but we leave this as a TODO for now.
 
+
   startInode@Inode{ inoLastCont = lcInfo } <- drefInode startIR
   dev                                      <- hasks hsBlockDev
 
@@ -485,16 +487,13 @@ writeStream_lckd startIR start trunc bytes              = do
       bytesToAlloc = if newFileSz > fszRndBlk then newFileSz - fszRndBlk else 0 
       blksToAlloc  = bytesToAlloc `divCeil` bs
 
+  (_, _, _, apc)                   <- getSizes bs
   sIdx@(sContI, sBlkOff, sByteOff) <- getStreamIdx bs fileSz start
-
-  contsToAlloc <- do 
-    (_, _, _, apc) <- getSizes bs                                        
-    availInLast    <- availBlks `fmap`                                 
-                        if isNilCR (fst lcInfo)
-                         then return $ inoCont startInode                                
-                         else drefCont (fst lcInfo)
-    trace ("availInLast = " ++ show availInLast) $ return ()
-    return $ (blksToAlloc - availInLast) `divCeil` apc
+  sCont                            <- findCont startInode sContI
+  lastCont                         <- getLastCont Nothing sCont
+                                      -- TODO: Track a ptr to this?  Traversing
+                                      -- the allocated region is yucky.
+  let contsToAlloc = (blksToAlloc - availBlks lastCont) `divCeil` apc
 
   ------------------------------------------------------------------------------
   -- Debugging miscellany
@@ -505,25 +504,30 @@ writeStream_lckd startIR start trunc bytes              = do
         ++ ", fileSz/newFileSz = " ++ show fileSz ++ "/" ++ show newFileSz
         ++ ", toAlloc(conts/blks/bytes) = " ++ show contsToAlloc ++ "/"
         ++ show blksToAlloc ++ "/" ++ show bytesToAlloc) $ do
-  dbug ("inoLastCont startInode = " ++ show (lcInfo) )            $ return ()
-  dbug ("inoCont startInode     = " ++ show (inoCont startInode)) $ return ()   
+--   dbug ("inoLastCont startInode = " ++ show (lcInfo) )            $ return ()
+--   dbug ("inoCont startInode     = " ++ show (inoCont startInode)) $ return ()   
 --   dbug ("Conts on entry, from inode cont:") $ return ()
 --   dumpConts (inoCont startInode)
 
   ------------------------------------------------------------------------------
   -- Allocation: 
 
-  sCont <- findCont startInode sContI
-
   -- Allocate if needed and obtain (1) the post-alloc start cont and (2)
-  -- possibly a dirty cont to write back into the inode (ie, in case its
-  -- continuation field as modified as a result of allocation).
+  -- possibly a dirty cont to write back into the inode (ie, when its
+  -- continuation field is modified as a result of allocation -- all other
+  -- modified conts are written by allocFill, but the inode write is the last
+  -- thing we do, so we defer the update).
+
   (sCont', minodeCont) <- do
     if blksToAlloc == 0
      then return (sCont, Nothing)
      else do 
-       let lci = snd lcInfo
-       st  <- allocFill availBlks blksToAlloc contsToAlloc sCont
+       lastCont' <- allocFill availBlks blksToAlloc contsToAlloc lastCont
+       let st  = if address lastCont' == address sCont then lastCont' else sCont
+                 -- ^ our starting location remains the same, but in case of an
+                 -- update of the start cont, we can use lastCont' insteaad of
+                 -- re-reading.
+           lci = snd lcInfo
        st' <- if lci < sContI
                then getLastCont (Just $ sContI - lci + 1) st
                     -- ^ NB: We need to start ahead of st, but couldn't adjust
@@ -545,6 +549,7 @@ writeStream_lckd startIR start trunc bytes              = do
 
   -- Truncate if needed and obtain (1) the new start cont at which to start
   -- writing data and (2) possibly a dirty cont to write back into the inode
+
   (sCont'', numBlksFreed, minodeCont') <-
     if trunc && bytesToAlloc == 0
      then do
@@ -786,29 +791,30 @@ allocFill :: HalfsCapable b t r l m =>
              (Cont -> Word64)    -- ^ Available blocks function
           -> Word64              -- ^ Number of blocks to allocate
           -> Word64              -- ^ Number of conts to allocate
-          -> Cont                -- ^ Start cont of chain to extend & fill
-          -> HalfsM b r l m Cont -- ^ New start cont 
-allocFill _     0           _            stCont = return stCont
-allocFill avail blksToAlloc contsToAlloc stCont = do
+          -> Cont                -- ^ Last allocated cont 
+          -> HalfsM b r l m Cont -- ^ Updated last cont
+allocFill _     0           _            eCont = return eCont
+allocFill avail blksToAlloc contsToAlloc eCont = do
   dev      <- hasks hsBlockDev
   bm       <- hasks hsBlockMap
   newConts <- allocConts dev bm
   blks     <- allocBlocks bm 
 
   -- Fill continuation fields to form the region that we'll fill with the newly
-  -- allocated blocks (i.e., starting at the start cont but including the newly
-  -- allocated conts as well).
+  -- allocated blocks (i.e., starting at the end of the already-allocated region
+  -- from the start cont, but including the newly allocated conts as well).
+  
   let (_, region) = foldr (\c (cr, acc) ->
                              ( address c
                              , c{ continuation = cr } : acc
                              )
                           )
                           (nilCR, [])
-                          (stCont : newConts)
+                          (eCont : newConts)
 
   -- "Spill" the allocated blocks into the empty region
   let (blks', k)               = foldl fillBlks (blks, id) region
-      dirtyConts@(stCont':_)   = k []
+      dirtyConts@(eCont':_)    = k []
       fillBlks (remBlks, k') c =
         let cnt    = min (safeToInt $ avail c) (length remBlks)
             c'     = c { blockCount = blockCount c + fromIntegral cnt
@@ -817,12 +823,16 @@ allocFill avail blksToAlloc contsToAlloc stCont = do
         in
           (drop cnt remBlks, k' . (c':))
 
-  when (not $ null blks') $ do
-   throwError $ HE_InternalError "allocFill didn't spill all blocks"                                                
+--   dbug ("eCont    = " ++ show eCont) $ return ()
+--   dbug ("eCont'   = " ++ show eCont') $ return ()
+--   dbug ("region   = " ++ show region) $ return ()
+--   dbug ("blks     = " ++ show blks) $ return ()
+--   dbug ("newConts = " ++ show newConts) $ return ()
+
   assert (null blks') $ return ()
 
   forM_ (dirtyConts)  $ \c -> unless (isEmbedded c) $ lift $ writeCont dev c
-  return stCont'
+  return eCont'
   where
     allocBlocks bm = do
       -- currently "flattens" BlockGroup; see comment in writeStream
@@ -928,7 +938,15 @@ writeInodeData ((sContI, sBlkOff, sByteOff), sCont) eContI trunc bytes = do
               split crs = let (cs, rems) = unzip crs in (cs, last rems)
               gbc       = lift . getBlockContents dev trunc
 
+--           dbug ("cCont = " ++ show cCont)   $ return ()
+--           dbug ("cContI = " ++ show cContI) $ return ()
+--           dbug ("blkOff = " ++ show blkOff) $ return ()
+
           (chunks, remBytes) <- split `fmap` unfoldrM gbc (toWrite, blkAddrs)
+
+--           dbug ("blkAddrs        = " ++ show blkAddrs)             $ return ()
+--           dbug ("length chunks   = " ++ show (length chunks))      $ return ()
+--           dbug ("length remBytes = " ++ show (BS.length remBytes)) $ return ()
 
           assert (let lc = length chunks; lb = length blkAddrs
                   in lc == lb || (BS.length remBytes == 0 && lc < lb)) $ return ()
