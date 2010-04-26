@@ -72,8 +72,8 @@ import System.Device.BlockDevice
 
 import Debug.Trace
 dbug :: String -> a -> a
-dbug _ = id
---dbug = trace
+--dbug _ = id
+dbug = trace
 
 type HalfsM b r l m a = HalfsT HalfsError (Maybe (HalfsState b r l m)) m a
 
@@ -492,7 +492,8 @@ writeStream_lckd startIR start trunc bytes              = do
     availInLast    <- availBlks `fmap`                                 
                         if isNilCR (fst lcInfo)
                          then return $ inoCont startInode                                
-                         else drefCont (fst lcInfo)                                      
+                         else drefCont (fst lcInfo)
+    trace ("availInLast = " ++ show availInLast) $ return ()
     return $ (blksToAlloc - availInLast) `divCeil` apc
 
   ------------------------------------------------------------------------------
@@ -815,6 +816,10 @@ allocFill avail blksToAlloc contsToAlloc stCont = do
                        }
         in
           (drop cnt remBlks, k' . (c':))
+
+  when (not $ null blks') $ do
+   throwError $ HE_InternalError "allocFill didn't spill all blocks"                                                
+  assert (null blks') $ return ()
 
   forM_ (dirtyConts)  $ \c -> unless (isEmbedded c) $ lift $ writeCont dev c
   return stCont'

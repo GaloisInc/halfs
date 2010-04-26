@@ -38,15 +38,15 @@ import Debug.Trace
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [ -- Inode module invariants
-    exec 10 "Inode module invariants" propM_inodeModuleInvs
-  , -- Inode stream write/read/(over)write/read property
-    exec 10 "Basic WRWR" propM_basicWRWR
-  , -- Inode stream write/read/(truncating)write/read property
-    exec 10 "Truncating WRWR" propM_truncWRWR
-  , -- Inode length-specific stream write/read
-    exec 10 "Length-specific WR" propM_lengthWR
-  , -- Inode single reader/writer lock testing
-    exec 10 "Inode single reader/write mutex" propM_inodeMutexOK
+--     exec 10 "Inode module invariants" propM_inodeModuleInvs
+--   , -- Inode stream write/read/(over)write/read property
+    exec 1 "Basic WRWR" propM_basicWRWR
+--   , -- Inode stream write/read/(truncating)write/read property
+--     exec 10 "Truncating WRWR" propM_truncWRWR
+--   , -- Inode length-specific stream write/read
+--     exec 10 "Length-specific WR" propM_lengthWR
+--   , -- Inode single reader/writer lock testing
+--     exec 10 "Inode single reader/write mutex" propM_inodeMutexOK
   ]
   where
     exec = mkMemDevExec quick "Inode"
@@ -95,6 +95,14 @@ propM_basicWRWR _g dev = do
       chk            = checkInodeMetadata fs inr RegularFile defaultFilePerms
                          defaultUser defaultGroup
 
+  exec "Run failing dirmutex test by hand" $ do
+    -- Orig size sequence was [17897, 17940, 17989, 18040, 18098, 18167, 18216, 18291, 18339, 18404, 18481]
+    let dataLens = [17920, 18404, 18481]
+    forM_ dataLens $ \len -> do
+      let toWrite = BS.replicate len 0x58
+      writeStream inr 0 True toWrite `catchError` \e -> trace ("e = " ++ show e) $ CE.assert False (return ())
+
+{-
   (_, _, api, apc) <- exec "Obtaining sizes" $ getSizes (bdBlockSize dev)
   let expBlks = calcExpBlockCount (bdBlockSize dev) api apc dataSz
 
@@ -198,6 +206,7 @@ propM_basicWRWR _g dev = do
   bs3 <- exec "Readback 3" $ readStream inr 0 Nothing
   checkReadMD t11 1 2
   assert (bs3 == dummyByte)
+-}
   where
     dummyByte = BS.singleton 0
 
