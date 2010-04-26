@@ -72,8 +72,8 @@ import System.Device.BlockDevice
 
 import Debug.Trace
 dbug :: String -> a -> a
---dbug _ = id
-dbug = trace
+dbug _ = id
+--dbug = trace
 
 type HalfsM b r l m a = HalfsT HalfsError (Maybe (HalfsState b r l m)) m a
 
@@ -890,9 +890,9 @@ allocFill avail blksToAlloc contsToAlloc stCont = do
   -- Fill continuation fields to form the region that we'll fill with the newly
   -- allocated blocks (i.e., starting at the start cont but including the newly
   -- allocated conts as well).
-  let (_, region) = foldr (\c (contAddr, acc) ->
+  let (_, region) = foldr (\c (cr, acc) ->
                              ( address c
-                             , c{ continuation = contAddr } : acc
+                             , c{ continuation = cr } : acc
                              )
                           )
                           (nilCR, [])
@@ -909,7 +909,10 @@ allocFill avail blksToAlloc contsToAlloc stCont = do
         in
           (drop cnt remBlks, k' . (c':))
 
-  assert (null blks') $ return ()
+  when (not $ null blks') $
+    trace ("FAILURE: allocFill: stCont = " ++ show stCont ++ ", blksToAlloc = " ++ show blksToAlloc
+           ++ ", contsToAlloc = " ++ show contsToAlloc ++ ", blks' = " ++ show blks)
+    fail "FAILURE: allocFill didn't spill all blocks"
 
   forM_ (dirtyConts)  $ \c -> unless (isEmbedded c) $ lift $ writeCont dev c
   return stCont'
