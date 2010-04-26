@@ -347,84 +347,6 @@ emptyCont nAddrs me =
 --------------------------------------------------------------------------------
 -- Inode stream functions
 
-{-
--- | Provides a stream over the bytes governed by a given Inode and its
--- continuations.  This function performs a write to update inode metadata
--- (e.g., access time).
-readStream :: HalfsCapable b t r l m => 
-              InodeRef                  -- ^ Starting inode reference
-           -> Word64                    -- ^ Starting stream (byte) offset
-           -> Maybe Word64              -- ^ Stream length (Nothing => read
-                                        --   until end of stream, including
-                                        --   entire last block)
-           -> HalfsM b r l m ByteString -- ^ Stream contents
-readStream startIR start mlen = 
-  withLockedInode startIR $ do  
-  -- ====================== Begin inode critical section ======================
-  dev <- hasks hsBlockDev
-  let bs        = bdBlockSize dev
-      readB n b = lift $ readBlock dev n b
-      -- 
-      -- Calculate the remaining blocks (up to len, if applicable) to read from
-      -- the given Cont.  f is just a length modifier.
-      calcRemBlks cont f = case mlen of 
-        Nothing  -> blockCount cont
-        Just len -> min (blockCount cont) $ f len `divCeil` bs
-
-  startInode <- drefInode startIR
-  let fileSz  = inoFileSize startInode
-  if 0 == blockCount (inoCont startInode)
-   then return BS.empty
-   else do 
-     dbug ("==== readStream begin ===") $ do
-     conts                         <- expandConts Nothing (inoCont startInode)
-     (sContI, sBlkOff, sByteOff) <- getStreamIdx bs fileSz start
-     dbug ("start = " ++ show start) $ do
-     dbug ("(sContI, sBlkOff, sByteOff) = " ++
-       show (sContI, sBlkOff, sByteOff)) $ do
-
-     rslt <- case mlen of
-       Just len | len == 0 -> return BS.empty
-       _                   -> do
-         case genericDrop sContI conts of
-           [] -> fail "Inode.readStream INTERNAL: invalid start cont index"
-           (cont:rest) -> do
-             -- 'header' is just the partial first block and all remaining
-             -- blocks in the first Cont, accounting for the (Maybe) maximum
-             -- length requested.
-             assert (maybe True (> 0) mlen) $ return ()
-             header <- do
-               let remBlks = calcRemBlks cont (+ sByteOff)
-                             -- +sByteOff to force rounding for partial blocks
-                   range   = let lastIdx = blockCount cont - 1 in 
-                             [ sBlkOff .. min lastIdx (sBlkOff + remBlks - 1) ]
-               (blk:blks) <- mapM (readB cont) range
-               return $ bsDrop sByteOff blk `BS.append` BS.concat blks
-                       
-             -- 'fullBlocks' is the remaining content from all remaining conts,
-             -- accounting for (Maybe) maximum length requested
-             (fullBlocks, _readCnt) <- 
-               foldM
-                 (\(acc, bytesSoFar) cont' -> do
-                    let remBlks = calcRemBlks cont' (flip (-) bytesSoFar) 
-                        range   = if remBlks > 0 then [0..remBlks - 1] else []
-                    blks <- mapM (readB cont') range
-                    return ( acc `BS.append` BS.concat blks
-                           , bytesSoFar + remBlks * bs
-                           )
-                 )
-                 (BS.empty, fromIntegral $ BS.length header) rest
-             return $ bsTake (maybe (fileSz - start) id mlen) $
-               header `BS.append` fullBlocks
-     
-     now <- getTime
-     lift $ writeInode dev $
-       startInode { inoAccessTime = now, inoChangeTime = now }
-     dbug ("==== readStream end ===") $ return ()
-     return rslt                                         
-  -- ======================= End inode critical section =======================
--}
-
 -- | Provides a stream over the bytes governed by a given Inode and its
 -- continuations.  This function performs a write to update inode metadata
 -- (e.g., access time).
@@ -503,22 +425,7 @@ readStream startIR start mlen = do
                      if isNilCR (continuation cCont)
                       then rslt (error "Cont DNE and expected termination!")
                       else rslt =<< drefCont (continuation cCont)
-{-
-                     if isNilCR (continuation cCont)
-                      then trace ("readCont terminating: bytesSoFar = " ++ show bytesSoFar ++ ", totalToRead = " ++ show totalToRead) $ do
-                           return $ Just $
-                             ( theData -- accuml
-                           assert (bytesSoFar' >= totalToRead) $ return Nothing
-                      else do
-                        nextCont <- drefCont (continuation cCont)
-                        return $ Just $
-                           ( theData -- accumulated by unfoldr
-                           , ( (nextCont, cContI+1)
-                             , boffs
-                             , bytesSoFar'
-                             )
-                           )
--}
+
            -- ==> Bulk reading starts here <== 
            if (sBlkOff + 1 < blockCount sCont || sContI < eContI)
             then unfoldrM readCont ((sCont, sContI), (sBlkOff+1):repeat 0, hdrLen)
@@ -908,11 +815,6 @@ allocFill avail blksToAlloc contsToAlloc stCont = do
                        }
         in
           (drop cnt remBlks, k' . (c':))
-
-  when (not $ null blks') $
-    trace ("FAILURE: allocFill: stCont = " ++ show stCont ++ ", blksToAlloc = " ++ show blksToAlloc
-           ++ ", contsToAlloc = " ++ show contsToAlloc ++ ", blks' = " ++ show blks)
-    fail "FAILURE: allocFill didn't spill all blocks"
 
   forM_ (dirtyConts)  $ \c -> unless (isEmbedded c) $ lift $ writeCont dev c
   return stCont'
