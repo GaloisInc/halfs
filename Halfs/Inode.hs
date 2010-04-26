@@ -29,14 +29,14 @@ module Halfs.Inode
   , ContRef(..)
   , bsDrop
   , bsTake
+  , computeMinimalInodeSize
   , computeNumAddrs
   , computeNumInodeAddrsM
   , computeNumContAddrsM
+  , computeSizes
   , decodeCont
   , decodeInode
-  , getSizes
   , minimalContSize
-  , minimalInodeSize
   , minInodeBlocks
   , minContBlocks
   , nilCR
@@ -132,7 +132,7 @@ padSentinel = 0xAD
 -- fields).
 --
 -- These can be adjusted as needed according to inode metadata sizes, but it's
--- very important that (minimalInodeSize =<< getTime) and minimalContSize yield
+-- very important that (computeMinimalInodeSize =<< getTime) and minimalContSize yield
 -- the same value!
 
 -- | The size, in bytes, of the padding region at the end of Inodes
@@ -203,9 +203,10 @@ data Cont = Cont
 -- its blocks region.
 --
 -- You can check this value interactively in ghci by doing, e.g.
--- minimalInodeSize =<< (getTime :: IO UTCTime)
-minimalInodeSize :: (Monad m, Ord t, Serialize t, Show t) => t -> m Word64
-minimalInodeSize t = do
+-- computeMinimalInodeSize =<< (getTime :: IO UTCTime)
+computeMinimalInodeSize :: (Monad m, Ord t, Serialize t, Show t) =>
+                           t -> m Word64
+computeMinimalInodeSize t = do
   return $ fromIntegral $ BS.length $ encode $
     let e = emptyInode minInodeBlocks t RegularFile (FileMode [] [] [])
                        nilIR nilIR rootUser rootGroup
@@ -242,7 +243,7 @@ computeNumAddrs blkSz minBlocks minSize = do
 computeNumInodeAddrsM :: (Serialize t, Timed t m, Show t) =>
                          Word64 -> m Word64
 computeNumInodeAddrsM blkSz =
-  computeNumAddrs blkSz minInodeBlocks =<< minimalInodeSize =<< getTime
+  computeNumAddrs blkSz minInodeBlocks =<< computeMinimalInodeSize =<< getTime
 
 computeNumContAddrsM :: (Serialize t, Timed t m) =>
                         Word64 -> m Word64
@@ -250,14 +251,14 @@ computeNumContAddrsM blkSz = do
   minSize <- minimalContSize
   computeNumAddrs blkSz minContBlocks minSize
 
-getSizes :: (Serialize t, Timed t m, Show t) =>
-            Word64
-         -> m ( Word64 -- #inode bytes
-              , Word64 -- #cont bytes
-              , Word64 -- #inode addrs
-              , Word64 -- #cont addrs
-              )
-getSizes blkSz = do
+computeSizes :: (Serialize t, Timed t m, Show t) =>
+                Word64
+             -> m ( Word64 -- #inode bytes
+                  , Word64 -- #cont bytes
+                  , Word64 -- #inode addrs
+                  , Word64 -- #cont addrs
+                  )
+computeSizes blkSz = do
   startContAddrs <- computeNumInodeAddrsM blkSz
   contAddrs      <- computeNumContAddrsM  blkSz
   return (startContAddrs * blkSz, contAddrs * blkSz, startContAddrs, contAddrs)
@@ -286,7 +287,7 @@ buildEmptyInode :: (Serialize t, Timed t m, Show t) =>
                 -> m (Inode t)
 buildEmptyInode bd ftype fmode me mommy usr grp = do 
   now       <- getTime
-  minSize   <- minimalInodeSize =<< return now
+  minSize   <- computeMinimalInodeSize =<< return now
 
   minimalContSize >>= (`assert` return ()) . (==) minSize
 
@@ -487,7 +488,7 @@ writeStream_lckd startIR start trunc bytes              = do
       bytesToAlloc = if newFileSz > fszRndBlk then newFileSz - fszRndBlk else 0 
       blksToAlloc  = bytesToAlloc `divCeil` bs
 
-  (_, _, _, apc)                   <- getSizes bs
+  (_, _, _, apc)                   <- hasks hsSizes
   sIdx@(sContI, sBlkOff, sByteOff) <- getStreamIdx bs fileSz start
   sCont                            <- findCont startInode sContI
   lastCont                         <- getLastCont Nothing sCont
@@ -578,7 +579,7 @@ writeStream_lckd startIR start trunc bytes              = do
   --------------------------------------------------------------------------------
   -- Inode metadata adjustments & persist
 
-  now            <- getTime 
+  now <- getTime 
   lift $ writeInode dev $ 
     startInode
     { inoLastCont    = if eContI == sContI
@@ -751,11 +752,10 @@ withLockedInode inr act =
 -- do this to avoid occupying valuable on-disk inode space where possible.  Bare
 -- applications of 'decode' should not occur when deserializing inodes!
 decodeInode :: HalfsCapable b t r l m =>
-               Word64
-            -> ByteString
+               ByteString
             -> HalfsM b r l m (Inode t)
-decodeInode blkSz bs = do
-  numAddrs' <- computeNumInodeAddrsM blkSz
+decodeInode bs = do
+  (_, _, numAddrs', _) <- hasks hsSizes
   case decode bs of
     Left s  -> throwError $ HE_DecodeFail_Inode s
     Right n -> do 
@@ -1042,7 +1042,7 @@ drefInode :: HalfsCapable b t r l m =>
              InodeRef -> HalfsM b r l m (Inode t)
 drefInode (IR addr) = do
   dev <- hasks hsBlockDev
-  lift (bdReadBlock dev addr) >>= decodeInode (bdBlockSize dev) 
+  lift (bdReadBlock dev addr) >>= decodeInode
 
 setChangeTime :: (Ord t, Serialize t) => t -> Inode t -> Inode t
 setChangeTime t nd = nd{ inoChangeTime = t }
@@ -1058,7 +1058,7 @@ decomp blkSz streamOff = do
   -- Note that the first Cont in a Cont chain always gets embedded in an Inode,
   -- and thus has differing capacity than the rest of the Conts, which are of
   -- uniform size.
-  (stContBytes, contBytes, _, _) <- getSizes blkSz
+  (stContBytes, contBytes, _, _) <- hasks hsSizes
   let (contIdx, contByteIdx) =
         if streamOff >= stContBytes
         then fmapFst (+1) $ (streamOff - stContBytes) `divMod` contBytes

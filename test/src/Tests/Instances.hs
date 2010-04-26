@@ -26,7 +26,7 @@ import Halfs.Inode               ( Cont(..)
                                  , InodeRef(..)
                                  , computeNumAddrs
                                  , minimalContSize
-                                 , minimalInodeSize
+                                 , computeMinimalInodeSize
                                  , minContBlocks
                                  , minInodeBlocks
                                  , nilCR
@@ -203,7 +203,7 @@ instance (Arbitrary a, Ord a, Serialize a, Show a) => Arbitrary (Inode a) where
     BDGeom _ blkSz <- arbitrary
     createTm       <- arbitrary
     addrCnt        <- computeNumAddrs blkSz minInodeBlocks
-                        =<< minimalInodeSize createTm
+                        =<< computeMinimalInodeSize createTm
     Inode
       <$> IR `fmap` arbitrary                -- inoParent
       <*> return (nilCR, 0)                  -- inoLastCR

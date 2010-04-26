@@ -66,7 +66,7 @@ propM_inodeModuleInvs :: HalfsCapable b t r l m =>
                       -> PropertyM m ()
 propM_inodeModuleInvs _g _dev = do
   -- Check geometry/padding invariants
-  minInodeSz <- run $ minimalInodeSize =<< getTime
+  minInodeSz <- run $ computeMinimalInodeSize =<< getTime
   minContSz  <- run $ minimalContSize
   assert (minInodeSz == minContSz)
 
@@ -104,7 +104,7 @@ propM_basicWRWR _g dev = do
         trace ("e = " ++ show e) $ CE.assert False (return ())
 -}
 
-  (_, _, api, apc) <- exec "Obtaining sizes" $ getSizes (bdBlockSize dev)
+  (_, _, api, apc) <- exec "Obtaining sizes" $ computeSizes (bdBlockSize dev)
   let expBlks = calcExpBlockCount (bdBlockSize dev) api apc dataSz
 
   -- Check single-byte write
@@ -225,7 +225,7 @@ propM_truncWRWR _g dev = do
       chk            = checkInodeMetadata fs rdirIR Directory rootDirPerms
                          rootUser rootGroup
 
-  (_, _, api, apc) <- exec "Obtaining sizes" $ getSizes (bdBlockSize dev)
+  (_, _, api, apc) <- exec "Obtaining sizes" $ computeSizes (bdBlockSize dev)
   let expBlks = calcExpBlockCount (bdBlockSize dev) api apc
 
   -- Non-truncating write
@@ -276,7 +276,7 @@ propM_lengthWR _g dev = do
       chk            = checkInodeMetadata fs rdirIR Directory rootDirPerms
                          rootUser rootGroup 
 
-  (_, _, api, apc) <- exec "Obtaining sizes" $ getSizes (bdBlockSize dev)
+  (_, _, api, apc) <- exec "Obtaining sizes" $ computeSizes (bdBlockSize dev)
   let expBlks = calcExpBlockCount blkSz api apc dataSz
 
   -- Write random data to the stream

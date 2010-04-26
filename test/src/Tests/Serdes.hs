@@ -15,6 +15,7 @@ import Test.QuickCheck.Monadic
   
 import Halfs.Classes
 import Halfs.Directory
+import Halfs.HalfsState
 import Halfs.Inode
 import Halfs.Monad
 import Halfs.SuperBlock
@@ -56,8 +57,13 @@ propM_inodeSerdes _g dev =
   -- dev's geometry instead of the one the inode generator uses, which is
   -- arbitrary.
   nAddrs <- computeNumAddrs (bdBlockSize dev) minInodeBlocks
-              =<< minimalInodeSize (inoCreateTime inode)
-  runHNoEnv (decodeInode (bdBlockSize dev) (encode inode))
+              =<< computeMinimalInodeSize (inoCreateTime inode)
+  sizes  <- run $ computeSizes (bdBlockSize dev)
+
+  let dummyEnv = HalfsState inv inv inv inv sizes inv inv inv inv inv inv inv
+      inv      = error "Internal: dummy state, value undefined"
+
+  runH dummyEnv (decodeInode (encode inode))
     >>= assert . either (const False) (eq inode nAddrs)
   where
     eq inode na = (==) inode{ inoCont = (inoCont inode){ numAddrs = na } }

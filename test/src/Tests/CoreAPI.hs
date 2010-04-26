@@ -341,7 +341,7 @@ propM_fileWROK pathFromRoot _g dev = do
   forAllM (FileWR `fmap` choose (1, maxBytes)) $ \(FileWR fileSz) -> do
   forAllM (printableBytes fileSz)              $ \fileData        -> do 
 
-  (_, _, api, apc) <- exec "Obtaining sizes" $ IN.getSizes (bdBlockSize dev)
+  (_, _, api, apc) <- exec "Obtaining sizes" $ IN.computeSizes (bdBlockSize dev)
   let expBlks = calcExpBlockCount (bdBlockSize dev) api apc fileSz
 
   let checkFileStat' atp mtp ctp = do
@@ -790,11 +790,11 @@ propM_stressEndAllocs =
     fn     = rootPath </> "theFile"
     go f   = run (memDev g) >>= (`whenDev` run . bdShutdown) f
 
-    blkSz  = 512 :: Int
+    blkSz  = 4096 :: Int
     blkSzI = fromIntegral blkSz
-    g      = BDGeom 32768 (fromIntegral blkSz) -- 16MiB FS, 256KiB total write
+    g      = BDGeom 65536 (fromIntegral blkSz) -- 256MiB FS, 128 MiB total write
     chunk  = BS.replicate blkSz 0x42
-    addrs  = [ i * blkSzI | i <- [0..(blkSzI-1)]]
+    addrs  = [ i * blkSzI | i <- [0..(8*blkSzI-1)]]
 
 propM_stressEndDeallocs :: (Args, Property)
 propM_stressEndDeallocs =

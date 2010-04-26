@@ -27,10 +27,12 @@ data HalfsState b r l m = HalfsState {
   , hsUserID           :: UserID
   , hsGroupID          :: GroupID
   , hsLogger           :: Maybe (String -> m ())
+  , hsSizes            :: (Word64, Word64, Word64, Word64)
+    -- ^ explicitly memoized Inode.computeSizes 
   , hsBlockMap         :: BlockMap b r l
   , hsSuperBlock       :: r SuperBlock
   , hsLock             :: l
-  , hsNumFileNodes     :: LockedRscRef l r Word64 
+  , hsNumFileNodes     :: LockedRscRef l r Word64
   , hsDHMap            :: LockedRscRef l r (M.Map InodeRef (DirHandle r l))
     -- ^ Tracks active directory handles; we probably want to add a
     -- (refcounting?) expiry mechanism so that the size of the map is

@@ -781,13 +781,14 @@ newHalfsState :: HalfsCapable b t r l m =>
               -> HalfsM b r l m (HalfsState b r l m)
 newHalfsState dev usr grp lgr sb bm =
   HalfsState dev usr grp lgr       
-    `fmap` return bm               -- blockmap
-    `ap`   newRef sb               -- superblock 
-    `ap`   newLock                 -- filesystem lock
-    `ap`   newLockedRscRef 0       -- Locked file node count
-    `ap`   newLockedRscRef M.empty -- Locked map: inr -> DH
-    `ap`   newLockedRscRef M.empty -- Locked map: inr -> (l, refcnt)
-    `ap`   newLockedRscRef M.empty -- Locked map: inr -> (FH, opencnt)
+    `fmap` computeSizes (bdBlockSize dev) -- memoized since it won't change
+    `ap`   return bm                      -- blockmap
+    `ap`   newRef sb                      -- superblock 
+    `ap`   newLock                        -- filesystem lock
+    `ap`   newLockedRscRef 0              -- Locked file node count
+    `ap`   newLockedRscRef M.empty        -- Locked map: inr -> DH
+    `ap`   newLockedRscRef M.empty        -- Locked map: inr -> (l, refcnt)
+    `ap`   newLockedRscRef M.empty        -- Locked map: inr -> (FH, opencnt)
 
 -- | Atomic inode modification wrapper
 modifyInode :: HalfsCapable b t r l m =>
