@@ -1,4 +1,4 @@
-{-# LANGUAGE GeneralizedNewtypeDeriving, ScopedTypeVariables #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving, ScopedTypeVariables, BangPatterns #-}
 module Halfs.Inode
   (
     InodeRef(..)
@@ -696,8 +696,9 @@ freeConts bm Cont{ continuation = cr }
   | isNilCR cr = return $ fromInteger 0
   | otherwise  = drefCont cr >>= contFoldM freeCont (fromInteger 0) 
   where
-    freeCont acc c = freeBlocks bm toFree >> return (acc + genericLength toFree)
-                     where toFree = unCR (address c) : blockAddrs c
+    freeCont !acc c = 
+      freeBlocks bm toFree >> return (acc + genericLength toFree)
+        where toFree = unCR (address c) : blockAddrs c
   
 withLockedInode :: HalfsCapable b t r l m =>
                    InodeRef         -- ^ reference to inode to lock
@@ -804,7 +805,7 @@ allocFill avail blksToAlloc contsToAlloc eCont = do
   -- allocated blocks (i.e., starting at the end of the already-allocated region
   -- from the start cont, but including the newly allocated conts as well).
   
-  let (_, region) = foldr (\c (cr, acc) ->
+  let (_, region) = foldr (\c (cr, !acc) ->
                              ( address c
                              , c{ continuation = cr } : acc
                              )

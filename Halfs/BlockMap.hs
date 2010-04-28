@@ -168,7 +168,7 @@ readBlockMap dev = do
                      idx      = (baseByte + byteIdx) * 8 + fromIntegral bitIdx 
                  setBit bArr idx
          else do cur <- readRef freeR
-                 writeRef freeR $! cur + 1
+                 writeRef freeR $ cur + 1
   
   baseTreeR <- newRef empty
   getFreeBlocks bArr baseTreeR Nothing 0
@@ -181,7 +181,7 @@ readBlockMap dev = do
   -- 
   writeExtent treeR ext = do
     t <- readRef treeR
-    writeRef treeR $! insert ext t
+    writeRef treeR $ insert ext t
   -- 
   -- getFreeBlocks recurses over each used bit in the used bitmap and
   -- finds runs of free block regions, inserting representative Extents
@@ -243,12 +243,12 @@ allocBlocks :: (Monad m, Reffable r m, Bitmapped b m, Lockable l m) =>
             -> m (Maybe BlockGroup)
 allocBlocks bm numBlocks = do
   withLockM (bmLock bm) $ do 
-  available <- readRef $! bmNumFree bm
+  available <- readRef $ bmNumFree bm
   if available < numBlocks
     then do
       return Nothing
     else do
-      freeTree <- readRef $! bmFreeTree bm
+      freeTree <- readRef $ bmFreeTree bm
       let (blkGroup, freeTree') = findSpace numBlocks freeTree
       forM_ (blkRangeBG blkGroup) $ setBit $ bmUsedMap bm
       writeRef (bmFreeTree bm) freeTree'
@@ -286,7 +286,7 @@ unallocBlocks_lckd bm (Discontig exts) = do
 unallocBlocks_lckd bm (Contig ext)     = do
   -- Precond: (bmLock bm) is currently held (can we assert this? TODO)
   avail    <- numFreeBlocks_lckd bm
-  freeTree <- readRef $! bmFreeTree bm
+  freeTree <- readRef $ bmFreeTree bm
   forM_ (blkRangeExt ext)  $ clearBit $ bmUsedMap bm
   writeRef (bmFreeTree bm) $ insert ext freeTree
   writeRef (bmNumFree bm)  $ avail + extSz ext
@@ -330,7 +330,7 @@ findSpace goalSz freeTree =
                 -> [Extent]
                 -> ([Extent], FreeTree)
         gatherL EmptyR _ _ = error "Precondition violated: insufficent space"
-        gatherL (treeL' :> ext@(Extent b sz)) accSz accExts
+        gatherL !(treeL' :> ext@(Extent b sz)) !accSz !accExts
           | accSz + sz < goalSz = gatherL (viewr treeL')
                                           (accSz + sz)
                                           (ext : accExts) 
