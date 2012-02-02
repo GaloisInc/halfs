@@ -28,6 +28,9 @@ unfoldrM f x = do
     Nothing    -> return []
     Just (a,b) -> liftM (a:) $ unfoldrM f b
 
+unfoldrM_ :: Monad m => (b -> m (Maybe (a, b))) -> b -> m ()
+unfoldrM_ f x = unfoldrM f x >> return ()
+
 lookupM :: (Ord k, Monad m) => k -> m (M.Map k v) -> m (Maybe v)
 lookupM = liftM . M.lookup
 

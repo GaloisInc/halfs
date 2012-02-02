@@ -1,6 +1,6 @@
 {-# LANGUAGE MultiParamTypeClasses, GeneralizedNewtypeDeriving,
              FunctionalDependencies, FlexibleContexts,
-             FlexibleInstances, ScopedTypeVariables #-}
+             FlexibleInstances, ScopedTypeVariables, BangPatterns #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Halfs.Classes
   ( HalfsCapable
@@ -141,9 +141,9 @@ instance Reffable (STRef s) (ST s) where
   writeRef = ($!) writeSTRef
 
 instance Reffable IORef IO where
-  newRef   = newIORef
-  readRef  = ($!) readIORef
-  writeRef = ($!) writeIORef
+  newRef         = newIORef
+  readRef        = ($!) readIORef
+  writeRef !r !v = writeIORef r v
 
 -- ---------------------------------------------------------------------------
 

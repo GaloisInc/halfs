@@ -36,7 +36,7 @@ import Tests.Instances (printableBytes, filename)
 import Tests.Types
 import Tests.Utils hiding (HalfsM)
 
-import Debug.Trace
+-- import Debug.Trace
 
 
 --------------------------------------------------------------------------------
@@ -341,7 +341,7 @@ propM_fileWROK pathFromRoot _g dev = do
   forAllM (FileWR `fmap` choose (1, maxBytes)) $ \(FileWR fileSz) -> do
   forAllM (printableBytes fileSz)              $ \fileData        -> do 
 
-  (_, _, api, apc) <- exec "Obtaining sizes" $ IN.getSizes (bdBlockSize dev)
+  (_, _, api, apc) <- exec "Obtaining sizes" $ IN.computeSizes (bdBlockSize dev)
   let expBlks = calcExpBlockCount (bdBlockSize dev) api apc fileSz
 
   let checkFileStat' atp mtp ctp = do
@@ -777,41 +777,44 @@ propM_simpleRenameOK _g dev = do
     [d1, d2, d3, f1, f2, f3] =
       map (rootPath </>) ["d1", "d2", "d3", "f1", "f2", "f3"]
 
--- TODO: turn this into a proper 'allocation pattern pattern' test case
 propM_stressEndAllocs :: (Args, Property)
-propM_stressEndAllocs = (,) stdArgs{maxSuccess = 1} $ monadicIO $ go $ \dev -> do
-  fs <- mkNewFS dev >> mountOK dev
-  execH "propM_stressEndAllocs" fs "mash end" $ do
-    createFile fn defaultFilePerms 
-    withFile fn (fofWriteOnly True) $ \fh -> do
-      forM addrs $ \addr -> write fh addr chunk
-  where
-    fn    = rootPath </> "theFile"
-    go f  = run (memDev g) >>= (`whenDev` run . bdShutdown) f
-    g     = BDGeom 32768 512
-    chunk = BS.replicate 512 0x42      -- 512B chunk
-    addrs = [ i * 512 | i <- [0..511]] -- 256 KiB addrs
---  g     = BDGeom 32768 4096             -- 128 MiB FS
---  chunk = BS.replicate 4096 0x42        -- 4K chunk
---  addrs = [ i * 4096 | i <- [0..4095]]  -- lower 16 MiB addrs
-
-propM_stressEndDeallocs :: (Args, Property)
-propM_stressEndDeallocs = (,) stdArgs{maxSuccess = 1} $ monadicIO $ go $ \dev -> do
-  fs <- mkNewFS dev >> mountOK dev
-  execH "propM_stressEndDeallocs" fs "mash end" $ do
-    createFile fn defaultFilePerms 
-    withFile fn (fofWriteOnly True) $ \fh -> do
-      write fh 0 (BS.concat $ replicate blkSz chunk)
-
-    -- Repeatedly trunc the file in block-size increments to push on
-    -- deallocation from the end.
-    mapM_ (setFileSize fn) sizes
+propM_stressEndAllocs =
+  (,) stdArgs{maxSuccess = 1} $
+  label "Stress end allocs" $ monadicIO $ go $ \dev -> do
+    fs <- mkNewFS dev >> mountOK dev
+    execH "propM_stressEndAllocs" fs "mash end" $ do
+      createFile fn defaultFilePerms 
+      withFile fn (fofWriteOnly True) $ \fh -> do
+        forM addrs $ \addr -> write fh addr chunk
   where
     fn     = rootPath </> "theFile"
     go f   = run (memDev g) >>= (`whenDev` run . bdShutdown) f
-    blkSz  = (512 :: Int) -- 16MiB FS, 512B chunks, 256 KiB total write
+
+    blkSz  = 4096 :: Int
     blkSzI = fromIntegral blkSz
-    g      = BDGeom 32768 (fromIntegral blkSz)
+    g      = BDGeom 65536 (fromIntegral blkSz) -- 256MiB FS, 128 MiB total write
+    chunk  = BS.replicate blkSz 0x42
+    addrs  = [ i * blkSzI | i <- [0..(8*blkSzI-1)]]
+
+propM_stressEndDeallocs :: (Args, Property)
+propM_stressEndDeallocs =
+  (,) stdArgs{maxSuccess = 1} $
+  label "Stress end deallocs" $ monadicIO $ go $ \dev -> do
+    fs <- mkNewFS dev >> mountOK dev
+    execH "propM_stressEndDeallocs" fs "mash end" $ do
+      createFile fn defaultFilePerms 
+      withFile fn (fofWriteOnly True) $ \fh -> do
+        write fh 0 (BS.concat $ replicate blkSz chunk)
+  
+      -- Repeatedly trunc the file in block-size increments to push on
+      -- deallocation from the end.
+      mapM_ (setFileSize fn) sizes
+  where
+    fn     = rootPath </> "theFile"
+    go f   = run (memDev g) >>= (`whenDev` run . bdShutdown) f
+    blkSz  = 512 :: Int
+    blkSzI = fromIntegral blkSz
+    g      = BDGeom 32768 (fromIntegral blkSz) -- 16MiB FS, 256 KiB total write
     chunk  = BS.replicate blkSz 0x42   
     sizes  = [ i * blkSzI | i <- reverse [0..(blkSzI-1)]]
 
