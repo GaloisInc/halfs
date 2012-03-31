@@ -11,6 +11,7 @@ module Halfs.Protection(
 import Data.Serialize
 import Data.Serialize.Put
 import Data.Serialize.Get
+import Data.Word
 
 newtype UserID = UID Word64
   deriving (Show, Eq, Real, Enum, Integral, Num, Ord)
@@ -24,7 +25,7 @@ rootUser = UID 0
 
 --
 
-newtype GroupID = GID Word64 
+newtype GroupID = GID Word64
   deriving (Show, Eq, Real, Enum, Integral, Num, Ord)
 
 instance Serialize GroupID where
@@ -33,4 +34,3 @@ instance Serialize GroupID where
 
 rootGroup :: GroupID
 rootGroup = GID 0
-

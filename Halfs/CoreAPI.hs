@@ -11,7 +11,7 @@ import Foreign.C.Error hiding (throwErrno)
 import System.FilePath
 
 import qualified Data.ByteString  as BS
-import qualified Data.List        as L 
+import qualified Data.List        as L
 import qualified Data.Map         as M
 import qualified Data.Traversable as T
 
@@ -40,13 +40,12 @@ type HalfsM b r l m a = HalfsT HalfsError (Maybe (HalfsState b r l m)) m a
 data SyncType = Data | Everything
 
 data FileSystemStats = FSS
-  { fssBlockSize   :: Integer -- ^ fundamental file system block size
-  , fssBlockCount  :: Integer -- ^ #data blocks in filesystem
-  , fssBlocksFree  :: Integer -- ^ #free blocks in filesystem
-  , fssBlocksAvail :: Integer -- ^ #free blocks avail to non-root
-  , fssFileCount   :: Integer -- ^ #num inodes in filesystem
-  , fssFilesFree   :: Integer -- ^ #free inodes in filesystem
-  , fssFilesAvail  :: Integer -- ^ #free inodes avail to non-root
+  { fssBlockSize       :: Integer -- ^ fundamental file system block size
+  , fssBlockCount      :: Integer -- ^ #data blocks in filesystem
+  , fssBlocksFree      :: Integer -- ^ #free blocks in filesystem
+  , fssBlocksAvailable :: Integer -- ^ #free blocks avail to non-root
+  , fssFileCount       :: Integer -- ^ #num inodes in filesystem
+  , fssFilesFree       :: Integer -- ^ #free inodes in filesystem
   }
   deriving (Show)
 
@@ -85,7 +84,7 @@ newfs dev uid gid rdirPerms = do
   -- no parent directory (and, furthermore, no filesystem state).
   let rdirIR = blockAddrToInodeRef rdirAddr
   dirInode <- lift $
-    buildEmptyInodeEnc 
+    buildEmptyInodeEnc
       dev
       Directory
       rdirPerms
@@ -147,7 +146,7 @@ mount dev usr grp rdirPerms = do
          then do
            bm  <- lift $ readBlockMap dev
            sb' <- lift $ writeSB dev sb{ unmountClean = False }
-           newHalfsState dev usr grp Nothing sb' bm 
+           newHalfsState dev usr grp Nothing sb' bm
          else do
            mfs <- fsck dev sb usr grp rdirPerms
            case mfs of
@@ -160,13 +159,13 @@ mount dev usr grp rdirPerms = do
 -- superblock will have its unmountClean flag set to True.
 unmount :: (HalfsCapable b t r l m) =>
            HalfsM b r l m ()
-unmount = do 
+unmount = do
   dhMap <- hasks hsDHMap
   lk    <- hasks hsLock
   dev   <- hasks hsBlockDev
   sbRef <- hasks hsSuperBlock
-  
-  withLock lk $ withLockedRscRef dhMap $ \dhMapRef -> do 
+
+  withLock lk $ withLockedRscRef dhMap $ \dhMapRef -> do
   -- ^ Grab everything; we do not want to permit other filesystem actions to
   -- occur in other threads during or after teardown. Needs testing. TODO
 
@@ -181,13 +180,13 @@ unmount = do
      mapM_ syncDirectory =<< M.elems `fmap` readRef dhMapRef
 
      lift $ bdFlush dev
-   
+
      -- Finalize the superblock
      let sb' = sb{ unmountClean = True }
      writeRef sbRef sb'
      lift $ writeSB dev sb'
      return ()
-  
+
 --------------------------------------------------------------------------------
 -- FileSystem ChecK (fsck)
 
@@ -206,7 +205,7 @@ fsck dev sb usr grp rdirPerms = do
     Just (bad, fc) -> do
       bm        <- lift $ writeUsedBitmap dev used >> readBlockMap dev
       finalFree <- readRef (bmNumFree bm)
-      lift $ writeSB dev $ sb 
+      lift $ writeSB dev $ sb
         { unmountClean = True
         , freeBlocks   = finalFree
         , usedBlocks   = initFree - finalFree
@@ -215,7 +214,7 @@ fsck dev sb usr grp rdirPerms = do
       logMsg $ "fsck: OK. Bad inodes found: " ++ show (map unIR bad)
       Just `fmap` mount dev usr grp rdirPerms
   where
-    blks      = blockMapSizeBlks (bdNumBlocks dev) (bdBlockSize dev) 
+    blks      = blockMapSizeBlks (bdNumBlocks dev) (bdBlockSize dev)
     initFree  = bdNumBlocks dev - blks - 1 {- -1 for superblock -}
 
 fsck' :: HalfsCapable b t r l m =>
@@ -250,12 +249,12 @@ fsck' dev sb used pinr inr = do
              syncDirectory_lckd pdh
          return $ Just ([inr], 0)
        else do
-         logMsg "fsck: Critical failure: couldn't decode root directory" 
+         logMsg "fsck: Critical failure: couldn't decode root directory"
          return Nothing
     --
     val nd@Inode{ inoCont = cont, inoFileType = ftype } = do
       assert (inoAddress nd == inr) $ return ()
-      whenValid (drop 1 `fmap` expandConts Nothing cont) $ \conts -> do 
+      whenValid (drop 1 `fmap` expandConts Nothing cont) $ \conts -> do
         let markUsed = mapM_ (setBit used) $
                          unIR inr : map (unCR . address) conts
         case ftype of
@@ -265,7 +264,7 @@ fsck' dev sb used pinr inr = do
               kids <- M.elems `fmap` readRef (dhContents thisDH)
               foldM (\(Just (bads, fc)) kid -> do
                          Just (bs, k) <- fsck' dev sb used inr (deInode kid)
-                         return $ Just (bads ++ bs, fc + k) 
+                         return $ Just (bads ++ bs, fc + k)
                     )
                     (Just ([], 0)) kids
 
@@ -291,7 +290,7 @@ mkdir :: (HalfsCapable b t r l m) =>
       -> FileMode
       -> HalfsM b r l m ()
 mkdir fp fm = do
-  parentIR <- fst `fmap` absPathIR path Directory 
+  parentIR <- fst `fmap` absPathIR path Directory
   usr <- getUser
   grp <- getGroup
   makeDirectory parentIR dirName usr grp fm
@@ -316,7 +315,7 @@ readDir :: (HalfsCapable b t r l m) =>
            DirHandle r l
         -> HalfsM b r l m [(FilePath, FileStat t)]
 readDir dh = do
-  withDHLock dh $ do 
+  withDHLock dh $ do
     inr      <- getDHINR_lckd dh
     contents <- liftM M.toList $
                   T.mapM (fileStat)
@@ -329,7 +328,7 @@ readDir dh = do
          then fmap rootDir . readRef =<< hasks hsSuperBlock
          else return p
     return $ (dotPath, thisStat) : (dotdotPath, parentStat) : contents
- 
+
 -- | Synchronize the given directory to disk.
 syncDir :: (HalfsCapable b t r l m) =>
            FilePath -> SyncType -> HalfsM b r l m ()
@@ -351,14 +350,14 @@ createFile fp mode = do
       case rslt of
         DF_Found _          -> throwError $ HE_ObjectExists fp
         DF_WrongFileType ft -> throwError $ HE_UnexpectedFileType ft fp
-        _                   -> return ()  
+        _                   -> return ()
     usr  <- getUser
     grp  <- getGroup
     _inr <- F.createFile pdh fname usr grp mode
     return ()
   where
     (ppath, fname) = splitFileName fp
-           
+
 -- | Opens a file given an absolute path. Raises HE_FileNotFound if the named
 -- file does not exist.  Raises HE_UnexpectedFileType if the given path is not a
 -- file. Otherwise, provides a FileHandle to the requested file
@@ -368,7 +367,7 @@ createFile fp mode = do
 openFile :: (HalfsCapable b t r l m) =>
             FilePath            -- ^ The absolute path of the file
          -> FileOpenFlags       -- ^ open flags / open mode (ronly, wonly, wr)
-         -> HalfsM b r l m (FileHandle r l) 
+         -> HalfsM b r l m (FileHandle r l)
 openFile fp oflags = do
   -- TODO: check perms
   pdh <- openDir ppath
@@ -382,7 +381,7 @@ openFile fp oflags = do
   where
     (ppath, fname) = splitFileName fp
     foundFile      = openFilePrim oflags
-                    
+
 read :: (HalfsCapable b t r l m) =>
         FileHandle r l            -- ^ the handle for the open file to read
      -> Word64                    -- ^ the byte offset into the file
@@ -391,7 +390,7 @@ read :: (HalfsCapable b t r l m) =>
 read fh byteOff len = do
   -- TODO: Check perms
   unless (fhReadable fh) $ HE_BadFileHandleForRead `annErrno` eBADF
-  withLock (fhLock fh) $ do 
+  withLock (fhLock fh) $ do
     inr <- getFHINR_lckd fh
     readStream inr byteOff (Just len)
 
@@ -403,7 +402,7 @@ write :: (HalfsCapable b t r l m) =>
 write fh byteOff bytes = do
   -- TODO: Check perms
   unless (fhWritable fh) $ HE_BadFileHandleForWrite `annErrno` eBADF
-  withLock (fhLock fh) $ do 
+  withLock (fhLock fh) $ do
     inr <- getFHINR_lckd fh
     writeStream inr byteOff False bytes
 
@@ -422,9 +421,9 @@ closeFile fh = closeFilePrim fh
 
 setFileSize :: (HalfsCapable b t r l m) =>
                FilePath -> Word64 -> HalfsM b r l m ()
-setFileSize fp len = 
+setFileSize fp len =
   withFile fp (fofWriteOnly True) $ \fh -> do
-    withLock (fhLock fh) $ do 
+    withLock (fhLock fh) $ do
       inr <- getFHINR_lckd fh
       let wr  = writeStream_lckd inr
       withLockedInode inr $ do
@@ -434,9 +433,9 @@ setFileSize fp len =
           else wr sz False $ bsReplicate (len - sz) 0 -- pad up to len
 
 setFileTimes :: (HalfsCapable b t r l m) =>
-                FilePath            
+                FilePath
              -> t                  -- ^ access time
-             -> t                  -- ^ modification time  
+             -> t                  -- ^ modification time
              -> HalfsM b r l m ()
 setFileTimes fp accTm modTm = do
   -- TODO: Check permissions
@@ -450,7 +449,7 @@ rename oldFP newFP = do
   {- Currently status of unsupported POSIX error behaviors:
 
      TODO
-     ---- 
+     ----
      [EACCES] A component of either path prefix denies search permission.
 
      [EACCES] The requested operation requires writing in a directory (e.g.,
@@ -470,7 +469,7 @@ rename oldFP newFP = do
              effective user ID.
 
      DEFERRED
-     -------- 
+     --------
 
      [EXDEV] The link named by new and the file named by old are on different
              logical devices (file systems).  Note that this error code will not
@@ -529,7 +528,7 @@ rename oldFP newFP = do
     -- file/dir.  If we crash immediately after the newName -> oldDE sync'ing,
     -- 'new' is valid and since the old file/dir won't be a referent of any
     -- content maps, fsck should be able to identify its resources as available.
-    -- 
+    --
     -- Finally, when 'new' is an existing empty directory that we'll replace
     -- with 'old', it's important that we hold its dh lock for the duration of
     -- the content map updates so that it doesn't become non-empty underneath
@@ -544,11 +543,11 @@ rename oldFP newFP = do
           -- parent's content map
           hbracket (openDirectory $ deInode newDE) closeDirectory $ \ndh -> do
             withDHLock ndh $ do
-              -- begin dirhandle critical section            
+              -- begin dirhandle critical section
               isEmpty <- M.null `fmap` readRef (dhContents ndh)
               unless isEmpty $ HE_DirectoryNotEmpty `annErrno` eNOTEMPTY
               updateContentMaps
-              -- end dirhandle critical section            
+              -- end dirhandle critical section
 
             -- NB: We remove the replaced new directory's inode outside of its
             -- locked DH context or we'll deadlock when removeDirectory
@@ -564,13 +563,13 @@ rename oldFP newFP = do
     withDirResources f =
       -- bracket & lock the old and new parent directories, being careful not to
       -- double-lock when they're the same.
-      withDir' openDir' oldPP $ \opdh -> 
+      withDir' openDir' oldPP $ \opdh ->
         withDir' openDir' newPP $ \npdh ->
           (if oldPP == newPP
             then withDHLock opdh
             else withDHLock opdh . withDHLock npdh
           ) $ f opdh npdh
-    -- 
+    --
     openDir' dp = openDir dp `catchError` \e ->
       case e of
         -- [ENOTDIR]: A component of path prefix is not a directory
@@ -596,7 +595,7 @@ rename oldFP newFP = do
           where
             nft = deType newDE
             oft = deType oldDE
-    -- 
+    --
     p1 `isParentOf` p2 = length l1 < length l2 && and (zipWith (==) l1 l2)
                          where l1 = splitDirectories p1
                                l2 = splitDirectories p2
@@ -638,14 +637,14 @@ mklink path1 {-src-} path2 {-dst-} = do
   {- Currently status of unsupported POSIX error behaviors:
 
      TODO
-     ---- 
+     ----
 
      [EACCES] A component of either path prefix denies search permission.
      [EACCES] The requested link requires writing in a directory with a mode
               that denies write permission.
      [EACCES] The current process cannot access the existing file.
 
-     [EIO]    An I/O error occurs while reading from or writing to the file 
+     [EIO]    An I/O error occurs while reading from or writing to the file
               system to make the directory entry.
 
      [ELOOP] Too many symbolic links are encountered in translating one of the
@@ -653,7 +652,7 @@ mklink path1 {-src-} path2 {-dst-} = do
              link.
 
      DEFERRED
-     -------- 
+     --------
 
      [EROFS] The requested link requires writing in a directory on a read-only
              file system.
@@ -678,20 +677,20 @@ mklink path1 {-src-} path2 {-dst-} = do
                     an entire path name exceeded {PATH_MAX} characters.
   -}
 
-  hbracket openSrcFile closeFile $ \p1fh -> do     
+  hbracket openSrcFile closeFile $ \p1fh -> do
     hbracket openDstDir closeDir $ \p2dh -> do
-      withLock (fhLock p1fh) $ do 
+      withLock (fhLock p1fh) $ do
         srcINR <- getFHINR_lckd p1fh
         addLink p2dh srcINR
         incLinkCount srcINR
   where
     addLink p2dh inr = do
-      let fname     = takeFileName path2               
+      let fname     = takeFileName path2
           linkPerms = FileMode [Read,Write] [Read] [Read]
           -- TODO: Obtain the proper permissions for the link
       usr <- getUser
       grp <- getGroup
-      withDHLock p2dh $ do 
+      withDHLock p2dh $ do
         addDirEnt_lckd p2dh fname inr usr grp linkPerms RegularFile
           `catchError` \e -> do
             case e of
@@ -707,7 +706,7 @@ mklink path1 {-src-} path2 {-dst-} = do
             -- on the file system containing the directory.
             HE_AllocFailed{} -> e `annErrno` eNOSPC
             _                -> throwError e
-    -- 
+    --
     openDstDir = openDir (takeDirectory path2) `catchError` \e ->
       case e of
         -- [ENOTDIR]: A component of path2's pfx is not a directory
@@ -715,7 +714,7 @@ mklink path1 {-src-} path2 {-dst-} = do
         -- [ENOENT] A component of path2's pfx does not exist
         HE_PathComponentNotFound{} -> e `annErrno` eNOENT
         _                       -> throwError e
-    -- 
+    --
     openSrcFile = openFile path1 fofReadOnly `catchError` \e ->
       case e of
         -- [EPERM]: The file named by path1 is a directory
@@ -754,17 +753,16 @@ fsstat :: (HalfsCapable b t r l m) =>
 fsstat = do
   dev         <- hasks hsBlockDev
   numNodesRsc <- hasks hsNumFileNodes
-  bm          <- hasks hsBlockMap 
+  bm          <- hasks hsBlockMap
   fileCnt     <- fromIntegral `fmap` withLockedRscRef numNodesRsc readRef
   freeCnt     <- fromIntegral `fmap` numFreeBlocks bm
   return FSS
-    { fssBlockSize   = fromIntegral $ bdBlockSize dev
-    , fssBlockCount  = fromIntegral $ bdNumBlocks dev
-    , fssBlocksFree  = freeCnt
-    , fssBlocksAvail = freeCnt -- TODO: blocks avail to non-root
-    , fssFileCount   = fileCnt
-    , fssFilesFree   = 0       -- TODO: need to supply free inode count
-    , fssFilesAvail  = 0       -- TODO inodes avail to non-root
+    { fssBlockSize       = fromIntegral $ bdBlockSize dev
+    , fssBlockCount      = fromIntegral $ bdNumBlocks dev
+    , fssBlocksFree      = freeCnt
+    , fssBlocksAvailable = freeCnt -- TODO: blocks avail to non-root
+    , fssFileCount       = fileCnt
+    , fssFilesFree       = 0       -- TODO: need to supply free inode count
     }
 
 
@@ -780,10 +778,10 @@ newHalfsState :: HalfsCapable b t r l m =>
               -> BlockMap b r l
               -> HalfsM b r l m (HalfsState b r l m)
 newHalfsState dev usr grp lgr sb bm =
-  HalfsState dev usr grp lgr       
+  HalfsState dev usr grp lgr
     `fmap` computeSizes (bdBlockSize dev) -- memoized since it won't change
     `ap`   return bm                      -- blockmap
-    `ap`   newRef sb                      -- superblock 
+    `ap`   newRef sb                      -- superblock
     `ap`   newLock                        -- filesystem lock
     `ap`   newLockedRscRef 0              -- Locked file node count
     `ap`   newLockedRscRef M.empty        -- Locked map: inr -> DH
@@ -795,7 +793,7 @@ modifyInode :: HalfsCapable b t r l m =>
                FilePath
             -> (Inode t -> Inode t)
             -> HalfsM b r l m ()
-modifyInode fp f = 
+modifyInode fp f =
   withFile fp (fofReadWrite True) $ \fh ->
     withLock (fhLock fh) $
       getFHINR_lckd fh >>= flip atomicModifyInode (return . f)
@@ -810,7 +808,7 @@ absPathIR :: HalfsCapable b t r l m =>
 absPathIR fp ftype = do
   if isAbsolute fp
    then do
-     sbRef  <- hasks hsSuperBlock 
+     sbRef  <- hasks hsSuperBlock
      rdirIR <- rootDir `fmap` readRef sbRef
      mir    <- find rdirIR ftype (drop 1 $ splitDirectories fp)
      case mir of
@@ -840,12 +838,12 @@ withFile :: (HalfsCapable b t r l m) =>
          -> FileOpenFlags
          -> (FileHandle r l -> HalfsM b r l m a)
          -> HalfsM b r l m a
-withFile fp oflags = 
+withFile fp oflags =
   hbracket (openFile fp oflags) closeFile
 
 writeSB :: (HalfsCapable b t r l m) =>
            BlockDevice m -> SuperBlock -> m SuperBlock
-writeSB dev sb = do 
+writeSB dev sb = do
   let sbdata = encode sb
   assert (BS.length sbdata <= fromIntegral (bdBlockSize dev)) $ return ()
   bdWriteBlock dev 0 sbdata

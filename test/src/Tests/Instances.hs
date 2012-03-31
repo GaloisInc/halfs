@@ -49,7 +49,7 @@ forAllBlocksM :: Monad m =>
               -> (BDGeom -> Gen [(Word64, ByteString)])
               -- ^ data generator
               -> ([(Word64, ByteString)] -> BDGeom -> PropertyM m b)
-              -- ^ property constructor   
+              -- ^ property constructor
               -> PropertyM m b
 forAllBlocksM f gen prop =
   forAllM arbBDGeom $ \g -> let g' = f g in forAllM (gen g') (flip prop g')
@@ -168,7 +168,7 @@ instance Arbitrary UnallocDecision where
   arbitrary = UnallocDecision `fmap` arbitrary
 
 -- instance Arbitrary BDGeom where
---   arbitrary = 
+--   arbitrary =
 --     BDGeom
 --     <$> powTwo 10 13   -- 1024..8192 sectors
 --     <*> powTwo  9 12   -- 512b..4K sector size
@@ -185,14 +185,14 @@ instance Arbitrary SuperBlock where
     BDGeom cnt sz <- arbitrary
     free          <- choose (0, cnt)
     SuperBlock
-      <$> return 1             -- version                         
-      <*> return sz            -- blockSize     
-      <*> return cnt           -- blockCount    
-      <*> arbitrary            -- unmountClean  
-      <*> return free          -- freeBlocks    
-      <*> return (cnt - free)  -- usedBlocks    
-      <*> arbitrary            -- fileCount     
-      <*> IR `fmap` arbitrary  -- rootDir                     
+      <$> return 1             -- version
+      <*> return sz            -- blockSize
+      <*> return cnt           -- blockCount
+      <*> arbitrary            -- unmountClean
+      <*> return free          -- freeBlocks
+      <*> return (cnt - free)  -- usedBlocks
+      <*> arbitrary            -- fileCount
+      <*> IR `fmap` arbitrary  -- rootDir
       <*> IR `fmap` return 1   -- blockMapStart
 
 -- Generate an arbitrary inode with mostly coherent fields (filesize/allocated
@@ -229,14 +229,14 @@ instance (Arbitrary a, Ord a, Serialize a, Show a) => Arbitrary (Inode a) where
                    }
           )
 
-                                             
+
 -- Generate an arbitrary inode 'continuation' (a Cont) with coherent
 -- fields based on the minimal cont size computaton for an arbitrary
 -- device geometry
 instance Arbitrary Cont where
   arbitrary = do
     BDGeom _ blkSz <- arbitrary
-    addrCnt        <- computeNumAddrs blkSz minContBlocks =<< minimalContSize 
+    addrCnt        <- computeNumAddrs blkSz minContBlocks =<< minimalContSize
     numBlocks      <- fromIntegral `fmap` choose (0, addrCnt)
     Cont
       <$> CR `fmap` arbitrary                        -- address
@@ -248,7 +248,7 @@ instance Arbitrary Cont where
 
 -- Generate an arbitrary directory entry
 instance Arbitrary DirectoryEntry where
-  arbitrary = 
+  arbitrary =
     DirEnt
       <$> (listOf1 arbitrary :: Gen String)          -- deName
       <*> IR  `fmap` arbitrary                       -- deInode
@@ -256,7 +256,7 @@ instance Arbitrary DirectoryEntry where
       <*> arbitrary                                  -- deGroup
       <*> (arbitrary :: Gen FileMode)                -- deMode
       <*> elements [RegularFile, Directory, Symlink] -- deType
-    
+
 instance Arbitrary UserID where
   arbitrary = UID <$> arbitrary
 
@@ -264,7 +264,7 @@ instance Arbitrary GroupID where
   arbitrary = GID <$> arbitrary
 
 instance Arbitrary FileMode where
-  arbitrary = 
+  arbitrary =
     FileMode <$> gp <*> gp <*> gp
     where
       gp          = validAccess >>= permute
@@ -294,9 +294,6 @@ instance Arbitrary DiffTime where
     ps  <- choose (0, 10000000000000) -- 10^13, intentionally exceeds picosecond
                                       -- resolution
     return $ secondsToDiffTime sec + picosecondsToDiffTime ps
-
-instance Arbitrary Word64 where
-  arbitrary = choose (0, maxBound)
 
 instance Random Word64 where
   randomR = integralRandomR

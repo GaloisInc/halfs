@@ -1,67 +1,110 @@
 name:           halfs
 version:        2.0
 license-file:   LICENSE
-author:         Isaac Jones <ijones@galois.com>,
+author:         Joel Stanley <intractable@gmail.com>,
                 Adam Wick <awick@galois.com>,
-                Joel Stanley <jstanley@galois.com>
-maintainer:     Adam Wick <awick@galois.com>,
-                Isaac Jones <ijones@galois.com>,
-                Joel Stanley <jstanley@galois.com>
+                Isaac Jones <ijones@galois.com>
+maintainer:     Joel Stanley <intractable@gmail.com>
 description:    A library implementing a file system in Haskell given an
-                underlying block layer. Includes support for enforcing 
-                read-only\/read-write distinguishment via monads. 
-synopsis:       The Haskell File System, ported to the HaLVM
+                underlying block layer.  Implemented atop FUSE.
+synopsis:       The Haskell File System (intended for use on the HaLVM)
 category:       System
 stability:      experimental
 build-type:     Simple
-cabal-version:  >= 1.2
-tested-with:    GHC ==6.8.0
+cabal-version:  >= 1.8
+tested-with:    GHC == 6.8.0
 
 flag build-tests
   description: Build the test executables
 
 library
-  build-depends:    base >=4,
+  build-depends:
+                    QuickCheck >= 2.1.0.2,
                     array > 0.2 && < 0.4,
+                    base >=4,
                     bytestring > 0.9 && < 1.0,
+                    cereal < 1.0,
                     containers > 0.2 && < 0.3,
+                    directory >= 1.1,
                     filepath > 1.0 && < 1.2,
                     fingertree < 0.2,
-                    cereal < 1.0,
-                    mtl > 1.0 && < 1.2,
-                    time > 1.0 && < 1.2, 
+                    mtl,
+                    random >= 1.0.0.1,
+                    time,
                     unix >= 2.3.2.0
 
-  Exposed-Modules:  Halfs.CoreAPI,
+  Exposed-Modules:
+                    Halfs.BlockMap,
+                    Halfs.Classes,
+                    Halfs.CoreAPI,
+                    Halfs.Directory,
+                    Halfs.Errors,
+                    Halfs.File,
+                    Halfs.HalfsState,
+                    Halfs.Inode,
+                    Halfs.Monad,
+                    Halfs.MonadUtils,
+                    Halfs.Protection,
+                    Halfs.SuperBlock,
+                    Halfs.Types,
+                    Halfs.Utils,
                     System.Device.BlockDevice,
                     System.Device.File,
                     System.Device.Memory,
                     System.Device.ST
-  GHC-Options:      -O2 -Wall -fno-ignore-asserts -threaded
-  ghc-prof-options: -prof -auto-all
-  extensions:       FlexibleContexts, FlexibleInstances,
-                    ScopedTypeVariables,
+                    Tests.Instances,
+                    Tests.Types,
+                    Tests.Utils
+
+  extensions:
+                    BangPatterns,
+                    FlexibleContexts,
+                    FlexibleInstances,
+                    FunctionalDependencies,
                     GeneralizedNewtypeDeriving,
-                    MultiParamTypeClasses, FunctionalDependencies,
-                    BangPatterns
+                    MultiParamTypeClasses,
+                    ScopedTypeVariables
+
+  hs-source-dirs   : . test/src
+  GHC-Options      : -O2 -Wall -fno-ignore-asserts -threaded
+  ghc-prof-options : -prof -auto-all
 
 executable halfs-tests
   if !flag(build-tests)
     buildable: False
 
-  build-depends:    QuickCheck == 2.1.0.2,
-                    directory  >= 1.0.0.3,
-                    random     >= 1.0.0.1
+  build-depends:
+                 QuickCheck >= 2.1.0.2,
+                 array,
+                 base,
+                 bytestring,
+                 cereal,
+                 containers,
+                 directory,
+                 filepath > 1.0 && < 1.2,
+                 fingertree,
+                 halfs,
+                 mtl,
+                 random,
+                 time
 
-  hs-source-dirs: test/src . 
-  main-is: Driver.hs
-  ghc-options: -O2 -Wall -fno-ignore-asserts -threaded 
-  ghc-prof-options: -prof -auto-all
+  hs-source-dirs   : test/src .
+  main-is          : Driver.hs
+  ghc-options      : -O2 -Wall -fno-ignore-asserts -threaded
+  ghc-prof-options : -prof -auto-all
 
 executable halfs
-  build-depends:    HFuse >= 0.2.2
+  build-depends:
+                 HFuse >= 0.2.4,
+                 array,
+                 base,
+                 bytestring,
+                 containers,
+                 directory,
+                 halfs,
+                 unix
 
-  hs-source-dirs: test/src fuse/src .
-  main-is: Halfs.hs
-  ghc-options: -O2 -Wall -fno-ignore-asserts -threaded
-  ghc-prof-options: -prof -auto-all
+  hs-source-dirs   : fuse/src
+  main-is          : Halfs.hs
+  ghc-options      : -O2 -Wall -fno-ignore-asserts -threaded
+  ghc-prof-options : -prof -auto-all

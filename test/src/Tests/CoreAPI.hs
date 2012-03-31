@@ -9,12 +9,12 @@ import Control.Concurrent
 import Data.Either
 import Data.List
 import Data.Maybe
-import Data.Serialize
-import Foreign.C.Error 
+import Data.Serialize hiding (label)
+import Foreign.C.Error
 import Prelude hiding (read)
 import System.FilePath
 import Test.QuickCheck hiding (numTests)
-import Test.QuickCheck.Monadic 
+import Test.QuickCheck.Monadic
 import qualified Data.ByteString as BS
 import qualified Data.List as L
 import qualified Data.Map as M
@@ -46,7 +46,7 @@ import Tests.Utils hiding (HalfsM)
 newtype FileWR a        = FileWR a deriving Show
 newtype DirMutexOk a    = DirMutexOk a deriving Show
 
-type HalfsProp = 
+type HalfsProp =
   HalfsCapable b t r l m => BDGeom -> BlockDevice m -> PropertyM m ()
 
 qcProps :: Bool -> [(Args, Property)]
@@ -100,14 +100,14 @@ propM_initAndMountOK _g dev = do
   esb <- mkNewFS dev
   case esb of
     Left _   -> fail "Filesystem creation failed"
-    Right sb -> do 
+    Right sb -> do
       assert $ 1 == version sb
       assert $ unmountClean sb
       assert $ (not . IN.isNilIR) $ rootDir sb
-    
+
       -- Mount the filesystem & ensure integrity with newfs contents
       runHNoEnv (defaultMount dev) >>= \efs ->
-        case efs of 
+        case efs of
           Left  err -> fail $ "Mount failed: " ++ show err
           Right fs  -> isClean fs sb
 
@@ -151,11 +151,11 @@ propM_fsckOK _g dev = do
                                   , and `fmap` mapM exists [f1,f3]
                                   , and `fmap` mapM exists ds
                                   ]
-        
+
         -- Corrupt d3 & don't unmount (forces fsck below)
         d3inr <- exec' "fstat d3" $ (unIR . fsInode) `fmap` fstat d3
         zeroBlock d3inr
- 
+
   runHNoEnv (defaultMount dev) >>= \efs ->
     case efs of
       Left _   -> assert False
@@ -171,7 +171,7 @@ propM_fsckOK _g dev = do
                 ]
 
         -- corrupt superblock & don't unmount (forces fsck below)
-        zeroBlock 0         
+        zeroBlock 0
 
   mountOK dev >>= \fs -> do
     assrt "FS empty after superblock corruption"
@@ -179,13 +179,13 @@ propM_fsckOK _g dev = do
     quickRemountCheck fs
 
   -- Repopulate, corrupt root directory, and check FS
-  (mkNewFS dev >> mountOK dev) >>= \fs -> do 
+  (mkNewFS dev >> mountOK dev) >>= \fs -> do
     execH "propM_fsckOK" fs "populate2" $ populate ds fls
     zeroBlock =<< (unIR . rootDir) `fmap` sreadRef (hsSuperBlock fs)
     -- don't unmount (forces fsck below)
   mountOK dev >>= \fs -> do
     assrt "FS empty after root directory corruption"
-      =<< (not . or) `fmap` mapM (existsP' fs True) (ds ++ fls)  
+      =<< (not . or) `fmap` mapM (existsP' fs True) (ds ++ fls)
     quickRemountCheck fs
 
   where
@@ -220,7 +220,7 @@ propM_mountUnmountOK _g dev = do
     e0 <- runH fs' unmount
     case e0 of
       Left HE_UnmountFailed -> return ()
-      _                     -> assert False     
+      _                     -> assert False
 
 -- | Sanity check: unmount is mutex'd sensibly
 
@@ -257,8 +257,8 @@ propM_dirConstructionOK _g dev = do
       test p = do
         exec ("mkdir " ++ p) (mkdir p defaultDirPerms)
         isEmpty =<< exec ("openDir " ++ p) (openDir p)
-      -- 
-      isEmpty dh = 
+      --
+      isEmpty dh =
         assert =<< do dnames <- map fst `fmap` exec "readDir" (readDir dh)
                       return $ L.sort dnames == L.sort initDirEntNames
 
@@ -267,7 +267,7 @@ propM_dirConstructionOK _g dev = do
   exec "openDir /" (openDir rootPath) >>= \dh -> do
     assert =<< (== Clean) `fmap` sreadRef (dhState dh)
     assert =<< M.null `fmap` sreadRef (dhContents dh)
-    
+
   -- TODO: replace this with a random valid hierarchy
   let p0 = rootPath </> "foo"
       p1 = p0 </> "bar"
@@ -339,7 +339,7 @@ propM_fileWROK pathFromRoot _g dev = do
   fh <- exec "open file" $ openFile thePath (fofReadWrite False)
 
   forAllM (FileWR `fmap` choose (1, maxBytes)) $ \(FileWR fileSz) -> do
-  forAllM (printableBytes fileSz)              $ \fileData        -> do 
+  forAllM (printableBytes fileSz)              $ \fileData        -> do
 
   (_, _, api, apc) <- exec "Obtaining sizes" $ IN.computeSizes (bdBlockSize dev)
   let expBlks = calcExpBlockCount (bdBlockSize dev) api apc fileSz
@@ -385,9 +385,9 @@ propM_simpleFileOpsOK _g dev = do
   let exec = execH "propM_simpleFileOpsOK" fs
 
   forAllM (choose (1, maxBytes))        $ \fileSz    -> do
-  forAllM (choose (0::Int, 2 * fileSz)) $ \resizedSz -> do 
+  forAllM (choose (0::Int, 2 * fileSz)) $ \resizedSz -> do
   forAllM (printableBytes fileSz)       $ \fileData  -> do
-                                 
+
   let fp = rootPath </> "foo"
   exec "create /foo"      $ createFile fp defaultFilePerms
   fh0 <- exec "open /foo" $ openFile fp (fofWriteOnly True)
@@ -399,7 +399,7 @@ propM_simpleFileOpsOK _g dev = do
   st <- exec "fstat /foo" $ fstat fp
   let newSz = fsSize st
   assert (newSz == fromIntegral resizedSz)
- 
+
   -- Check that file contents have truncated/grown as expected
   fh1       <- exec "reopen /foo" $ openFile fp fofReadOnly
   fileData' <- exec "read /foo" $ read fh1 0 newSz
@@ -448,14 +448,14 @@ propM_chmodchownOK _g dev = do
   exec "create /foo" $ createFile fp defaultFilePerms
 
   -- chmod to a random and check
-  forAllM arbitrary $ \perms -> do 
+  forAllM arbitrary $ \perms -> do
   exec "chmod 600 /foo"    $ chmod fp perms
   st0 <- exec "fstat /foo" $ fstat fp
   assert (fsMode st0 == perms)
 
   -- chown/chgrp to random uid/gid and check
   forAllM arbitrary $ \usr -> do
-  forAllM arbitrary $ \grp -> do                             
+  forAllM arbitrary $ \grp -> do
   exec "ch{own,grp} /foo"  $ chown fp (Just usr) (Just grp)
   st1 <- exec "fstat /foo" $ fstat fp
   assert (fsUID st1 == usr)
@@ -509,18 +509,18 @@ propM_dirMutexOK _g dev = do
   assrt "File stats reported non-Directory type" $
     all (== Directory) $ map fsType dstats
 
-  quickRemountCheck fs 
+  quickRemountCheck fs
   where
     assrt      = assertMsg "propM_dirMutexOK"
     maxDirs    = 50 -- } v
     maxLen     = 40 -- } arbitrary name length, but fit into small devices
     maxThreads = 8
     ng f       = L.nub `fmap` resize maxDirs (listOf1 $ f maxLen)
-    -- 
+    --
     genNm :: Int -> Gen [String]
     genNm n = map ((++) ("f" ++ show n ++ "_")) `fmap` ng filename
-    -- 
-    threadTest fs ch nms _n = 
+    --
+    threadTest fs ch nms _n =
       runHalfs fs (mapM_ (flip mkdir defaultDirPerms . (</>) rootPath) nms)
         >>= writeChan ch . either Just (const Nothing)
 
@@ -531,7 +531,7 @@ propM_hardlinksOK _g dev = do
   --   foo (directory)
   --     bar (directory)
   --       source (1 byte file)
-  
+
   fs <- mkNewFS dev >> mountOK dev
   let exec = execH "propM_hardlinksOK" fs
   exec "mkdir /foo"                 $ mkdir d0 defaultDirPerms
@@ -539,7 +539,7 @@ propM_hardlinksOK _g dev = do
   exec "creat /foo/bar/source"      $ createFile src defaultFilePerms
   fh <- exec "open /foo/bar/source" $ openFile src (fofWriteOnly True)
   forAllM (choose (1, maxBytes))    $ \fileSz   -> do
-  forAllM (printableBytes fileSz)   $ \srcBytes -> do 
+  forAllM (printableBytes fileSz)   $ \srcBytes -> do
   exec "write /foo/bar/source"      $ write fh 0 srcBytes
   exec "close /foo/bar/source"      $ closeFile fh
 
@@ -555,7 +555,7 @@ propM_hardlinksOK _g dev = do
   expectErrno eNOTDIR =<< runH fs (mklink src (src </> "dst1"))
   -- Expected error: A component of path 2's prefix does not exist
   expectErrno eNOENT  =<< runH fs (mklink src (d0 </> "bad" </> "bar"))
-       
+
   mapM_ (\dst -> exec "mklink" $ mklink src dst) dests
 
   fhs <- mapM (\nm -> exec "open dst" $ openFile nm fofReadOnly) dests
@@ -597,7 +597,7 @@ propM_simpleRmdirOK _g dev = do
     _ -> assert False
 
   -- simple mkdir/rmdir check: net resource change should be 0 blocks
-  blocksAllocd 0 fs $ do 
+  blocksAllocd 0 fs $ do
     exec "mkdir /foo/bar" $ mkdir d1 defaultDirPerms
     dh <- exec "openDir /foo/bar" $ openDir d1
     assert =<< exists d1
@@ -609,7 +609,7 @@ propM_simpleRmdirOK _g dev = do
       Left HE_InvalidDirHandle -> return ()
       _                        -> assert False
 
-  quickRemountCheck fs 
+  quickRemountCheck fs
 
 -- Simple sanity check for the mutex behavior rmdir is supposed to be enforcing.
 -- We have two threads, A and B.  Thread A repeatedly attempts to create a
@@ -624,7 +624,7 @@ propM_simpleRmdirOK _g dev = do
 -- yet. Furthermore, this'll only catch bad/unexpected errors getting thrown and
 -- will not necessarily catch, e.g., illegal writes going to the underlying
 -- inode.
--- 
+--
 -- TODO: Revisit.
 propM_rmdirMutexOK :: BDGeom
                    -> BlockDevice IO
@@ -636,13 +636,13 @@ propM_rmdirMutexOK _g dev = do
   forAllM (choose (100, 1000) :: Gen Int) $ \numTrials -> do
   run $ forkIO $ threadA fs chA numTrials
   run $ forkIO $ threadB fs chB numTrials
-  
+
   -- except only Left-constructed results from the worker threads
   assert =<< (null . rights) `fmap` replicateM numTrials (run $ readChan chA)
   assert =<< (null . rights) `fmap` replicateM numTrials (run $ readChan chB)
   -- ^ barriers
-  
-  quickRemountCheck fs 
+
+  quickRemountCheck fs
   where
     dp = rootPath </> "theDir"
     --
@@ -656,9 +656,9 @@ propM_rmdirMutexOK _g dev = do
             Right _ -> runHalfs fs (rmdir dp)
                          >>= either (return . Right)
                                     (const $ return $ Left "ok")
-          writeChan ch merr            
+          writeChan ch merr
           threadA fs ch (n-1)
-    -- 
+    --
     threadB fs ch n
       | n == 0    = return ()
       | otherwise = do
@@ -686,10 +686,10 @@ propM_simpleRmlinkOK _g dev = do
   -- contents after the rmlink sequence below.
   exec "create /f1" $ createFile f1 defaultFilePerms
   assert =<< exists f1
-  
+
   -- Removal of all hardlinks to f1's inode should result in deallocation of
   -- f1's inode's single block
-  blocksUnallocd 1 fs $ do 
+  blocksUnallocd 1 fs $ do
     -- Expected error: no access to an invalidated filehandle
     deadFH <- exec "open /f1" $ openFile f1 fofReadOnly
     exec "close /f1"          $ closeFile deadFH
@@ -697,18 +697,18 @@ propM_simpleRmlinkOK _g dev = do
     case e1 of
       Left HE_InvalidFileHandle -> return ()
       _                         -> assert False
-    
+
     exec "mklink /f1 /f2" $ mklink f1 f2
     assert =<< and `fmap` mapM exists [f1, f2]
-    
+
     exec "rmlink /f1" $ rmlink f1
     assert =<< not `fmap` exists f1
     assert =<< exists f2
-    
+
     exec "rmlink /f2" $ rmlink f2
     assert =<< not `fmap` exists f2
-  
-  quickRemountCheck fs         
+
+  quickRemountCheck fs
 
 propM_simpleRenameOK :: HalfsProp
 propM_simpleRenameOK _g dev = do
@@ -751,7 +751,7 @@ propM_simpleRenameOK _g dev = do
   blocksUnallocd 1 fs $ exec "rename /f2 /f3" $ rename f2 f3
   mapM dne [f1, f2]
   mapM exists [f3, d1, d1sub, d3]
-  
+
   -- Directory to non-existent dest
   zeroOrMoreBlocksAllocd fs $ exec "rename /d1/d1sub /d2" $ rename d1sub d2
   mapM dne [f1, f2, d1sub]
@@ -772,7 +772,7 @@ propM_simpleRenameOK _g dev = do
   quickRemountCheck fs
   return ()
   where
-    -- 
+    --
     d1sub                    = d1 </> "d1sub"
     [d1, d2, d3, f1, f2, f3] =
       map (rootPath </>) ["d1", "d2", "d3", "f1", "f2", "f3"]
@@ -783,7 +783,7 @@ propM_stressEndAllocs =
   label "Stress end allocs" $ monadicIO $ go $ \dev -> do
     fs <- mkNewFS dev >> mountOK dev
     execH "propM_stressEndAllocs" fs "mash end" $ do
-      createFile fn defaultFilePerms 
+      createFile fn defaultFilePerms
       withFile fn (fofWriteOnly True) $ \fh -> do
         forM addrs $ \addr -> write fh addr chunk
   where
@@ -802,10 +802,10 @@ propM_stressEndDeallocs =
   label "Stress end deallocs" $ monadicIO $ go $ \dev -> do
     fs <- mkNewFS dev >> mountOK dev
     execH "propM_stressEndDeallocs" fs "mash end" $ do
-      createFile fn defaultFilePerms 
+      createFile fn defaultFilePerms
       withFile fn (fofWriteOnly True) $ \fh -> do
         write fh 0 (BS.concat $ replicate blkSz chunk)
-  
+
       -- Repeatedly trunc the file in block-size increments to push on
       -- deallocation from the end.
       mapM_ (setFileSize fn) sizes
@@ -815,7 +815,7 @@ propM_stressEndDeallocs =
     blkSz  = 512 :: Int
     blkSzI = fromIntegral blkSz
     g      = BDGeom 32768 (fromIntegral blkSz) -- 16MiB FS, 256 KiB total write
-    chunk  = BS.replicate blkSz 0x42   
+    chunk  = BS.replicate blkSz 0x42
     sizes  = [ i * blkSzI | i <- reverse [0..(blkSzI-1)]]
 
 
@@ -827,7 +827,7 @@ existsP' :: (HalfsCapable b t r l m) =>
          -> Bool
          -> FilePath
          -> PropertyM m Bool
-existsP' fs eok p = liftM (elem (takeFileName p)) $ 
+existsP' fs eok p = liftM (elem (takeFileName p)) $
   runH fs (withDir (takeDirectory p) readDir) >>= \ea -> case ea of
     Left _e  -> if eok then return [] else assert False >> return []
     Right xs -> return (map fst xs)
@@ -852,7 +852,7 @@ quickRemountCheck :: HalfsCapable b t r l m =>
                   -> PropertyM m ()
 quickRemountCheck fs = do
   dump0 <- exec "Get dump0" dumpfs
---   trace ("dump0: " ++ dump0) $ do 
+--   trace ("dump0: " ++ dump0) $ do
   unmountOK fs
   fs'   <- mountOK (hsBlockDev fs)
   dump1 <- exec "Get dump1" dumpfs
@@ -860,5 +860,3 @@ quickRemountCheck fs = do
   unmountOK fs'
   where
     exec = execH "quickRemountCheck" fs
-
-

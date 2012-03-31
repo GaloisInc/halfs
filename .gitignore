@@ -8,3 +8,5 @@ TAGS
 /test/dist/*
 /deps/hfuse/dist
 /deps/hfuse/examples/HelloFS
+/cabal-dev/*
+

@@ -7,12 +7,12 @@ module Tests.Serdes
    qcProps
   )
 where
-  
-import Data.Serialize
+
+import Data.Serialize hiding (label)
 import Data.Time.Clock
 import Test.QuickCheck hiding (numTests)
 import Test.QuickCheck.Monadic
-  
+
 import Halfs.Classes
 import Halfs.Directory
 import Halfs.HalfsState
@@ -34,7 +34,7 @@ import Tests.Utils
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =
   [ serdes prop_serdes 100 "SuperBlock"     (arbitrary :: Gen SuperBlock)
-  , serdes prop_serdes 100 "UTCTime"        (arbitrary :: Gen UTCTime) 
+  , serdes prop_serdes 100 "UTCTime"        (arbitrary :: Gen UTCTime)
   , serdes prop_serdes 100 "DirectoryEntry" (arbitrary :: Gen DirectoryEntry)
   , mkMemDevExec quick "Serdes" 100 "Cont"  propM_contSerdes
   , mkMemDevExec quick "Serdes" 100 "Inode" propM_inodeSerdes
@@ -43,7 +43,7 @@ qcProps quick =
     numTests n      = (,) $ if quick then stdArgs{maxSuccess = n} else stdArgs
     serdes pr n s g = numTests n $ label ("Serdes: " ++ s) $ forAll g pr
     prop_serdes x   = either (const False) (== x) $ decode $ encode x
-    
+
 -- We special case inode serdes property because we want to test equality of the
 -- inodes' transient fields when possible.  This precludes the use of the pure
 -- decode function.
@@ -51,8 +51,8 @@ propM_inodeSerdes :: HalfsCapable b UTCTime r l m =>
                      BDGeom
                   -> BlockDevice m
                   -> PropertyM m ()
-propM_inodeSerdes _g dev = 
-  forAllM (arbitrary :: Gen (Inode UTCTime)) $ \inode -> do 
+propM_inodeSerdes _g dev =
+  forAllM (arbitrary :: Gen (Inode UTCTime)) $ \inode -> do
   -- Obtain the expected value inode's numAddrs field post-decoding, based on
   -- dev's geometry instead of the one the inode generator uses, which is
   -- arbitrary.
@@ -72,8 +72,8 @@ propM_contSerdes :: HalfsCapable b UTCTime r l m =>
                      BDGeom
                   -> BlockDevice m
                   -> PropertyM m ()
-propM_contSerdes _g dev = 
-  forAllM (arbitrary :: Gen Cont) $ \cont -> do 
+propM_contSerdes _g dev =
+  forAllM (arbitrary :: Gen Cont) $ \cont -> do
   -- Obtain the expected value cont's numAddrs field post-decoding, based on
   -- dev's geometry instead of the one the cont generator uses, which is
   -- arbitrary.
