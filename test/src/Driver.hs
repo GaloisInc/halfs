@@ -6,7 +6,7 @@ import System.Exit (ExitCode(..), exitFailure, exitWith)
 
 import qualified Tests.BlockDevice as BD
 import qualified Tests.BlockMap    as BM
-import qualified Tests.CoreAPI     as CA  
+import qualified Tests.CoreAPI     as CA
 import qualified Tests.Inode       as IN
 import qualified Tests.Serdes      as SD
 
@@ -29,6 +29,6 @@ main = do
    then do
      putStrLn "All tests successful."
      exitWith ExitSuccess
-   else do 
+   else do
      putStrLn "One or more tests failed."
      exitFailure

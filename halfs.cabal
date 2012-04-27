@@ -19,19 +19,19 @@ flag build-tests
 
 library
   build-depends:
-                    QuickCheck >= 2.1.0.2,
-                    array > 0.2 && < 0.4,
-                    base >=4,
-                    bytestring > 0.9 && < 1.0,
-                    cereal < 1.0,
-                    containers > 0.2 && < 0.3,
-                    directory >= 1.1,
-                    filepath > 1.0 && < 1.2,
-                    fingertree < 0.2,
+                    QuickCheck,
+                    array,
+                    base,
+                    bytestring,
+                    cereal,
+                    containers,
+                    directory,
+                    filepath,
+                    fingertree,
                     mtl,
-                    random >= 1.0.0.1,
+                    random,
                     time,
-                    unix >= 2.3.2.0
+                    unix
 
   Exposed-Modules:
                     Halfs.BlockMap,
@@ -74,14 +74,14 @@ executable halfs-tests
     buildable: False
 
   build-depends:
-                 QuickCheck >= 2.1.0.2,
+                 QuickCheck,
                  array,
                  base,
                  bytestring,
                  cereal,
                  containers,
                  directory,
-                 filepath > 1.0 && < 1.2,
+                 filepath,
                  fingertree,
                  halfs,
                  mtl,

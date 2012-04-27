@@ -14,12 +14,12 @@ import Data.Serialize.Get (getWord64be)
 import Data.Serialize.Put (putWord64be)
 import Data.Word
 
-import Halfs.Protection  
+import Halfs.Protection
 
 --------------------------------------------------------------------------------
 -- Common Inode Types
 
-newtype Ref a = Ref Word64 
+newtype Ref a = Ref Word64
   deriving (Eq, Ord, Num, Show, Integral, Enum, Real)
 
 instance Serialize (Ref a) where
@@ -95,7 +95,7 @@ data DirHandle r l = DirHandle
 
 data FileHandle r l = FH
   { fhReadable :: Bool
-  , fhWritable :: Bool 
+  , fhWritable :: Bool
   , _fhFlags   :: FileOpenFlags
   , fhInode    :: r (Maybe InodeRef) -- Maybe to denote FileHandle invalidation
   , fhLock     :: l                  -- Ensures sequential access to the INR
@@ -140,10 +140,10 @@ data FileMode = FileMode
 data FileType = RegularFile | Directory | Symlink | AnyFileType
   deriving (Show, Eq)
 
-data Show t => FileStat t = FileStat
+data FileStat t = FileStat
   { fsInode      :: InodeRef
   , fsType       :: FileType
-  , fsMode       :: FileMode 
+  , fsMode       :: FileMode
   , fsNumLinks   :: Word64   -- ^ Number of hardlinks to the file
   , fsUID        :: UserID
   , fsGID        :: GroupID
@@ -193,8 +193,8 @@ instance Serialize FileMode where
       perms ps  = foldr (.|.) 0x0 $ flip map ps $ \x -> -- toBit
                   case x of Read -> 4 ; Write -> 2; Execute -> 1
   --
-  get = 
-    FileMode <$> gp <*> gp <*> gp 
+  get =
+    FileMode <$> gp <*> gp <*> gp
     where
       gp         = fromBits `fmap` getWord8
       fromBits x = let x0 = if testBit x 0 then [Execute] else []

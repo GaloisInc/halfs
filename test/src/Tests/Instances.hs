@@ -239,12 +239,15 @@ instance Arbitrary Cont where
     addrCnt        <- computeNumAddrs blkSz minContBlocks =<< minimalContSize
     numBlocks      <- fromIntegral `fmap` choose (0, addrCnt)
     Cont
-      <$> CR `fmap` arbitrary                        -- address
-      <*> CR `fmap` arbitrary                        -- continuation
-      <*> return (fromIntegral numBlocks)            -- blockCount
-      <*> replicateM numBlocks arbitrary             -- blockAddrs
+      <$> CR `fmap` (arbitrary `suchThat` (>=1)) -- address
+      <*> CR `fmap` arbitrary                    -- continuation
+      <*> return (fromIntegral numBlocks)        -- blockCount
+      <*> replicateM numBlocks validBlockAddr    -- blockAddrs
       -- Transient:
-      <*> return addrCnt                             -- numAddrs
+      <*> return addrCnt                         -- numAddrs
+    where
+      validBlockAddr = let arb = arbitrary :: Gen (Positive Word64)
+                       in (\(Positive v) -> v) <$> arb
 
 -- Generate an arbitrary directory entry
 instance Arbitrary DirectoryEntry where
@@ -294,10 +297,6 @@ instance Arbitrary DiffTime where
     ps  <- choose (0, 10000000000000) -- 10^13, intentionally exceeds picosecond
                                       -- resolution
     return $ secondsToDiffTime sec + picosecondsToDiffTime ps
-
-instance Random Word64 where
-  randomR = integralRandomR
-  random  = randomR (minBound, maxBound)
 
 integralRandomR :: (Integral a, RandomGen g) => (a,a) -> g -> (a,g)
 integralRandomR (a,b) g =

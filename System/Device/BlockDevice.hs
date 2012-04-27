@@ -15,9 +15,9 @@ import Data.Map(Map)
 import qualified Data.Map as Map
 import Data.Word
 
--- |The data type that describes the interface to a BlockDevice. If you can 
+-- |The data type that describes the interface to a BlockDevice. If you can
 -- fill this out reasonably, you can be a file system backend.
-data Monad m => BlockDevice m = BlockDevice {
+data BlockDevice m = BlockDevice {
     -- |The size of the smallest read/write block for the device, in bytes.
     bdBlockSize  :: Word64
     -- |The number of blocks in the device.
@@ -69,7 +69,7 @@ newRescaledBlockDevice bsize dev
   blocks         = bdNumBlocks dev `div` ratio
   readBlock  i   = liftM BS.concat $ forM [start..end] (bdReadBlock dev)
                    where start = i * ratio; end = (i+1) * ratio - 1
-  writeBlock i b = write (i * ratio) b 
+  writeBlock i b = write (i * ratio) b
   --
   write i b | BS.null b = return ()
             | otherwise = do let (start, rest) = BS.splitAt oldbs b
