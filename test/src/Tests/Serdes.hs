@@ -17,7 +17,6 @@ import Halfs.Classes
 import Halfs.Directory
 import Halfs.HalfsState
 import Halfs.Inode
-import Halfs.Monad
 import Halfs.SuperBlock
 
 import System.Device.BlockDevice
@@ -26,19 +25,10 @@ import Tests.Instances ()
 import Tests.Types
 import Tests.Utils
 
-import System.IO.Unsafe (unsafePerformIO)
-dbug :: String -> a -> a
-dbug = seq . unsafePerformIO . putStrLn
--- dbug _ = id
-dbugM :: Monad m => String -> m ()
--- dbugM s = dbug s $ return ()
-dbugM _ = return ()
--- import Debug.Trace
-
 --------------------------------------------------------------------------------
 -- BlockDevice properties
 
-go = mapM (uncurry quickCheckWithResult) (qcProps True)
+-- go = mapM (uncurry quickCheckWithResult) (qcProps True)
 
 qcProps :: Bool -> [(Args, Property)]
 qcProps quick =

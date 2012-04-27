@@ -50,11 +50,8 @@ import Data.ByteString(ByteString)
 import qualified Data.ByteString as BS
 import Data.Char
 import Data.List (genericDrop, genericLength, genericTake)
-import Data.Maybe
 import Data.Serialize
-import Data.Serialize.Get hiding (skip, remaining)
 import qualified Data.Serialize.Get as G
-import Data.Serialize.Put
 import Data.Word
 
 import Halfs.BlockMap (BlockMap)
@@ -70,7 +67,7 @@ import Halfs.Utils
 
 import System.Device.BlockDevice
 
-import System.IO.Unsafe (unsafePerformIO)
+-- import System.IO.Unsafe (unsafePerformIO)
 dbug :: String -> a -> a
 -- dbug = seq . unsafePerformIO . putStrLn
 dbug _ = id
@@ -478,7 +475,6 @@ writeStream_lckd startIR start trunc bytes              = do
   -- directly and split/merge them as needed to reduce the number of
   -- unallocation actions required, but we leave this as a TODO for now.
 
-
   startInode@Inode{ inoLastCont = lcInfo } <- drefInode startIR
   dev                                      <- hasks hsBlockDev
 
@@ -528,13 +524,13 @@ writeStream_lckd startIR start trunc bytes              = do
      else do
        lastCont' <- allocFill availBlks blksToAlloc contsToAlloc lastCont
        let st  = if address lastCont' == address sCont then lastCont' else sCont
-                 -- ^ our starting location remains the same, but in case of an
-                 -- update of the start cont, we can use lastCont' insteaad of
+                 -- Our starting location remains the same, but in case of an
+                 -- update of the start cont, we can use lastCont' instead of
                  -- re-reading.
            lci = snd lcInfo
        st' <- if lci < sContI
                then getLastCont (Just $ sContI - lci + 1) st
-                    -- ^ NB: We need to start ahead of st, but couldn't adjust
+                    -- NB: We need to start ahead of st, but couldn't adjust
                     -- until after we allocated. This is to catch a corner case
                     -- where the "start" cont coming into writeStream_lckd
                     -- refers to a cont that hasn't been allocated yet.

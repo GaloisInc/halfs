@@ -4,7 +4,7 @@ module Tests.BlockMap
    qcProps
   )
 where
-  
+
 import Control.Monad
 import qualified Data.FingerTree as FT
 import qualified Data.Foldable as DF
@@ -12,7 +12,7 @@ import Data.Maybe (isNothing, isJust)
 import Data.Word
 import Test.QuickCheck hiding (numTests)
 import Test.QuickCheck.Monadic
-  
+
 import System.Device.BlockDevice
 import Halfs.BlockMap
 import Halfs.Classes
@@ -20,7 +20,7 @@ import Halfs.Classes
 import Tests.Instances
 import Tests.Types
 import Tests.Utils
-  
+
 -- import Debug.Trace
 
 --------------------------------------------------------------------------------
@@ -37,7 +37,7 @@ qcProps quick =
   where
     propM_bmOOO      = propM_bmOutOfOrderAllocUnallocIntegrity (const return)
     propM_bmStressWR = propM_bmOutOfOrderAllocUnallocIntegrity checkBlockMapWR
-    -- 
+    --
     exec = mkMemDevExec quick "BlockMap"
 
 --------------------------------------------------------------------------------
@@ -50,11 +50,11 @@ type BMProp = (Reffable r m, Bitmapped b m, Functor m, Lockable l m) =>
 
 -- | Ensures that a new blockmap can be written and read back
 propM_blockMapWR :: BMProp
-propM_blockMapWR _g d = 
+propM_blockMapWR _g d =
   -- write & read-back twice, to ensure there's no baked-in behavior w.r.t the
   -- initial blockmap contents and the de/serialization functions
   fst `fmap` initBM d >>= checkBlockMapWR d >>= checkBlockMapWR d >> return ()
-  
+
 -- | Ensures that a new blockmap subjected to a series of (1) random, in-order,
 -- contiguous block allocations that entirely cover the free region followed by
 -- (2) reverse-order unallocations maintains integrity with respect to free
@@ -91,7 +91,7 @@ propM_bmInOrderAllocUnallocIntegrity _g dev = do
   --      invocations in order to supply the correct BlockGroup to
   --      checkedUnalloc
   forM_ (Prelude.reverse subs) $ checkedUnalloc bm . Contig
-  ------------------------------------------------------------------------------ 
+  ------------------------------------------------------------------------------
   -- (2b) Check blockmap state after all unallocations are done
   checkIntegrity bm (extSz ext) [ext] False
   assert =<< isJust `fmap` run (allocBlocks bm 1)
@@ -122,7 +122,7 @@ propM_bmOutOfOrderAllocUnallocIntegrity checkBM _g dev = do
       -- Randomly decide to unallocate a previously-allocated BlockGroup
       forAllM arbitrary $ \(UnallocDecision shouldUnalloc) -> do
       let doUnalloc = shouldUnalloc && not (Prelude.null allocated)
-      when doUnalloc $ checkedUnalloc bm' $ head allocated 
+      when doUnalloc $ checkedUnalloc bm' $ head allocated
       blkGroup <- checkedAlloc bm' szToAlloc
       newBM    <- checkBM dev bm'
       return $ (newBM, blkGroup : (if doUnalloc then tail else id) allocated)
@@ -149,10 +149,10 @@ propM_bmExtentAggregationIntegrity _g dev = do
       largeBG  <- checkedAlloc bm large            -- (1) alloc large regions
       medBG    <- checkedAlloc bm med              -- (1) alloc large regions
       smallBGs <- mapM (checkedAlloc bm) smalls    -- (2) extent splitting
-      mapM (checkedUnalloc bm) smallBGs            -- (3) fragmentation
+      mapM_ (checkedUnalloc bm) smallBGs           -- (3) fragmentation
       aggBG    <- checkedAlloc bm (sum smalls - 1) -- (4) force aggregation
       checkAvail bm 1
-      mapM (checkedUnalloc bm) [largeBG, medBG, aggBG]
+      mapM_ (checkedUnalloc bm) [largeBG, medBG, aggBG]
       checkAvail bm (extSz ext)
     _ -> fail "arbExtents failed to yield subextents with expected granularity"
 
@@ -255,10 +255,9 @@ checkedUnalloc bm bgToUnalloc = do
 
 numFree :: (Reffable r m, Lockable l m) =>
            BlockMap b r l -> PropertyM m Word64
-numFree = run . readRef . bmNumFree 
+numFree = run . readRef . bmNumFree
 
 freeTreeSz :: (Reffable r m, Lockable l m) =>
               BlockMap b r l -> PropertyM m Word64
-freeTreeSz bm = 
+freeTreeSz bm =
   DF.foldr ((+) . extSz) 0 `fmap` (run $! readRef $! bmFreeTree bm)
-

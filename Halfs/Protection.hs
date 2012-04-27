@@ -9,8 +9,6 @@ module Halfs.Protection(
   where
 
 import Data.Serialize
-import Data.Serialize.Put
-import Data.Serialize.Get
 import Data.Word
 
 newtype UserID = UID Word64

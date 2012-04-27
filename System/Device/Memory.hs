@@ -5,7 +5,6 @@ module System.Device.Memory(
  where
 
 import Data.Array.IO
-import Data.Array.MArray
 import Data.ByteString(ByteString)
 import qualified Data.ByteString as BS
 import Data.Word

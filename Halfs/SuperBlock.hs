@@ -10,8 +10,6 @@ import Data.ByteString(ByteString)
 import qualified Data.ByteString as BS
 import Data.Char
 import Data.Serialize
-import Data.Serialize.Get
-import Data.Serialize.Put
 import Data.Word
 
 import Halfs.Types
@@ -23,7 +21,7 @@ data SuperBlock = SuperBlock {
      , unmountClean  :: !Bool     -- ^ Was this filesystem unmounted cleanly?
      , freeBlocks    :: !Word64   -- ^ Number of free blocks
      , usedBlocks    :: !Word64   -- ^ Number of blocks in use
-     , fileCount     :: !Word64   -- ^ Number of files present in the FS; 
+     , fileCount     :: !Word64   -- ^ Number of files present in the FS;
                                   --   does not count directories
      , rootDir       :: !InodeRef -- ^ IR to root directory
      , blockMapStart :: !InodeRef -- ^ IR to first block map addr
@@ -87,4 +85,3 @@ magic1 = BS.pack $ take 8 $ drop  0 magicBytes
 magic2 = BS.pack $ take 8 $ drop  8 magicBytes
 magic3 = BS.pack $ take 8 $ drop 16 magicBytes
 magic4 = BS.pack $ take 8 $ drop 24 magicBytes
-

@@ -5,7 +5,7 @@ where
 
 import Data.Word
 import Control.Monad.ST
-import Foreign.C.Error 
+import Foreign.C.Error
 import System.Directory
 import System.IO
 import System.IO.Unsafe (unsafePerformIO)
@@ -60,7 +60,7 @@ memDev g = newMemoryBlockDevice (bdgSecCnt g) (bdgSecSz g)
 -- consistency within this module.
 staDev :: DevCtor
 staDev g =
-  stToIO (newSTBlockDevice (bdgSecCnt g) (bdgSecSz g)) >>= 
+  stToIO (newSTBlockDevice (bdgSecCnt g) (bdgSecSz g)) >>=
   return . maybe Nothing (\dev ->
     Just BlockDevice {
         bdBlockSize = bdBlockSize dev
@@ -72,10 +72,10 @@ staDev g =
     })
 
 rescaledDev :: BDGeom  -- ^ geometry for underlying device
-            -> BDGeom  -- ^ new device geometry 
+            -> BDGeom  -- ^ new device geometry
             -> DevCtor -- ^ ctor for underlying device
             -> IO (Maybe (BlockDevice IO))
-rescaledDev oldG newG ctor = 
+rescaledDev oldG newG ctor =
   maybe (fail "Invalid BlockDevice") (newRescaledBlockDevice (bdgSecSz newG))
     `fmap` ctor oldG
 
@@ -94,7 +94,7 @@ withFileStore temp fp secSize secCnt act = do
 
   let chunkSz               = 2^(20::Int)
       (numChunks, numBytes) = fromIntegral (secSize * secCnt) `divMod` chunkSz
-      chunk = BS.replicate chunkSz 0 
+      chunk = BS.replicate chunkSz 0
   replicateM_ numChunks (BS.hPut h chunk)
   BS.hPut h (BS.replicate numBytes 0)
   hClose h
@@ -142,7 +142,7 @@ unmountOK fs =
   runH fs unmount >>=
     either (fail . (++) "Unexpected unmount failure: " . show)
            (const $ return ())
-         
+
 sreadRef :: HalfsCapable b t r l m => r a -> PropertyM m a
 sreadRef = ($!) (run . readRef)
 
@@ -186,7 +186,7 @@ expectErr :: HalfsCapable b t r l m =>
           -> String
           -> HalfsM b r l m a
           -> HalfsState b r l m
-          -> PropertyM m () 
+          -> PropertyM m ()
 expectErr expectedP rsn act fs =
   runH fs act >>= \e -> case e of
     Left err | expectedP err -> return ()
@@ -201,13 +201,13 @@ expectErrno e (Left (HE_ErrnoAnnotated _ errno)) = assert (errno == e)
 expectErrno _ _                                  = assert False
 
 checkFileStat :: (HalfsCapable b t r l m, Integral a) =>
-                 FileStat t 
+                 FileStat t
               -> a           -- expected filesize
               -> FileType    -- expected filetype
               -> FileMode    -- expected filemode
               -> UserID      -- expected userid
               -> GroupID     -- expected groupid
-              -> a           -- expected allocated block count 
+              -> a           -- expected allocated block count
               -> (t -> Bool) -- access time predicate
               -> (t -> Bool) -- modification time predicate
               -> (t -> Bool) -- status change time predicate
@@ -240,9 +240,9 @@ calcExpBlockCount :: Integral a =>
                   -> Word64 -- addresses (#blocks) per cont
                   -> a      -- data size
                   -> a      -- expected number of blocks
-calcExpBlockCount bs api apc dataSz = fromIntegral $ 
+calcExpBlockCount bs api apc dataSz = fromIntegral $
   if dsz > bpi
-  then 1                           -- inode block 
+  then 1                           -- inode block
        + api                       -- number of blocks in full inode
        + (dsz - bpi) `divCeil` bpc -- number of blocks required for conts
        + (dsz - bpi) `divCeil` bs  -- number of blocks rquired for data
@@ -276,7 +276,7 @@ rscUtil :: HalfsCapable b t r l m =>
         -> HalfsState b r l m         -- ^ the filesystem state
         -> PropertyM m a              -- ^ the action to check
         -> PropertyM m ()
-rscUtil p fs act = do b <- getFree fs; act; a <- getFree fs; assert (p a b)
+rscUtil p fs act = do b <- getFree fs; _ <- act; a <- getFree fs; assert (p a b)
                    where getFree = sreadRef . bmNumFree . hsBlockMap
 
 blocksUnallocd :: HalfsCapable b t r l m =>
@@ -285,7 +285,7 @@ blocksUnallocd :: HalfsCapable b t r l m =>
                -> PropertyM m a      -- ^ the action to check
                -> PropertyM m ()
 blocksUnallocd x = rscUtil (\a b -> a >= b && a - b == x)
-                   
+
 blocksAllocd :: HalfsCapable b t r l m =>
                 Word64             -- ^ expected #blocks unallocated
              -> HalfsState b r l m -- ^ the filesystem state
@@ -312,7 +312,7 @@ dumpfs = do
         ++ dump
         ++ "=== fs dump end ===\n"
   where
-    dumpfs' i ipfx inr = do 
+    dumpfs' i ipfx inr = do
       contents <- withDirectory inr $ \dh -> do
                     withDHLock dh $ readRef (dhContents dh)
       foldM (\dumpAcc (path, dirEnt) -> do
@@ -324,7 +324,7 @@ dumpfs = do
                return $ dumpAcc
                      ++ replicate i ' '
                      ++ path
-                     ++ let inr' = deInode dirEnt in 
+                     ++ let inr' = deInode dirEnt in
                         case deType dirEnt of
                           RegularFile -> " (" ++ show inr' ++ ") (file)\n"
                           Directory   -> " (" ++ show inr' ++ ") (directory)\n" ++ sub

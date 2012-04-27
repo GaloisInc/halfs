@@ -4,8 +4,7 @@ module Halfs.CoreAPI where
 
 import Control.Exception (assert)
 import Data.ByteString   (ByteString)
-import Data.Maybe
-import Data.Serialize
+import Data.Serialize hiding (isEmpty)
 import Data.Word
 import Foreign.C.Error hiding (throwErrno)
 import System.FilePath
@@ -166,7 +165,7 @@ unmount = do
   sbRef <- hasks hsSuperBlock
 
   withLock lk $ withLockedRscRef dhMap $ \dhMapRef -> do
-  -- ^ Grab everything; we do not want to permit other filesystem actions to
+  -- Grab everything; we do not want to permit other filesystem actions to
   -- occur in other threads during or after teardown. Needs testing. TODO
 
   sb <- readRef sbRef
@@ -174,7 +173,7 @@ unmount = do
    then throwError HE_UnmountFailed
    else do
      -- TODO:
-     -- * Persist all dirty data structures (dirents, files w/ buffered IO, etc.)
+     -- - Persist all dirty data structures (dirents, files w/ buffered IO, etc.)
 
      -- Sync all directories; clean directory state is a no-op
      mapM_ syncDirectory =<< M.elems `fmap` readRef dhMapRef
@@ -184,7 +183,7 @@ unmount = do
      -- Finalize the superblock
      let sb' = sb{ unmountClean = True }
      writeRef sbRef sb'
-     lift $ writeSB dev sb'
+     _ <- lift $ writeSB dev sb'
      return ()
 
 --------------------------------------------------------------------------------
@@ -205,7 +204,7 @@ fsck dev sb usr grp rdirPerms = do
     Just (bad, fc) -> do
       bm        <- lift $ writeUsedBitmap dev used >> readBlockMap dev
       finalFree <- readRef (bmNumFree bm)
-      lift $ writeSB dev $ sb
+      _ <- lift $ writeSB dev $ sb
         { unmountClean = True
         , freeBlocks   = finalFree
         , usedBlocks   = initFree - finalFree
@@ -293,7 +292,7 @@ mkdir fp fm = do
   parentIR <- fst `fmap` absPathIR path Directory
   usr <- getUser
   grp <- getGroup
-  makeDirectory parentIR dirName usr grp fm
+  _ <- makeDirectory parentIR dirName usr grp fm
   return ()
   where
     (path, dirName) = splitFileName fp

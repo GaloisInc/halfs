@@ -31,7 +31,6 @@ import qualified Data.ByteString as BS
 import qualified Data.Map as M
 import Data.Serialize
 import Foreign.C.Error
-import System.FilePath
 
 import Halfs.BlockMap
 import Halfs.Classes
@@ -40,7 +39,6 @@ import Halfs.HalfsState
 import Halfs.Monad
 import Halfs.MonadUtils
 import Halfs.Inode ( Inode(..)
-                   , InodeRef(..)
                    , atomicReadInode
                    , blockAddrToInodeRef
                    , buildEmptyInodeEnc
@@ -76,19 +74,19 @@ makeDirectory :: HalfsCapable b t r l m =>
                                           --   created directory
 makeDirectory parentIR dname user group perms =
   withDirectory parentIR $ \pdh -> do
-    withDHLock pdh $ do 
-      -- Begin critical section over parent's DirHandle 
+    withDHLock pdh $ do
+      -- Begin critical section over parent's DirHandle
       contents <- readRef (dhContents pdh)
       if M.member dname contents
-       then throwError $ HE_ObjectExists dname 
+       then throwError $ HE_ObjectExists dname
        else do
-         bm  <- hasks hsBlockMap 
+         bm  <- hasks hsBlockMap
          mir <- fmap blockAddrToInodeRef `fmap` alloc1 bm
          case mir of
            Nothing     -> throwError HE_AllocFailed
            Just thisIR -> do
              -- Build the directory inode and persist it
-             dev  <- hasks hsBlockDev       
+             dev  <- hasks hsBlockDev
              bstr <- lift $ buildEmptyInodeEnc
                               dev
                               Directory
@@ -99,11 +97,11 @@ makeDirectory parentIR dname user group perms =
                               group
              assert (BS.length bstr == fromIntegral (bdBlockSize dev)) $ do
              lift $ bdWriteBlock dev (inodeRefToBlockAddr thisIR) bstr
-    
+
              -- Add 'dname' to parent directory's contents
              addDirEnt_lckd pdh dname thisIR user group perms Directory
              return thisIR
-      -- End critical section over parent's DirHandle 
+      -- End critical section over parent's DirHandle
 
 -- | Given a parent directory's inode ref, remove the directory with the given name.
 removeDirectory :: HalfsCapable b t r l m =>
@@ -124,25 +122,25 @@ removeDirectory mdname inr = do
   withLockedRscRef dhMap $ \dhMapRef -> do
     dh <- lookupRM inr dhMapRef >>= maybe (newDirHandle inr) return
     withDHLock dh $ do
-      -- begin dirhandle critical section   
+      -- begin dirhandle critical section
       contents <- readRef (dhContents dh)
       unless (M.null contents) $ HE_DirectoryNotEmpty `annErrno` eNOTEMPTY
-    
+
       -- When we've been given a directory name, purge this dir's dirent from
       -- the parent directory.
       case mdname of
         Nothing    -> return ()
-        Just dname -> 
+        Just dname ->
           withLockedInode inr $ do
             pinr <- inoParent `fmap` drefInode inr
             pdh  <- lookupRM pinr dhMapRef >>= maybe (newDirHandle pinr) return
             rmDirEnt pdh dname
-    
+
       -- Invalidate dh so that all subsequent DH-mediated access fails
       writeRef (dhInode dh) Nothing
       deleteRM inr dhMapRef
       freeInode inr
-      -- end dirhandle critical section   
+      -- end dirhandle critical section
 
 -- | Syncs directory contents to disk
 syncDirectory :: HalfsCapable b t r l m =>
@@ -205,7 +203,7 @@ closeDirectory :: HalfsCapable b t r l m =>
 closeDirectory dh = do
   syncDirectory dh
   return ()
-  
+
 -- | Add a directory entry for a file, directory, or symlink; expects
 -- that the item does not already exist in the directory.  Thread-safe.
 addDirEnt :: HalfsCapable b t r l m =>
@@ -232,7 +230,7 @@ addDirEnt_lckd :: HalfsCapable b t r l m =>
 addDirEnt_lckd dh name inr u g mode ftype =
   addDirEnt_lckd' False dh $ DirEnt name inr u g mode ftype
 
-addDirEnt_lckd' :: HalfsCapable b t r l m => 
+addDirEnt_lckd' :: HalfsCapable b t r l m =>
                    Bool
                 -> DirHandle r l
                 -> DirectoryEntry
@@ -273,7 +271,7 @@ rmDirEnt_lckd dh name = do
 -- reference (i.e., the directory inode at which to begin the search)
 -- and a list of path components.  Success is denoted using the DF_Found
 -- constructor of the DirFindRslt type.
-find :: HalfsCapable b t r l m => 
+find :: HalfsCapable b t r l m =>
         InodeRef           -- ^ The starting inode reference
      -> FileType           -- ^ A match must be of this filetype
      -> [FilePath]         -- ^ Path components
@@ -329,7 +327,7 @@ newDirHandle inr = do
   rawDirBytes <- readStream inr 0 Nothing
   dirEnts     <- if BS.null rawDirBytes
                  then do return []
-                 else case decode rawDirBytes of 
+                 else case decode rawDirBytes of
                    Left msg -> throwError $ HE_DecodeFail_Directory msg
                    Right x  -> return x
   DirHandle
@@ -358,7 +356,7 @@ isFileType t1 t2         = t1 == t2
 
 _showDH :: HalfsCapable b t r l m => DirHandle r l -> HalfsM b r l m String
 _showDH dh = do
-  withDHLock dh $ do 
+  withDHLock dh $ do
     state    <- readRef $ dhState dh
     contents <- readRef $ dhContents dh
     inr      <- getDHINR_lckd dh

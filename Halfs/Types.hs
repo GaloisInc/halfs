@@ -10,8 +10,6 @@ import Data.Bits
 import qualified Data.Map as M
 import Data.List (sort)
 import Data.Serialize
-import Data.Serialize.Get (getWord64be)
-import Data.Serialize.Put (putWord64be)
 import Data.Word
 
 import Halfs.Protection

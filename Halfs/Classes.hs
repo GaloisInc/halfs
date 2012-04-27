@@ -18,20 +18,17 @@ import Control.Applicative
 import Control.Concurrent (ThreadId, myThreadId)
 import Control.Concurrent.MVar
 import Control.Exception
-import Control.Monad.Reader
 import Control.Monad.ST
 import Data.Array.IO
 import Data.Array.ST
 import Data.IORef
 import Data.Ratio            (numerator)
 import Data.Serialize
-import Data.Serialize.Get
-import Data.Serialize.Put
 import Data.STRef
 import Data.Time.Clock
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.Time.LocalTime   () -- for Show UTCTime instance
-import Data.Word             
+import Data.Word
 
 import Foreign.C.Types       (CTime)
 import GHC.Int               (Int32)
@@ -200,4 +197,3 @@ instance Bitmapped (STUArray s Word64 Bool) (ST s) where
   setBit b i    = writeArray b i True
   checkBit      = readArray
   toList        = getElems
-

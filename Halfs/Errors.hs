@@ -6,7 +6,6 @@ where
 
 import Data.Word
 import Foreign.C.Error
-import System.FilePath
 
 import Halfs.Monad
 import Halfs.Types
@@ -37,14 +36,14 @@ data HalfsError =
   | HE_RenameFailed
   | HE_TestFailed String
   | HE_UnexpectedFileType FileType FilePath
-  | HE_UnmountFailed 
+  | HE_UnmountFailed
   deriving (Eq, Show)
 
-data RsnHalfsMountFail = 
+data RsnHalfsMountFail =
     BadSuperBlock String
   | DirtyUnmount
   deriving (Eq, Show)
-           
+
 annErrno :: MonadError HalfsError m => HalfsError -> Errno -> m a
 e `annErrno` errno = throwError (e `HE_ErrnoAnnotated` errno)
 

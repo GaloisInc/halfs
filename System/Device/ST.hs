@@ -6,7 +6,6 @@ module System.Device.ST(
 
 import Control.Monad.ST
 import Data.Array.ST
-import Data.Array.MArray
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Data.Word
@@ -37,4 +36,3 @@ newSTBlockDevice numSectors sectorSize
   buildArray :: ST s (STArray s Word64 ByteString)
   buildArray  = newArray (0, numSectors - 1) empty
   empty       = BS.replicate secSizeI 0
-

@@ -9,7 +9,7 @@ import Control.Concurrent
 import Data.Either
 import Data.List
 import Data.Maybe
-import Data.Serialize hiding (label)
+import Data.Serialize hiding (label, isEmpty)
 import Foreign.C.Error
 import Prelude hiding (read)
 import System.FilePath
@@ -237,8 +237,8 @@ propM_unmountMutexOK :: BDGeom
 propM_unmountMutexOK _g dev = do
   fs <- mkNewFS dev >> mountOK dev
   ch <- run newChan
-  run $ forkIO $ threadTest fs ch
-  run $ threadTest fs ch
+  _  <- run $ forkIO $ threadTest fs ch
+  _  <- run $ threadTest fs ch
   r1 <- run $ readChan ch
   r2 <- run $ readChan ch
   assert $ (r1 || r2) && not (r1 && r2) -- r1 `xor` r2
@@ -563,7 +563,7 @@ propM_hardlinksOK _g dev = do
 
   assert $ all (== srcBytes) ds
 
-  mapM (exec "close dst" . closeFile) fhs
+  mapM_ (exec "close dst" . closeFile) fhs
 
   -- TODO: Test rmlink here
 
@@ -634,8 +634,8 @@ propM_rmdirMutexOK _g dev = do
   chA <- run newChan
   chB <- run newChan
   forAllM (choose (100, 1000) :: Gen Int) $ \numTrials -> do
-  run $ forkIO $ threadA fs chA numTrials
-  run $ forkIO $ threadB fs chB numTrials
+  _ <- run $ forkIO $ threadA fs chA numTrials
+  _ <- run $ forkIO $ threadB fs chB numTrials
 
   -- except only Left-constructed results from the worker threads
   assert =<< (null . rights) `fmap` replicateM numTrials (run $ readChan chA)
@@ -726,7 +726,7 @@ propM_simpleRenameOK _g dev = do
 
   exec "create files" $ mapM_ (`createFile` defaultFilePerms) [f1, f3]
   exec "make dirs"    $ mapM_ (`mkdir` defaultDirPerms)       [d1, d1sub, d3]
-  mapM exists [f1, f3, d1, d1sub, d3]
+  mapM_ exists [f1, f3, d1, d1sub, d3]
 
   mapM_ (zeroOrMoreBlocksAllocd fs)
     [ -- Expected error: Path component not found
@@ -745,27 +745,27 @@ propM_simpleRenameOK _g dev = do
   -- File to non-existent dest
   zeroOrMoreBlocksAllocd fs $ exec "rename /f1 /f2" $ rename f1 f2
   dne f1
-  mapM exists [f2, f3, d1, d1sub, d3]
+  mapM_ exists [f2, f3, d1, d1sub, d3]
 
   -- File to existent dest
   blocksUnallocd 1 fs $ exec "rename /f2 /f3" $ rename f2 f3
-  mapM dne [f1, f2]
-  mapM exists [f3, d1, d1sub, d3]
+  mapM_ dne [f1, f2]
+  mapM_ exists [f3, d1, d1sub, d3]
 
   -- Directory to non-existent dest
   zeroOrMoreBlocksAllocd fs $ exec "rename /d1/d1sub /d2" $ rename d1sub d2
-  mapM dne [f1, f2, d1sub]
-  mapM exists [f3, d1, d2, d3]
+  mapM_ dne [f1, f2, d1sub]
+  mapM_ exists [f3, d1, d2, d3]
 
   -- Directory to existing empty dest dir
   blocksUnallocd 1 fs $ exec "rename /d3 /d2" $ rename d3 d2
-  mapM dne [f1, f2, d1sub, d3]
-  mapM exists [f3, d1, d2]
+  mapM_ dne [f1, f2, d1sub, d3]
+  mapM_ exists [f3, d1, d2]
 
   -- File into dir
   zeroOrMoreBlocksAllocd fs $ exec "rename /f3 /d2/f3" $ rename f3 (d2 </> "f3")
-  mapM dne [f1, f2, d1sub, d3]
-  mapM exists [d1, d2, d2 </> "f3"]
+  mapM_ dne [f1, f2, d1sub, d3]
+  mapM_ exists [d1, d2, d2 </> "f3"]
 
   -- Directory to existing non-empty dest dir
   zeroOrMoreBlocksAllocd fs $ expectErrno eNOTEMPTY =<< runH fs (rename d1 d2)
