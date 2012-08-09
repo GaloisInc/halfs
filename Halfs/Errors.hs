@@ -16,7 +16,7 @@ data HalfsError =
   | HE_BadFileHandleForRead
   | HE_BadFileHandleForWrite
   | HE_DecodeFail_BlockCarrier String
-  | HE_DecodeFail_Cont String
+  | HE_DecodeFail_Ext String
   | HE_DecodeFail_Directory String
   | HE_DecodeFail_Inode String
   | HE_DirectoryHandleNotFound
@@ -25,7 +25,7 @@ data HalfsError =
   | HE_FileNotFound
   | HE_FsckErr HalfsError
   | HE_InternalError String
-  | HE_InvalidContIdx
+  | HE_InvalidExtIdx
   | HE_InvalidStreamIndex Word64
   | HE_InvalidDirHandle
   | HE_InvalidFileHandle

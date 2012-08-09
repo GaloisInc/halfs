@@ -67,8 +67,8 @@ propM_inodeModuleInvs :: HalfsCapable b t r l m =>
 propM_inodeModuleInvs _g _dev = do
   -- Check geometry/padding invariants
   minInodeSz <- run $ computeMinimalInodeSize =<< getTime
-  minContSz  <- run $ minimalContSize
-  assert (minInodeSz == minContSz)
+  minExtSz  <- run $ minimalExtSize
+  assert (minInodeSz == minExtSz)
 
 -- | Tests basic write/reads & overwrites
 propM_basicWRWR :: HalfsCapable b t r l m =>
@@ -117,7 +117,7 @@ propM_basicWRWR _g dev = do
   case e0 of
     Left (HE_InvalidStreamIndex idx) -> assert (idx == bdBlockSize dev)
     _                                -> assert False
-                                        
+
   -- Expected error: write past end of 1-byte stream (beyond byte boundary)
   e0' <- runH fs $ writeStream inr 2 False testData
   case e0' of
@@ -131,7 +131,7 @@ propM_basicWRWR _g dev = do
   t1 <- time
   exec "Stream trunc to 0 bytes" $ writeStream inr 0 True BS.empty
   checkWriteMD t1 0 1 -- expecting 1 inode block only (no data blocks)
- 
+
   -- Check single-byte write
   t2 <- time
   exec "Write stream 1 byte" $ writeStream inr 0 True dummyByte
@@ -148,8 +148,8 @@ propM_basicWRWR _g dev = do
   checkWriteMD t4 dataSzI expBlks
   t5  <- time
   bs1 <- exec "Readback 1" $ readStream inr 0 Nothing
-  checkReadMD t5 dataSz expBlks 
-   
+  checkReadMD t5 dataSz expBlks
+
   assert (BS.length bs1 == BS.length testData)
 
   -- when (bs1 /= testData) $ CE.assert False $ return ()
@@ -166,7 +166,7 @@ propM_basicWRWR _g dev = do
   checkWriteMD t7 dataSzI expBlks
 
   -- Non-truncating partial overwrite of new data & read-back
-  forAllM (choose (1, dataSz `div` 2))     $ \overwriteSz -> do 
+  forAllM (choose (1, dataSz `div` 2))     $ \overwriteSz -> do
   forAllM (choose (0, dataSz `div` 2 - 1)) $ \startByte   -> do
   forAllM (printableBytes overwriteSz)     $ \newData     -> do
 
@@ -203,7 +203,7 @@ propM_basicWRWR _g dev = do
   t10 <- time
   exec "Stream trunc to 1 byte" $ writeStream inr 0 True dummyByte
   checkWriteMD t10 1 2 -- expecting 1 inode block and 1 data block
-  t11  <- time 
+  t11  <- time
   bs3 <- exec "Readback 3" $ readStream inr 0 Nothing
   checkReadMD t11 1 2
   assert (bs3 == dummyByte)
@@ -231,10 +231,10 @@ propM_truncWRWR _g dev = do
   -- Non-truncating write
   t1 <- time
   exec "Non-truncating write" $ writeStream rdirIR 0 False testData
-  checkWriteMD t1 dataSz (expBlks dataSz) 
+  checkWriteMD t1 dataSz (expBlks dataSz)
 
   forAllM (choose (dataSz `div` 8, dataSz `div` 4)) $ \dataSz'   -> do
-  forAllM (printableBytes dataSz')                  $ \testData' -> do 
+  forAllM (printableBytes dataSz')                  $ \testData' -> do
   forAllM (choose (1, dataSz - dataSz' - 1))        $ \truncIdx  -> do
   let dataSz'' = dataSz' + truncIdx
   freeBlks <- numFree -- Free blks before truncate
@@ -245,17 +245,17 @@ propM_truncWRWR _g dev = do
     writeStream rdirIR (fromIntegral truncIdx) True testData'
   checkWriteMD t2 dataSz'' (expBlks dataSz'')
 
-  -- Read until the end of the stream and check truncation       
+  -- Read until the end of the stream and check truncation
   t3 <- time
   bs <- exec "Readback" $ readStream rdirIR (fromIntegral truncIdx) Nothing
   checkReadMD t3 dataSz'' (expBlks dataSz'')
- 
+
   assert (BS.length bs == BS.length testData')
   assert (bs == testData')
 
   -- Sanity check the BlockMap's free count
   freeBlks' <- numFree  -- Free blks after truncate
-  let minExpectedFree = -- May also have frees on Cont storage, so this
+  let minExpectedFree = -- May also have frees on Ext storage, so this
                         -- is just a lower bound
         (dataSz - dataSz'') `div` (fromIntegral $ bdBlockSize dev)
   assert $ minExpectedFree <= fromIntegral (freeBlks' - freeBlks)
@@ -267,14 +267,14 @@ propM_lengthWR :: HalfsCapable b t r l m =>
                -> BlockDevice m
                -> PropertyM m ()
 propM_lengthWR _g dev = do
-  withFSData dev $ \fs rdirIR dataSz testData -> do 
+  withFSData dev $ \fs rdirIR dataSz testData -> do
   let exec           = execH "propM_lengthWR" fs
       time           = exec "obtain time" getTime
       blkSz          = bdBlockSize dev
       checkWriteMD t = \sz eb -> chk sz eb (t <=) (t <=) (t <=)
       checkReadMD  t = \sz eb -> chk sz eb (t <=) (t >=) (t <=)
       chk            = checkInodeMetadata fs rdirIR Directory rootDirPerms
-                         rootUser rootGroup 
+                         rootUser rootGroup
 
   (_, _, api, apc) <- exec "Obtaining sizes" $ computeSizes (bdBlockSize dev)
   let expBlks = calcExpBlockCount blkSz api apc dataSz
@@ -282,14 +282,14 @@ propM_lengthWR _g dev = do
   -- Write random data to the stream
   t1 <- time
   exec "Populate" $ writeStream rdirIR 0 False testData
-  checkWriteMD t1 dataSz expBlks 
+  checkWriteMD t1 dataSz expBlks
 
   -- If possible, read a minimum of one full inode + 1 byte worth of data
   -- into the next inode to push on boundary conditions & spill arithmetic.
   forAllM (arbitrary :: Gen Bool) $ \b -> do
   blksPerCarrier <- run $ if b
                            then computeNumInodeAddrsM blkSz
-                           else computeNumContAddrsM  blkSz
+                           else computeNumExtAddrsM  blkSz
   let minReadLen = min dataSz (fromIntegral $ blksPerCarrier * blkSz + 1)
 
   forAllM (choose (minReadLen, dataSz))  $ \readLen  -> do
@@ -302,7 +302,7 @@ propM_lengthWR _g dev = do
   bs <- exec "Bounded readback" $
           readStream rdirIR stIdxW64 (Just $ fromIntegral readLen')
   assert (bs == bsTake readLen' (bsDrop startIdx testData))
-  checkReadMD t2 dataSz expBlks 
+  checkReadMD t2 dataSz expBlks
 
 -- | Sanity check: reads/write operations to inode streams are atomic
 propM_inodeMutexOK :: BDGeom
@@ -313,19 +313,19 @@ propM_inodeMutexOK _g dev = do
   rdirIR <- rootDir `fmap` sreadRef (hsSuperBlock fs)
 
   -- 1) Choose a random number n s.t. 8 <= n <= 32
-  -- 
+  --
   -- 2) Create n unique bytestrings that each cover the entire randomly-sized
   --    write region.  Call this set of bytestrings 'bstrings'.
   --
   -- 3) Spawn n test threads, and create a unique bytestring for each to write.
   --    Each thread:
-  -- 
+  --
   --      * Blindly writes its bytestring 'bs' to the stream
-  -- 
+  --
   --      * Reads back entire stream, and ensures that what is read back
   --        is a member of bstrings; if what is read back is also not
   --        equal to what was written, we have detected interleaving.
-  -- 
+  --
   --      * Terminates
   --
   -- We keep the write regions relatively small since we'll be creating many of
@@ -357,7 +357,7 @@ propM_inodeMutexOK _g dev = do
     hi        = blkSize * (maxBlocks `div` 16)
     blkSize   = safeToInt (bdBlockSize dev)
     --
-    uniqueBS sz acc _ = 
+    uniqueBS sz acc _ =
       (:acc) `fmap` (printableBytes sz `suchThat` (not . (`elem` acc)))
     --
     test fs ch inr sz bstrings bs = do
@@ -380,7 +380,7 @@ withFSData :: HalfsCapable b t r l m =>
 withFSData dev f = do
   fs <- runHNoEnv (newfs dev rootUser rootGroup rootDirPerms) >> mountOK dev
   rdirIR <- rootDir `fmap` sreadRef (hsSuperBlock fs)
-  withData dev $ f fs rdirIR 
+  withData dev $ f fs rdirIR
 
 newtype FillBlocks a = FillBlocks a deriving Show
 newtype SpillCnt a   = SpillCnt a deriving Show
@@ -391,7 +391,7 @@ withData :: HalfsCapable b t r l m =>
          -> (Int -> ByteString -> PropertyM m ())  -- Action
          -> PropertyM m ()
 withData dev f = do
-  nAddrs <- run $ computeNumContAddrsM (bdBlockSize dev)
+  nAddrs <- run $ computeNumExtAddrsM (bdBlockSize dev)
   let maxBlocks = safeToInt $ bdNumBlocks dev
       lo        = maxBlocks `div` 8
       hi        = maxBlocks `div` 4
@@ -400,7 +400,7 @@ withData dev f = do
   forAllM fbr $ \(FillBlocks fillBlocks) -> do
   forAllM scr $ \(SpillCnt   spillCnt)   -> do
   -- fillBlocks is the number of blocks to fill on the write (1/8 - 1/4 of dev)
-  -- spillCnt is the number of blocks to write into the last cont in the chain
+  -- spillCnt is the number of blocks to write into the last ext in the chain
   let dataSz = fillBlocks * safeToInt (bdBlockSize dev) + spillCnt
   forAllM (printableBytes dataSz) (f dataSz)
 --   -- Useful debugging test for 512B block size:
@@ -415,7 +415,7 @@ checkInodeMetadata :: (HalfsCapable b t r l m, Integral a) =>
                    -> UserID      -- expected userid
                    -> GroupID     -- expected groupid
                    -> a           -- expected filesize
-                   -> a           -- expected allocated block count 
+                   -> a           -- expected allocated block count
                    -> (t -> Bool) -- access time predicate
                    -> (t -> Bool) -- modification time predicate
                    -> (t -> Bool) -- status change time predicate

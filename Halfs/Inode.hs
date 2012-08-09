@@ -18,28 +18,28 @@ module Halfs.Inode
   , atomicReadInode
   , bsReplicate
   , drefInode
-  , expandConts -- for use by fsck
+  , expandExts -- for use by fsck
   , fileStat_lckd
   , freeInode
   , withLockedInode
   , writeStream_lckd
   -- * for testing: ought not be used by actual clients of this module!
   , Inode(..)
-  , Cont(..)
-  , ContRef(..)
+  , Ext(..)
+  , ExtRef(..)
   , bsDrop
   , bsTake
   , computeMinimalInodeSize
   , computeNumAddrs
   , computeNumInodeAddrsM
-  , computeNumContAddrsM
+  , computeNumExtAddrsM
   , computeSizes
-  , decodeCont
+  , decodeExt
   , decodeInode
-  , minimalContSize
+  , minimalExtSize
   , minInodeBlocks
-  , minContBlocks
-  , nilCR
+  , minExtBlocks
+  , nilER
   , safeToInt
   , truncSentinel
   )
@@ -78,7 +78,7 @@ dbugM _ = return ()
 type HalfsM b r l m a = HalfsT HalfsError (Maybe (HalfsState b r l m)) m a
 
 --------------------------------------------------------------------------------
--- Inode/Cont constructors, geometry calculation, and helpful constructors
+-- Inode/Ext constructors, geometry calculation, and helpful constructors
 
 type StreamIdx = (Word64, Word64, Word64)
 
@@ -106,68 +106,68 @@ nilIR = IR 0
 isNilIR :: InodeRef -> Bool
 isNilIR = (==) nilIR
 
--- | The nil Cont reference.  With the current Word64 representation and
+-- | The nil Ext reference.  With the current Word64 representation and
 -- the block layout assumptions, block 0 is the superblock, and thus an
--- invalid Cont reference.
-nilCR :: ContRef
-nilCR = CR 0
+-- invalid Ext reference.
+nilER :: ExtRef
+nilER = ER 0
 
-isNilCR :: ContRef -> Bool
-isNilCR = (==) nilCR
+isNilER :: ExtRef -> Bool
+isNilER = (==) nilER
 
 -- | The sentinel byte written to partial blocks when doing truncating writes
 truncSentinel :: Word8
 truncSentinel = 0xBA
 
--- | The sentinel byte written to the padded region at the end of Inodes/Conts
+-- | The sentinel byte written to the padded region at the end of Inodes/Exts
 padSentinel :: Word8
 padSentinel = 0xAD
 
 -- We semi-arbitrarily state that an Inode must be capable of maintaining a
--- minimum of 35 block addresses in its embedded Cont while the Cont must be
+-- minimum of 35 block addresses in its embedded Ext while the Ext must be
 -- capable of maintaining 57 block addresses.  These values, together with
--- specific padding values for inodes and conts (4 and 0, respectively), give us
--- a minimum inode AND cont size of 512 bytes each (in the IO monad variant,
+-- specific padding values for inodes and exts (4 and 0, respectively), give us
+-- a minimum inode AND ext size of 512 bytes each (in the IO monad variant,
 -- which uses the our Serialize instance for the UTCTime when writing the time
 -- fields).
 --
 -- These can be adjusted as needed according to inode metadata sizes, but it's
--- very important that (computeMinimalInodeSize =<< getTime) and minimalContSize yield
+-- very important that (computeMinimalInodeSize =<< getTime) and minimalExtSize yield
 -- the same value!
 
 -- | The size, in bytes, of the padding region at the end of Inodes
 iPadSize :: Int
 iPadSize = 4
 
--- | The size, in bytes, of the padding region at the end of Conts
+-- | The size, in bytes, of the padding region at the end of Exts
 cPadSize :: Int
 cPadSize = 0
 
 minInodeBlocks :: Word64
 minInodeBlocks = 35
 
-minContBlocks :: Word64
-minContBlocks = 57
+minExtBlocks :: Word64
+minExtBlocks = 57
 
--- | The structure of an Inode. Pretty standard, except that we use the Cont
+-- | The structure of an Inode. Pretty standard, except that we use the Ext
 -- structure (the first of which is embedded in the inode) to hold block
--- references and use its continuation field to allow multiple runs of block
+-- references and use its ext field to allow multiple runs of block
 -- addresses.
 data Inode t = Inode
-  { inoParent      :: InodeRef          -- ^ block addr of parent directory
-                                        -- inode: This is nilIR for the
-                                        -- root directory inode
+  { inoParent      :: InodeRef         -- ^ block addr of parent directory
+                                       -- inode: This is nilIR for the
+                                       -- root directory inode
 
-  , inoLastCont    :: (ContRef, Word64) -- ^ The last-accessed CR and its cont
-                                        -- idx.  For the "faster end-of-stream
-                                        -- access" hack.
+  , inoLastExt     :: (ExtRef, Word64) -- ^ The last-accessed ER and its ext
+                                       -- idx.  For the "faster end-of-stream
+                                       -- access" hack.
     -- begin fstat metadata
   , inoAddress     :: InodeRef -- ^ block addr of this inode
   , inoFileSize    :: Word64   -- ^ in bytes
   , inoAllocBlocks :: Word64   -- ^ number of blocks allocated to this inode
                                --   (includes its own allocated block, blocks
-                               --   allocated for Conts, and and all blocks in
-                               --   the cont chain itself)
+                               --   allocated for Exts, and and all blocks in
+                               --   the ext chain itself)
   , inoFileType    :: FileType
   , inoMode        :: FileMode
   , inoNumLinks    :: Word64   -- ^ number of hardlinks to this inode
@@ -179,21 +179,23 @@ data Inode t = Inode
   , inoGroup       :: GroupID  -- ^ groupid of inode's owner
   -- end fstat metadata
 
-  , inoCont          :: Cont   -- The "embedded" continuation
+  , inoExt         :: Ext   -- The "embedded" inode extension ("ext")
   }
   deriving (Show, Eq)
 
-data Cont = Cont
-  { address      :: ContRef  -- ^ Address of this cont (nilCR for an
-                             --   inode's embedded Cont)
-  , continuation :: ContRef  -- ^ Next Cont in the chain; nilCR terminates
+-- An "Inode extension" datatype
+data Ext = Ext
+  { address      :: ExtRef   -- ^ Address of this Ext (nilER for an
+                             --   inode's embedded Ext)
+  , nextExt      :: ExtRef  -- ^ Next Ext in the chain; nilER terminates
   , blockCount   :: Word64
-  , blockAddrs   :: [Word64] -- ^ references to blocks governed by this Cont
+  , blockAddrs   :: [Word64] -- ^ references to blocks governed by this Ext
 
-  -- Fields below here are not persisted, and are populated via decodeCont
+  -- Fields below here are not persisted, and are populated via decodeExt
 
-  , numAddrs     :: Word64   -- ^ Maximum number of blocks addressable by this
-                             --   Cont.  NB: Does not include any continuations
+  , numAddrs     :: Word64   -- ^ Maximum number of blocks addressable by *this*
+                             --   Ext.  NB: Does not include blocks further down
+                             --   the chain.
   }
   deriving (Show, Eq)
 
@@ -210,21 +212,21 @@ computeMinimalInodeSize t = do
   return $ fromIntegral $ BS.length $ encode $
     let e = emptyInode minInodeBlocks t RegularFile (FileMode [] [] [])
                        nilIR nilIR rootUser rootGroup
-        c = inoCont e
-    in e{ inoCont   = c{ blockAddrs = replicate (safeToInt minInodeBlocks) 0 } }
+        c = inoExt e
+    in e{ inoExt = c{ blockAddrs = replicate (safeToInt minInodeBlocks) 0 } }
 
--- | The size of a minimal Cont structure when serialized, in bytes.
-minimalContSize :: Monad m => m (Word64)
-minimalContSize = return $ fromIntegral $ BS.length $ encode $
-  (emptyCont minContBlocks nilCR){
-    blockAddrs = replicate (safeToInt minContBlocks) 0
+-- | The size of a minimal Ext structure when serialized, in bytes.
+minimalExtSize :: Monad m => m (Word64)
+minimalExtSize = return $ fromIntegral $ BS.length $ encode $
+  (emptyExt minExtBlocks nilER){
+    blockAddrs = replicate (safeToInt minExtBlocks) 0
   }
 
--- | Computes the number of block addresses storable by an inode/cont
+-- | Computes the number of block addresses storable by an inode/ext
 computeNumAddrs :: Monad m =>
                    Word64 -- ^ block size, in bytes
-                -> Word64 -- ^ minimum number of blocks for inode/cont
-                -> Word64 -- ^ minimum inode/cont total size, in bytes
+                -> Word64 -- ^ minimum number of blocks for inode/ext
+                -> Word64 -- ^ minimum inode/ext total size, in bytes
                 -> m Word64
 computeNumAddrs blkSz minBlocks minSize = do
   unless (minSize <= blkSz) $
@@ -245,23 +247,23 @@ computeNumInodeAddrsM :: (Serialize t, Timed t m, Show t) =>
 computeNumInodeAddrsM blkSz =
   computeNumAddrs blkSz minInodeBlocks =<< computeMinimalInodeSize =<< getTime
 
-computeNumContAddrsM :: (Serialize t, Timed t m) =>
-                        Word64 -> m Word64
-computeNumContAddrsM blkSz = do
-  minSize <- minimalContSize
-  computeNumAddrs blkSz minContBlocks minSize
+computeNumExtAddrsM :: (Serialize t, Timed t m) =>
+                       Word64 -> m Word64
+computeNumExtAddrsM blkSz = do
+  minSize <- minimalExtSize
+  computeNumAddrs blkSz minExtBlocks minSize
 
 computeSizes :: (Serialize t, Timed t m, Show t) =>
                 Word64
              -> m ( Word64 -- #inode bytes
-                  , Word64 -- #cont bytes
+                  , Word64 -- #ext bytes
                   , Word64 -- #inode addrs
-                  , Word64 -- #cont addrs
+                  , Word64 -- #ext addrs
                   )
 computeSizes blkSz = do
-  startContAddrs <- computeNumInodeAddrsM blkSz
-  contAddrs      <- computeNumContAddrsM  blkSz
-  return (startContAddrs * blkSz, contAddrs * blkSz, startContAddrs, contAddrs)
+  startExtAddrs <- computeNumInodeAddrsM blkSz
+  extAddrs      <- computeNumExtAddrsM  blkSz
+  return (startExtAddrs * blkSz, extAddrs * blkSz, startExtAddrs, extAddrs)
 
 -- Builds and encodes an empty inode
 buildEmptyInodeEnc :: (Serialize t, Timed t m, Show t) =>
@@ -289,7 +291,7 @@ buildEmptyInode bd ftype fmode me mommy usr grp = do
   now       <- getTime
   minSize   <- computeMinimalInodeSize =<< return now
 
-  minimalContSize >>= (`assert` return ()) . (==) minSize
+  minimalExtSize >>= (`assert` return ()) . (==) minSize
 
   nAddrs    <- computeNumAddrs (bdBlockSize bd) minInodeBlocks minSize
   return $ emptyInode nAddrs now ftype fmode me mommy usr grp
@@ -307,7 +309,7 @@ emptyInode :: (Ord t, Serialize t) =>
 emptyInode nAddrs now ftype fmode me mommy usr grp =
   Inode
   { inoParent       = mommy
-  , inoLastCont     = (nilCR, 0)
+  , inoLastExt      = (nilER, 0)
   , inoAddress      = me
   , inoFileSize     = 0
   , inoAllocBlocks  = 1
@@ -320,25 +322,25 @@ emptyInode nAddrs now ftype fmode me mommy usr grp =
   , inoChangeTime   = now
   , inoUser         = usr
   , inoGroup        = grp
-  , inoCont         = emptyCont nAddrs nilCR
+  , inoExt          = emptyExt nAddrs nilER
   }
 
-buildEmptyCont :: (Serialize t, Timed t m) =>
-                  BlockDevice m -- ^ The block device
-               -> ContRef       -- ^ This cont's block address
-               -> m Cont
-buildEmptyCont bd me = do
-  minSize <- minimalContSize
-  nAddrs  <- computeNumAddrs (bdBlockSize bd) minContBlocks minSize
-  return $ emptyCont nAddrs me
+buildEmptyExt :: (Serialize t, Timed t m) =>
+                 BlockDevice m -- ^ The block device
+              -> ExtRef        -- ^ This ext's block address
+              -> m Ext
+buildEmptyExt bd me = do
+  minSize <- minimalExtSize
+  nAddrs  <- computeNumAddrs (bdBlockSize bd) minExtBlocks minSize
+  return $ emptyExt nAddrs me
 
-emptyCont :: Word64  -- ^ number of block addresses
-          -> ContRef -- ^ block addr for this cont
-          -> Cont
-emptyCont nAddrs me =
-  Cont
+emptyExt :: Word64  -- ^ number of block addresses
+         -> ExtRef -- ^ block addr for this ext
+         -> Ext
+emptyExt nAddrs me =
+  Ext
   { address      = me
-  , continuation = nilCR
+  , nextExt      = nilER
   , blockCount   = 0
   , blockAddrs   = []
   , numAddrs     = nAddrs
@@ -349,7 +351,7 @@ emptyCont nAddrs me =
 -- Inode stream functions
 
 -- | Provides a stream over the bytes governed by a given Inode and its
--- continuations.  This function performs a write to update inode metadata
+-- extensions (exts).  This function performs a write to update inode metadata
 -- (e.g., access time).
 readStream :: HalfsCapable b t r l m =>
               InodeRef                  -- ^ Starting inode reference
@@ -368,19 +370,19 @@ readStream startIR start mlen = do
       fileSz    = inoFileSize startInode
       gsi       = getStreamIdx (bdBlockSize dev) fileSz
 
-  if 0 == blockCount (inoCont startInode)
+  if 0 == blockCount (inoExt startInode)
    then return BS.empty
    else do
      dbug ("==== readStream begin ===") $ do
-     (sContI, sBlkOff, sByteOff) <- gsi start
-     sCont                       <- findCont startInode sContI
-     (eContI, _, _)              <- gsi $ case mlen of
+     (sExtI, sBlkOff, sByteOff) <- gsi start
+     sExt                       <- findExt startInode sExtI
+     (eExtI, _, _)              <- gsi $ case mlen of
                                             Nothing  -> fileSz - 1
                                             Just len -> start + len - 1
 
      dbug ("start                       = " ++ show start) $ do
-     dbug ("(sContI, sBlkOff, sByteOff) = " ++ show (sContI, sBlkOff, sByteOff)) $ do
-     dbug ("eContI                      = " ++ show eContI) $ do
+     dbug ("(sExtI, sBlkOff, sByteOff) = " ++ show (sExtI, sBlkOff, sByteOff)) $ do
+     dbug ("eExtI                      = " ++ show eExtI) $ do
 
      rslt <- case mlen of
        Just len | len == 0 -> return BS.empty
@@ -388,7 +390,7 @@ readStream startIR start mlen = do
          assert (maybe True (> 0) mlen) $ return ()
 
          -- 'hdr' is the (possibly partial) first block
-         hdr <- bsDrop sByteOff `fmap` readB sCont sBlkOff
+         hdr <- bsDrop sByteOff `fmap` readB sExt sBlkOff
 
          -- 'rest' is the list of block-sized bytestrings containing the
          -- requested content from blocks in subsequent conts, accounting for
@@ -397,40 +399,40 @@ readStream startIR start mlen = do
            let hdrLen      = fromIntegral (BS.length hdr)
                totalToRead = maybe (fileSz - start) id mlen
                --
-               howManyBlks cont bsf blkOff =
-                 let bc = blockCount cont - blkOff
+               howManyBlks ext bsf blkOff =
+                 let bc = blockCount ext - blkOff
                  in
                  maybe bc (\len -> min bc ((len - bsf) `divCeil` bs)) mlen
                --
-               readCont (_, [], _) = error "The impossible happened"
-               readCont ((cCont, cContI), blkOff:boffs, bytesSoFar)
-                 | cContI > eContI =
+               readExt (_, [], _) = error "The impossible happened"
+               readExt ((cExt, cExtI), blkOff:boffs, bytesSoFar)
+                 | cExtI > eExtI =
                      assert (bytesSoFar >= totalToRead) $ return Nothing
                  | bytesSoFar >= totalToRead =
                      return Nothing
                  | otherwise = do
-                     let remBlks = howManyBlks cCont bytesSoFar blkOff
+                     let remBlks = howManyBlks cExt bytesSoFar blkOff
                          range   = if remBlks > 0
                                     then [blkOff .. blkOff + remBlks - 1]
                                     else []
 
-                     theData <- BS.concat `fmap` mapM (readB cCont) range
+                     theData <- BS.concat `fmap` mapM (readB cExt) range
                      assert (fromIntegral (BS.length theData) == remBlks * bs) $ return ()
 
                      let rslt c = return $ Just $
                                   ( theData -- accumulated by unfoldr
-                                  , ( (c, cContI+1)
+                                  , ( (c, cExtI+1)
                                     , boffs
                                     , bytesSoFar + remBlks * bs
                                     )
                                   )
-                     if isNilCR (continuation cCont)
-                      then rslt (error "Cont DNE and expected termination!")
-                      else rslt =<< drefCont (continuation cCont)
+                     if isNilER (nextExt cExt)
+                      then rslt (error "Ext DNE and expected termination!")
+                      else rslt =<< drefExt (nextExt cExt)
 
            -- ==> Bulk reading starts here <==
-           if (sBlkOff + 1 < blockCount sCont || sContI < eContI)
-            then unfoldrM readCont ((sCont, sContI), (sBlkOff+1):repeat 0, hdrLen)
+           if (sBlkOff + 1 < blockCount sExt || sExtI < eExtI)
+            then unfoldrM readExt ((sExt, sExtI), (sBlkOff+1):repeat 0, hdrLen)
             else return []
 
          return $ bsTake (maybe (fileSz - start) id mlen) $
@@ -471,12 +473,12 @@ writeStream_lckd startIR start trunc bytes              = do
   -- NB: This implementation currently 'flattens' Contig/Discontig block groups
   -- from the BlockMap allocator (see allocFill and truncUnalloc below), which
   -- will force us to treat them as Discontig when we unallocate, which is more
-  -- expensive.  We may want to have the Conts hold onto these block groups
+  -- expensive.  We may want to have the Exts hold onto these block groups
   -- directly and split/merge them as needed to reduce the number of
   -- unallocation actions required, but we leave this as a TODO for now.
 
-  startInode@Inode{ inoLastCont = lcInfo } <- drefInode startIR
-  dev                                      <- hasks hsBlockDev
+  startInode@Inode{ inoLastExt = lcInfo } <- drefInode startIR
+  dev                                     <- hasks hsBlockDev
 
   let bs           = bdBlockSize dev
       len          = fromIntegral $ BS.length bytes
@@ -488,92 +490,92 @@ writeStream_lckd startIR start trunc bytes              = do
       blksToAlloc  = bytesToAlloc `divCeil` bs
 
   (_, _, _, apc)                   <- hasks hsSizes
-  sIdx@(sContI, sBlkOff, sByteOff) <- getStreamIdx bs fileSz start
-  sCont                            <- findCont startInode sContI
-  lastCont                         <- getLastCont Nothing sCont
+  sIdx@(sExtI, sBlkOff, sByteOff)  <- getStreamIdx bs fileSz start
+  sExt                            <- findExt startInode sExtI
+  lastExt                         <- getLastExt Nothing sExt
                                       -- TODO: Track a ptr to this?  Traversing
                                       -- the allocated region is yucky.
-  let contsToAlloc = (blksToAlloc - availBlks lastCont) `divCeil` apc
+  let extsToAlloc = (blksToAlloc - availBlks lastExt) `divCeil` apc
 
   ------------------------------------------------------------------------------
   -- Debugging miscellany
 
-  dbug ("\nwriteStream: " ++ show (sContI, sBlkOff, sByteOff)
+  dbug ("\nwriteStream: " ++ show (sExtI, sBlkOff, sByteOff)
         ++ " (start=" ++ show start ++ ")"
         ++ " len = " ++ show len ++ ", trunc = " ++ show trunc
         ++ ", fileSz/newFileSz = " ++ show fileSz ++ "/" ++ show newFileSz
-        ++ ", toAlloc(conts/blks/bytes) = " ++ show contsToAlloc ++ "/"
+        ++ ", toAlloc(exts/blks/bytes) = " ++ show extsToAlloc ++ "/"
         ++ show blksToAlloc ++ "/" ++ show bytesToAlloc) $ do
---   dbug ("inoLastCont startInode = " ++ show (lcInfo) )            $ return ()
---   dbug ("inoCont startInode     = " ++ show (inoCont startInode)) $ return ()
---   dbug ("Conts on entry, from inode cont:") $ return ()
---   dumpConts (inoCont startInode)
+--   dbug ("inoLastExt startInode = " ++ show (lcInfo) )            $ return ()
+--   dbug ("inoExt startInode     = " ++ show (inoExt startInode)) $ return ()
+--   dbug ("Exts on entry, from inode ext:") $ return ()
+--   dumpExts (inoExt startInode)
 
   ------------------------------------------------------------------------------
   -- Allocation:
 
-  -- Allocate if needed and obtain (1) the post-alloc start cont and (2)
-  -- possibly a dirty cont to write back into the inode (ie, when its
-  -- continuation field is modified as a result of allocation -- all other
-  -- modified conts are written by allocFill, but the inode write is the last
+  -- Allocate if needed and obtain (1) the post-alloc start ext and (2)
+  -- possibly a dirty ext to write back into the inode (ie, when its
+  -- nextExt field is modified as a result of allocation -- all other
+  -- modified exts are written by allocFill, but the inode write is the last
   -- thing we do, so we defer the update).
 
-  (sCont', minodeCont) <- do
+  (sExt', minodeExt) <- do
     if blksToAlloc == 0
-     then return (sCont, Nothing)
+     then return (sExt, Nothing)
      else do
-       lastCont' <- allocFill availBlks blksToAlloc contsToAlloc lastCont
-       let st  = if address lastCont' == address sCont then lastCont' else sCont
+       lastExt' <- allocFill availBlks blksToAlloc extsToAlloc lastExt
+       let st  = if address lastExt' == address sExt then lastExt' else sExt
                  -- Our starting location remains the same, but in case of an
-                 -- update of the start cont, we can use lastCont' instead of
+                 -- update of the start ext, we can use lastExt' instead of
                  -- re-reading.
            lci = snd lcInfo
-       st' <- if lci < sContI
-               then getLastCont (Just $ sContI - lci + 1) st
+       st' <- if lci < sExtI
+               then getLastExt (Just $ sExtI - lci + 1) st
                     -- NB: We need to start ahead of st, but couldn't adjust
                     -- until after we allocated. This is to catch a corner case
-                    -- where the "start" cont coming into writeStream_lckd
-                    -- refers to a cont that hasn't been allocated yet.
+                    -- where the "start" ext coming into writeStream_lckd
+                    -- refers to a ext that hasn't been allocated yet.
                else return st
        return (st', if isEmbedded st then Just st else Nothing)
 
---   dbug ("sCont' = " ++ show sCont') $ return ()
---   dbug ("minodeCont = " ++ show minodeCont) $ return ()
---   dbug ("Conts immediately after alloc, from sCont'") $ return ()
---   dumpConts (sCont')
+--   dbug ("sExt' = " ++ show sExt') $ return ()
+--   dbug ("minodeExt = " ++ show minodeExt) $ return ()
+--   dbug ("Exts immediately after alloc, from sExt'") $ return ()
+--   dumpExts (sExt')
 
-  assert (sBlkOff < blockCount sCont') $ return ()
+  assert (sBlkOff < blockCount sExt') $ return ()
 
   ------------------------------------------------------------------------------
   -- Truncation
 
-  -- Truncate if needed and obtain (1) the new start cont at which to start
-  -- writing data and (2) possibly a dirty cont to write back into the inode
+  -- Truncate if needed and obtain (1) the new start ext at which to start
+  -- writing data and (2) possibly a dirty ext to write back into the inode
 
-  (sCont'', numBlksFreed, minodeCont') <-
+  (sExt'', numBlksFreed, minodeExt') <-
     if trunc && bytesToAlloc == 0
      then do
-       (cont, nbf) <- truncUnalloc start len (sCont', sContI)
-       return ( cont
+       (ext, nbf) <- truncUnalloc start len (sExt', sExtI)
+       return ( ext
               , nbf
-              , if isEmbedded cont
-                 then case minodeCont of
-                        Nothing -> Just cont
+              , if isEmbedded ext
+                 then case minodeExt of
+                        Nothing -> Just ext
                         Just _  -> -- This "can't happen" ...
-                                  error $ "Internal: dirty inode cont from  "
+                                  error $ "Internal: dirty inode ext from  "
                                           ++ "both allocFill & truncUnalloc!?"
                  else Nothing
               )
-     else return (sCont', 0, minodeCont)
+     else return (sExt', 0, minodeExt)
 
-  assert (blksToAlloc + contsToAlloc == 0 || numBlksFreed == 0) $ return ()
+  assert (blksToAlloc + extsToAlloc == 0 || numBlksFreed == 0) $ return ()
 
   ------------------------------------------------------------------------------
   -- Data streaming
 
-  (eContI, _, _) <- decomp (bdBlockSize dev) (bytesToEnd start len)
-  eCont          <- getLastCont (Just $ (eContI - sContI) + 1) sCont''
-  when (len > 0) $ writeInodeData (sIdx, sCont'') eContI trunc bytes
+  (eExtI, _, _) <- decomp (bdBlockSize dev) (bytesToEnd start len)
+  eExt          <- getLastExt (Just $ (eExtI - sExtI) + 1) sExt''
+  when (len > 0) $ writeInodeData (sIdx, sExt'') eExtI trunc bytes
 
   --------------------------------------------------------------------------------
   -- Inode metadata adjustments & persist
@@ -581,18 +583,18 @@ writeStream_lckd startIR start trunc bytes              = do
   now <- getTime
   lift $ writeInode dev $
     startInode
-    { inoLastCont    = if eContI == sContI
-                        then (address sCont'', sContI)
-                        else (address eCont, eContI)
+    { inoLastExt    = if eExtI == sExtI
+                        then (address sExt'', sExtI)
+                        else (address eExt, eExtI)
     , inoFileSize    = newFileSz
     , inoAllocBlocks = inoAllocBlocks startInode
                        + blksToAlloc
-                       + contsToAlloc
+                       + extsToAlloc
                        - numBlksFreed
     , inoAccessTime  = now
     , inoModifyTime  = now
     , inoChangeTime  = now
-    , inoCont        = maybe (inoCont startInode) id minodeCont'
+    , inoExt         = maybe (inoExt startInode) id minodeExt'
     }
 -- ======================= End inode critical section =======================
 
@@ -662,10 +664,10 @@ fileStat_lckd inr = do
 
 
 --------------------------------------------------------------------------------
--- Inode/Cont stream helper & utility functions
+-- Inode/Ext stream helper & utility functions
 
-isEmbedded :: Cont -> Bool
-isEmbedded = isNilCR . address
+isEmbedded :: Ext -> Bool
+isEmbedded = isNilER . address
 
 freeInode :: HalfsCapable b t r l m =>
              InodeRef -- ^ reference to the inode to remove
@@ -673,9 +675,9 @@ freeInode :: HalfsCapable b t r l m =>
 freeInode inr@(IR addr) =
   withLockedInode inr $ do
     bm    <- hasks hsBlockMap
-    start <- inoCont `fmap` drefInode inr
+    start <- inoExt `fmap` drefInode inr
     freeBlocks bm (blockAddrs start)
-    _numFreed :: Word64 <- freeConts bm start
+    _numFreed :: Word64 <- freeExts bm start
     BM.unalloc1 bm addr
 
 freeBlocks :: HalfsCapable b t r l m =>
@@ -688,16 +690,16 @@ freeBlocks bm addrs =
   -- here by digging for contiguous address subsequences in addrs) before we can
   -- do better.
 
--- | Frees all conts after the given cont, returning the number of blocks freed.
-freeConts :: (HalfsCapable b t r l m, Num a) =>
-             BlockMap b r l -> Cont -> HalfsM b r l m a
-freeConts bm Cont{ continuation = cr }
-  | isNilCR cr = return $ fromInteger 0
-  | otherwise  = drefCont cr >>= contFoldM freeCont (fromInteger 0)
+-- | Frees all exts after the given ext, returning the number of blocks freed.
+freeExts :: (HalfsCapable b t r l m, Num a) =>
+             BlockMap b r l -> Ext -> HalfsM b r l m a
+freeExts bm Ext{ nextExt = cr }
+  | isNilER cr = return $ fromInteger 0
+  | otherwise  = drefExt cr >>= extFoldM freeExt (fromInteger 0)
   where
-    freeCont !acc c =
+    freeExt !acc c =
       freeBlocks bm toFree >> return (acc + genericLength toFree)
-        where toFree = unCR (address c) : blockAddrs c
+        where toFree = unER (address c) : blockAddrs c
 
 withLockedInode :: HalfsCapable b t r l m =>
                    InodeRef         -- ^ reference to inode to lock
@@ -759,62 +761,62 @@ decodeInode bs = do
   case decode bs of
     Left s  -> throwError $ HE_DecodeFail_Inode s
     Right n -> do
-      return n{ inoCont = (inoCont n){ numAddrs = numAddrs' } }
+      return n{ inoExt = (inoExt n){ numAddrs = numAddrs' } }
 
 -- | A wrapper around Data.Serialize.decode that populates transient fields.  We
--- do this to avoid occupying valuable on-disk Cont space where possible.  Bare
--- applications of 'decode' should not occur when deserializing Conts!
-decodeCont :: HalfsCapable b t r l m =>
+-- do this to avoid occupying valuable on-disk Ext space where possible.  Bare
+-- applications of 'decode' should not occur when deserializing Exts!
+decodeExt :: HalfsCapable b t r l m =>
               Word64
            -> ByteString
-           -> HalfsM b r l m Cont
-decodeCont blkSz bs = do
-  numAddrs' <- computeNumContAddrsM blkSz
+           -> HalfsM b r l m Ext
+decodeExt blkSz bs = do
+  numAddrs' <- computeNumExtAddrsM blkSz
   case decode bs of
-    Left s  -> throwError $ HE_DecodeFail_Cont s
+    Left s  -> throwError $ HE_DecodeFail_Ext s
     Right c -> return c{ numAddrs = numAddrs' }
 
--- | Obtain the cont with the given cont index in the cont chain.
--- Currently traverses Conts from either the inode's embedded cont or
--- from the (saved) cont from the last operation, whichever is
+-- | Obtain the ext with the given ext index in the ext chain.
+-- Currently traverses Exts from either the inode's embedded ext or
+-- from the (saved) ext from the last operation, whichever is
 -- closest.
-findCont :: HalfsCapable b t r l m =>
-            Inode t -> Word64 -> HalfsM b r l m Cont
-findCont Inode{ inoLastCont = (lcr, lci), inoCont = defCont } sci
-  | isNilCR lcr || lci > sci = getLastCont (Just $ sci + 1) defCont
-  | otherwise = getLastCont (Just $ sci - lci + 1) =<< drefCont lcr
+findExt :: HalfsCapable b t r l m =>
+            Inode t -> Word64 -> HalfsM b r l m Ext
+findExt Inode{ inoLastExt = (ler, lci), inoExt = defExt } sci
+  | isNilER ler || lci > sci = getLastExt (Just $ sci + 1) defExt
+  | otherwise = getLastExt (Just $ sci - lci + 1) =<< drefExt ler
 
--- | Allocate the given number of Conts and blocks, and fill blocks into the
--- cont chain starting at the given cont.  Persists dirty conts and yields a new
--- start cont to use.
+-- | Allocate the given number of Exts and blocks, and fill blocks into the
+-- ext chain starting at the given ext.  Persists dirty exts and yields a new
+-- start ext to use.
 allocFill :: HalfsCapable b t r l m =>
-             (Cont -> Word64)    -- ^ Available blocks function
+             (Ext -> Word64)    -- ^ Available blocks function
           -> Word64              -- ^ Number of blocks to allocate
-          -> Word64              -- ^ Number of conts to allocate
-          -> Cont                -- ^ Last allocated cont
-          -> HalfsM b r l m Cont -- ^ Updated last cont
-allocFill _     0           _            eCont = return eCont
-allocFill avail blksToAlloc contsToAlloc eCont = do
+          -> Word64              -- ^ Number of exts to allocate
+          -> Ext                -- ^ Last allocated ext
+          -> HalfsM b r l m Ext -- ^ Updated last ext
+allocFill _     0           _            eExt = return eExt
+allocFill avail blksToAlloc extsToAlloc eExt = do
   dev      <- hasks hsBlockDev
   bm       <- hasks hsBlockMap
-  newConts <- allocConts dev bm
+  newExts <- allocExts dev bm
   blks     <- allocBlocks bm
 
-  -- Fill continuation fields to form the region that we'll fill with the newly
+  -- Fill nextExt fields to form the region that we'll fill with the newly
   -- allocated blocks (i.e., starting at the end of the already-allocated region
-  -- from the start cont, but including the newly allocated conts as well).
+  -- from the start ext, but including the newly allocated exts as well).
 
-  let (_, region) = foldr (\c (cr, !acc) ->
+  let (_, region) = foldr (\c (er, !acc) ->
                              ( address c
-                             , c{ continuation = cr } : acc
+                             , c{ nextExt = er } : acc
                              )
                           )
-                          (nilCR, [])
-                          (eCont : newConts)
+                          (nilER, [])
+                          (eExt : newExts)
 
   -- "Spill" the allocated blocks into the empty region
   let (blks', k)               = foldl fillBlks (blks, id) region
-      dirtyConts@(eCont':_)    = k []
+      dirtyExts@(eExt':_)    = k []
       fillBlks (remBlks, k') c =
         let cnt    = min (safeToInt $ avail c) (length remBlks)
             c'     = c { blockCount = blockCount c + fromIntegral cnt
@@ -825,8 +827,8 @@ allocFill avail blksToAlloc contsToAlloc eCont = do
 
   assert (null blks') $ return ()
 
-  forM_ (dirtyConts)  $ \c -> unless (isEmbedded c) $ lift $ writeCont dev c
-  return eCont'
+  forM_ (dirtyExts)  $ \c -> unless (isEmbedded c) $ lift $ writeExt dev c
+  return eExt'
   where
     allocBlocks bm = do
       -- currently "flattens" BlockGroup; see comment in writeStream
@@ -835,74 +837,74 @@ allocFill avail blksToAlloc contsToAlloc eCont = do
         Nothing -> throwError HE_AllocFailed
         Just bg -> return $ BM.blkRangeBG bg
     --
-    allocConts dev bm =
-      if 0 == contsToAlloc
+    allocExts dev bm =
+      if 0 == extsToAlloc
       then return []
       else do
         -- TODO: Unalloc partial allocs on HE_AllocFailed?
-        mconts <- fmap sequence $ replicateM (safeToInt contsToAlloc) $ do
-          mcr <- fmap CR `fmap` BM.alloc1 bm
+        mexts <- fmap sequence $ replicateM (safeToInt extsToAlloc) $ do
+          mcr <- fmap ER `fmap` BM.alloc1 bm
           case mcr of
             Nothing -> return Nothing
-            Just cr -> Just `fmap` lift (buildEmptyCont dev cr)
-        maybe (throwError HE_AllocFailed) (return) mconts
+            Just cr -> Just `fmap` lift (buildEmptyExt dev cr)
+        maybe (throwError HE_AllocFailed) (return) mexts
 
 -- | Truncates the stream at the given a stream index and length offset, and
 -- unallocates all resources in the corresponding free region, yielding a new
--- Cont for the truncated chain.
+-- Ext for the truncated chain.
 truncUnalloc ::
   HalfsCapable b t r l m =>
      Word64         -- ^ Starting stream byte index
   -> Word64         -- ^ Length from start at which to truncate
-  -> (Cont, Word64) -- ^ Start cont of chain to truncate, start cont idx
-  -> HalfsM b r l m (Cont, Word64)
-     -- ^ new start cont, number of blocks freed
-truncUnalloc start len (stCont, sContI) = do
+  -> (Ext, Word64) -- ^ Start ext of chain to truncate, start ext idx
+  -> HalfsM b r l m (Ext, Word64)
+     -- ^ new start ext, number of blocks freed
+truncUnalloc start len (stExt, sExtI) = do
   dev <- hasks hsBlockDev
   bm  <- hasks hsBlockMap
 
-  (eContI, eBlkOff, _) <- decomp (bdBlockSize dev) (bytesToEnd start len)
-  assert (eContI >= sContI) $ return ()
+  (eExtI, eBlkOff, _) <- decomp (bdBlockSize dev) (bytesToEnd start len)
+  assert (eExtI >= sExtI) $ return ()
 
-  -- Get the (new) end of the cont chain. Retain all conts in [sContI, eContI].
-  eCont <- getLastCont (Just $ eContI - sContI + 1) stCont
+  -- Get the (new) end of the ext chain. Retain all exts in [sExtI, eExtI].
+  eExt <- getLastExt (Just $ eExtI - sExtI + 1) stExt
 
   let keepBlkCnt  = if start + len == 0 then 0 else eBlkOff + 1
-      endContRem  = genericDrop keepBlkCnt (blockAddrs eCont)
+      endExtRem  = genericDrop keepBlkCnt (blockAddrs eExt)
 
-  freeBlocks bm endContRem
-  numFreed <- (+ (genericLength endContRem)) `fmap` freeConts bm eCont
+  freeBlocks bm endExtRem
+  numFreed <- (+ (genericLength endExtRem)) `fmap` freeExts bm eExt
 
-  -- Currently, only eCont is considered dirty; we do *not* do any writes to any
-  -- of the Conts that are detached from the chain & freed (we just toss them
+  -- Currently, only eExt is considered dirty; we do *not* do any writes to any
+  -- of the Exts that are detached from the chain & freed (we just toss them
   -- out); this may have implications for fsck.
-  let dirtyConts@(firstDirty:_) =
+  let dirtyExts@(firstDirty:_) =
         [
-          -- eCont, adjusted to discard the freed blocks and clear the
-          -- continuation field.
-          eCont { blockCount   = keepBlkCnt
-                , blockAddrs   = genericTake keepBlkCnt (blockAddrs eCont)
-                , continuation = nilCR
+          -- eExt, adjusted to discard the freed blocks and clear the
+          -- nextExt field.
+          eExt { blockCount  = keepBlkCnt
+                , blockAddrs = genericTake keepBlkCnt (blockAddrs eExt)
+                , nextExt    = nilER
                 }
         ]
-      stCont' = if sContI == eContI then firstDirty else stCont
+      stExt' = if sExtI == eExtI then firstDirty else stExt
 
-  forM_ (dirtyConts) $ \c -> unless (isEmbedded c) $ lift $ writeCont dev c
-  return (stCont', numFreed)
+  forM_ (dirtyExts) $ \c -> unless (isEmbedded c) $ lift $ writeExt dev c
+  return (stExt', numFreed)
 
 -- | Write the given bytes to the already-allocated/truncated inode data stream
--- starting at the given start indices (cont/blk/byte offsets) and ending when
--- we have traversed up (and including) to the end cont index.  Assumes the
+-- starting at the given start indices (ext/blk/byte offsets) and ending when
+-- we have traversed up (and including) to the end ext index.  Assumes the
 -- inode lock is held.
 writeInodeData :: HalfsCapable b t r l m =>
-                  (StreamIdx, Cont)
+                  (StreamIdx, Ext)
                -> Word64
                -> Bool
                -> ByteString
                -> HalfsM b r l m ()
-writeInodeData ((sContI, sBlkOff, sByteOff), sCont) eContI trunc bytes = do
+writeInodeData ((sExtI, sBlkOff, sByteOff), sExt) eExtI trunc bytes = do
   dev  <- hasks hsBlockDev
-  sBlk <- lift $ readBlock dev sCont sBlkOff
+  sBlk <- lift $ readBlock dev sExt sBlkOff
   let bs      = bdBlockSize dev
       toWrite =
         -- The first block-sized chunk to write is the region in the start block
@@ -920,15 +922,15 @@ writeInodeData ((sContI, sBlkOff, sByteOff), sCont) eContI trunc bytes = do
         in assert (fromIntegral (BS.length fstBlk) == bs) $
              fstBlk `BS.append` bytes'
 
-  -- The unfoldr seed is: current cont/idx, a block offset "supply", and the
+  -- The unfoldr seed is: current ext/idx, a block offset "supply", and the
   -- data that remains to be written.
-  unfoldrM_ (fillCont dev) ((sCont, sContI), sBlkOff : repeat 0,  toWrite)
+  unfoldrM_ (fillExt dev) ((sExt, sExtI), sBlkOff : repeat 0,  toWrite)
   where
-    fillCont _ (_, [], _) = error "The impossible happened"
-    fillCont dev ((cCont, cContI), blkOff:boffs, toWrite)
-      | cContI > eContI || BS.null toWrite = return Nothing
+    fillExt _ (_, [], _) = error "The impossible happened"
+    fillExt dev ((cExt, cExtI), blkOff:boffs, toWrite)
+      | cExtI > eExtI || BS.null toWrite = return Nothing
       | otherwise = do
-          let blkAddrs  = genericDrop blkOff (blockAddrs cCont)
+          let blkAddrs  = genericDrop blkOff (blockAddrs cExt)
               split crs = let (cs, rems) = unzip crs in (cs, last rems)
               gbc       = lift . getBlockContents dev trunc
 
@@ -939,11 +941,11 @@ writeInodeData ((sContI, sBlkOff, sByteOff), sCont) eContI trunc bytes = do
 
           mapM_ (lift . uncurry (bdWriteBlock dev)) (blkAddrs `zip` chunks)
 
-          if isNilCR (continuation cCont)
+          if isNilER (nextExt cExt)
            then assert (BS.null remBytes) $ return Nothing
            else do
-             nextCont <- drefCont (continuation cCont)
-             return $ Just $ ((), ((nextCont, cContI+1), boffs, remBytes))
+             nextExt' <- drefExt (nextExt cExt)
+             return $ Just $ ((), ((nextExt', cExtI+1), boffs, remBytes))
 
 
 -- | Splits the input bytestring into block-sized chunks; may read from the
@@ -980,63 +982,63 @@ getBlockContents dev trunc (s, blkAddr:blkAddrs) = do
      -- Full block; nothing to see here
      return $ Just ((newBlkData, remBytes), (remBytes, blkAddrs))
 
--- | Reads the contents of the given conts's ith block
+-- | Reads the contents of the given exts's ith block
 readBlock :: (Monad m) =>
              BlockDevice m
-          -> Cont
+          -> Ext
           -> Word64
           -> m ByteString
 readBlock dev c i = do
   assert (i < blockCount c) $ return ()
   bdReadBlock dev (blockAddrs c !! safeToInt i)
 
-writeCont :: Monad m =>
-             BlockDevice m -> Cont -> m ()
-writeCont dev c =
-  dbug ("  ==> Writing cont: " ++ show c ) $
-  bdWriteBlock dev (unCR $ address c) (encode c)
+writeExt :: Monad m =>
+             BlockDevice m -> Ext -> m ()
+writeExt dev c =
+  dbug ("  ==> Writing ext: " ++ show c ) $
+  bdWriteBlock dev (unER $ address c) (encode c)
 
 writeInode :: (Monad m, Ord t, Serialize t, Show t) =>
               BlockDevice m -> Inode t -> m ()
 writeInode dev n = bdWriteBlock dev (unIR $ inoAddress n) (encode n)
 
--- | Expands the given Cont into a Cont list containing itself followed by zero
--- or more Conts; can be bounded by a positive nonzero value to only retrieve
--- (up to) the given number of conts.
-expandConts :: HalfsCapable b t r l m =>
-               Maybe Word64 -> Cont -> HalfsM b r l m [Cont]
-expandConts (Just bnd) start@Cont{ continuation = cr }
-  | bnd == 0                      = throwError HE_InvalidContIdx
-  | isNilCR cr || bnd == 1 = return [start]
+-- | Expands the given Ext into a Ext list containing itself followed by zero
+-- or more Exts; can be bounded by a positive nonzero value to only retrieve
+-- (up to) the given number of exts.
+expandExts :: HalfsCapable b t r l m =>
+               Maybe Word64 -> Ext -> HalfsM b r l m [Ext]
+expandExts (Just bnd) start@Ext{ nextExt = cr }
+  | bnd == 0                      = throwError HE_InvalidExtIdx
+  | isNilER cr || bnd == 1 = return [start]
   | otherwise                     = do
-      (start:) `fmap` (drefCont cr >>= expandConts (Just (bnd - 1)))
-expandConts Nothing start@Cont{ continuation = cr }
-  | isNilCR cr = return [start]
+      (start:) `fmap` (drefExt cr >>= expandExts (Just (bnd - 1)))
+expandExts Nothing start@Ext{ nextExt = cr }
+  | isNilER cr = return [start]
   | otherwise        = do
-      (start:) `fmap` (drefCont cr >>= expandConts Nothing)
+      (start:) `fmap` (drefExt cr >>= expandExts Nothing)
 
-getLastCont :: HalfsCapable b t r l m =>
-               Maybe Word64 -> Cont -> HalfsM b r l m Cont
-getLastCont mbnd c = last `fmap` expandConts mbnd c
+getLastExt :: HalfsCapable b t r l m =>
+               Maybe Word64 -> Ext -> HalfsM b r l m Ext
+getLastExt mbnd c = last `fmap` expandExts mbnd c
 
-contFoldM :: HalfsCapable b t r l m =>
-             (a -> Cont -> HalfsM b r l m a) -> a -> Cont -> HalfsM b r l m a
-contFoldM f a c@Cont{ continuation = cr }
-  | isNilCR cr = f a c
-  | otherwise  = f a c >>= \fac -> drefCont cr >>= contFoldM f fac
+extFoldM :: HalfsCapable b t r l m =>
+             (a -> Ext -> HalfsM b r l m a) -> a -> Ext -> HalfsM b r l m a
+extFoldM f a c@Ext{ nextExt = cr }
+  | isNilER cr = f a c
+  | otherwise  = f a c >>= \fac -> drefExt cr >>= extFoldM f fac
 
-contMapM :: HalfsCapable b t r l m =>
-            (Cont -> HalfsM b r l m a) -> Cont -> HalfsM b r l m [a]
-contMapM f c@Cont{ continuation = cr }
-  | isNilCR cr = liftM (:[]) (f c)
-  | otherwise  = liftM2 (:) (f c) (drefCont cr >>= contMapM f)
+extMapM :: HalfsCapable b t r l m =>
+            (Ext -> HalfsM b r l m a) -> Ext -> HalfsM b r l m [a]
+extMapM f c@Ext{ nextExt = cr }
+  | isNilER cr = liftM (:[]) (f c)
+  | otherwise  = liftM2 (:) (f c) (drefExt cr >>= extMapM f)
 
-drefCont :: HalfsCapable b t r l m =>
-            ContRef -> HalfsM b r l m Cont
-drefCont cr@(CR addr) | isNilCR cr = throwError HE_InvalidContIdx
+drefExt :: HalfsCapable b t r l m =>
+            ExtRef -> HalfsM b r l m Ext
+drefExt cr@(ER addr) | isNilER cr = throwError HE_InvalidExtIdx
                       | otherwise  = do
       dev <- hasks hsBlockDev
-      lift (bdReadBlock dev addr) >>= decodeCont (bdBlockSize dev)
+      lift (bdReadBlock dev addr) >>= decodeExt (bdBlockSize dev)
 
 drefInode :: HalfsCapable b t r l m =>
              InodeRef -> HalfsM b r l m (Inode t)
@@ -1048,23 +1050,23 @@ setChangeTime :: (Ord t, Serialize t) => t -> Inode t -> Inode t
 setChangeTime t nd = nd{ inoChangeTime = t }
 
 -- | Decompose the given absolute byte offset into an inode's data stream into
--- Cont index (i.e., 0-based index into the cont chain), a block offset within
--- that Cont, and a byte offset within that block.
+-- Ext index (i.e., 0-based index into the ext chain), a block offset within
+-- that Ext, and a byte offset within that block.
 decomp :: (Serialize t, Timed t m, Monad m, Show t) =>
           Word64 -- ^ Block size, in bytes
        -> Word64 -- ^ Offset into the data stream
        -> HalfsM b r l m StreamIdx
 decomp blkSz streamOff = do
-  -- Note that the first Cont in a Cont chain always gets embedded in an Inode,
-  -- and thus has differing capacity than the rest of the Conts, which are of
+  -- Note that the first Ext in a Ext chain always gets embedded in an Inode,
+  -- and thus has differing capacity than the rest of the Exts, which are of
   -- uniform size.
-  (stContBytes, contBytes, _, _) <- hasks hsSizes
-  let (contIdx, contByteIdx) =
-        if streamOff >= stContBytes
-        then fmapFst (+1) $ (streamOff - stContBytes) `divMod` contBytes
+  (stExtBytes, extBytes, _, _) <- hasks hsSizes
+  let (extIdx, extByteIdx) =
+        if streamOff >= stExtBytes
+        then fmapFst (+1) $ (streamOff - stExtBytes) `divMod` extBytes
         else (0, streamOff)
-      (blkOff, byteOff)      = contByteIdx `divMod` blkSz
-  return (contIdx, blkOff, byteOff)
+      (blkOff, byteOff)      = extByteIdx `divMod` blkSz
+  return (extIdx, blkOff, byteOff)
 
 getStreamIdx :: HalfsCapable b t r l m =>
                 Word64 -- block size in bytse
@@ -1127,18 +1129,18 @@ magic2 = BS.pack $ take 8 $ drop  8 magicBytes
 magic3 = BS.pack $ take 8 $ drop 16 magicBytes
 magic4 = BS.pack $ take 8 $ drop 24 magicBytes
 
-magicContStr :: String
-magicContStr = "!!erutcurts tnoC sflah a si sihT"
+magicExtStr :: String
+magicExtStr = "!!erutcurts tnoC sflah a si sihT"
 
-magicContBytes :: [Word8]
-magicContBytes = assert (length magicContStr == 32) $
-                   map (fromIntegral . ord) magicContStr
+magicExtBytes :: [Word8]
+magicExtBytes = assert (length magicExtStr == 32) $
+                   map (fromIntegral . ord) magicExtStr
 
 cmagic1, cmagic2, cmagic3, cmagic4 :: ByteString
-cmagic1 = BS.pack $ take 8 $ drop  0 magicContBytes
-cmagic2 = BS.pack $ take 8 $ drop  8 magicContBytes
-cmagic3 = BS.pack $ take 8 $ drop 16 magicContBytes
-cmagic4 = BS.pack $ take 8 $ drop 24 magicContBytes
+cmagic1 = BS.pack $ take 8 $ drop  0 magicExtBytes
+cmagic2 = BS.pack $ take 8 $ drop  8 magicExtBytes
+cmagic3 = BS.pack $ take 8 $ drop 16 magicExtBytes
+cmagic4 = BS.pack $ take 8 $ drop 24 magicExtBytes
 
 --------------------------------------------------------------------------------
 -- Typeclass instances
@@ -1148,7 +1150,7 @@ instance (Show t, Eq t, Ord t, Serialize t) => Serialize (Inode t) where
     putByteString $ magic1
 
     put           $ inoParent n
-    put           $ inoLastCont n
+    put           $ inoLastExt n
     put           $ inoAddress n
     putWord64be   $ inoFileSize n
     putWord64be   $ inoAllocBlocks n
@@ -1167,12 +1169,12 @@ instance (Show t, Eq t, Ord t, Serialize t) => Serialize (Inode t) where
 
     putByteString $ magic3
 
-    put           $ inoCont n
+    put           $ inoExt n
 
-    -- NB: For Conts that are inside inodes, the Serialize instance for Cont
+    -- NB: For Exts that are inside inodes, the Serialize instance for Ext
     -- relies on only 8 + iPadSize bytes beyond this point (the inode magic
     -- number and some padding).  If you change this, you'll need to update the
-    -- related calculations in Serialize Cont's get function!
+    -- related calculations in Serialize Ext's get function!
     putByteString magic4
     replicateM_ iPadSize $ putWord8 padSentinel
 
@@ -1209,7 +1211,7 @@ instance (Show t, Eq t, Ord t, Serialize t) => Serialize (Inode t) where
 
     return Inode
       { inoParent      = par
-      , inoLastCont    = lcr
+      , inoLastExt    = lcr
       , inoAddress     = addr
       , inoFileSize    = fsz
       , inoAllocBlocks = blks
@@ -1222,25 +1224,25 @@ instance (Show t, Eq t, Ord t, Serialize t) => Serialize (Inode t) where
       , inoChangeTime  = chtm
       , inoUser        = usr
       , inoGroup       = grp
-      , inoCont        = c
+      , inoExt        = c
       }
    where
     checkMagic x = do
       magic <- getBytes 8
       unless (magic == x) $ fail "Invalid Inode: magic number mismatch"
 
-instance Serialize Cont where
+instance Serialize Ext where
   put c = do
     unless (numBlocks <= numAddrs') $
-      fail $ "Corrupted Cont structure put: too many blocks"
+      fail $ "Corrupted Ext structure put: too many blocks"
 
-    -- dbugM $ "Cont.put: numBlocks = " ++ show numBlocks
-    -- dbugM $ "Cont.put: blocks = " ++ show blocks
-    -- dbugM $ "Cont.put: fillBlocks = " ++ show fillBlocks
+    -- dbugM $ "Ext.put: numBlocks = " ++ show numBlocks
+    -- dbugM $ "Ext.put: blocks = " ++ show blocks
+    -- dbugM $ "Ext.put: fillBlocks = " ++ show fillBlocks
 
     putByteString $ cmagic1
     put           $ address c
-    put           $ continuation c
+    put           $ nextExt c
     putByteString $ cmagic2
     putWord64be   $ blockCount c
     putByteString $ cmagic3
@@ -1258,45 +1260,45 @@ instance Serialize Cont where
   get = do
     checkMagic cmagic1
     addr <- get
-    dbugM $ "decodeCont: addr = " ++ show addr
-    cont <- get
-    dbugM $ "decodeCont: cont = " ++ show cont
+    dbugM $ "decodeExt: addr = " ++ show addr
+    ext <- get
+    dbugM $ "decodeExt: ext = " ++ show ext
     checkMagic cmagic2
     blkCnt <- getWord64be
-    dbugM $ "decodeCont: blkCnt = " ++ show blkCnt
+    dbugM $ "decodeExt: blkCnt = " ++ show blkCnt
     checkMagic cmagic3
 
-    -- Some calculations differ slightly based on whether or not this Cont is
+    -- Some calculations differ slightly based on whether or not this Ext is
     -- embedded in an inode; in particular, the Inode writes a terminating magic
-    -- number after the end of the serialized Cont, so we must account for that
+    -- number after the end of the serialized Ext, so we must account for that
     -- when calculating the number of blocks to read below.
 
-    let isEmbeddedCont = addr == nilCR
-    dbugM $ "decodeCont: isEmbeddedCont = " ++ show isEmbeddedCont
+    let isEmbeddedExt = addr == nilER
+    dbugM $ "decodeExt: isEmbeddedExt = " ++ show isEmbeddedExt
     numBlockBytes <- do
       remb <- fmap fromIntegral G.remaining
-      dbugM $ "decodeCont: remb = " ++ show remb
+      dbugM $ "decodeExt: remb = " ++ show remb
       dbugM $ "--"
       let numTrailingBytes =
-            if isEmbeddedCont
+            if isEmbeddedExt
             then 8 + fromIntegral cPadSize + 8 + fromIntegral iPadSize
                  -- cmagic4, padding, inode's magic4, inode's padding <EOS>
             else 8 + fromIntegral cPadSize
                  -- cmagic4, padding, <EOS>
-      dbugM $ "decodeCont: numTrailingBytes = " ++ show numTrailingBytes
+      dbugM $ "decodeExt: numTrailingBytes = " ++ show numTrailingBytes
       return (remb - numTrailingBytes)
-    dbugM $ "decodeCont: numBlockBytes = " ++ show numBlockBytes
+    dbugM $ "decodeExt: numBlockBytes = " ++ show numBlockBytes
 
     let (numBlocks, check) = numBlockBytes `divMod` refSize
-    dbugM $ "decodeCont: numBlocks = " ++ show numBlocks
-    -- dbugM $ "decodeCont: numBlockBytes = " ++ show numBlockBytes
-    -- dbugM $ "decodeCont: refSzie = " ++ show refSize
-    -- dbugM $ "decodeCont: check = " ++ show check
+    dbugM $ "decodeExt: numBlocks = " ++ show numBlocks
+    -- dbugM $ "decodeExt: numBlockBytes = " ++ show numBlockBytes
+    -- dbugM $ "decodeExt: refSzie = " ++ show refSize
+    -- dbugM $ "decodeExt: check = " ++ show check
 
-    unless (check == 0) $ fail "Cont: Bad remaining byte count for block list."
-    unless (not isEmbeddedCont && numBlocks >= minContBlocks ||
-            isEmbeddedCont     && numBlocks >= minInodeBlocks) $
-      fail "Cont: Not enough space left for minimum number of blocks."
+    unless (check == 0) $ fail "Ext: Bad remaining byte count for block list."
+    unless (not isEmbeddedExt && numBlocks >= minExtBlocks ||
+            isEmbeddedExt     && numBlocks >= minInodeBlocks) $
+      fail "Ext: Not enough space left for minimum number of blocks."
 
     blks <- filter (/= 0) `fmap` replicateM (safeToInt numBlocks) get
 
@@ -1305,11 +1307,11 @@ instance Serialize Cont where
     assert (all (== padSentinel) padding) $ return ()
 
     let na = error $ "numAddrs has not been populated via Data.Serialize.get "
-                  ++ "for Cont; did you forget to use the "
-                  ++ "Inode.decodeCont wrapper?"
-    return Cont
+                  ++ "for Ext; did you forget to use the "
+                  ++ "Inode.decodeExt wrapper?"
+    return Ext
            { address      = addr
-           , continuation = cont
+           , nextExt      = ext
            , blockCount   = blkCnt
            , blockAddrs   = blks
            , numAddrs     = na
@@ -1317,21 +1319,21 @@ instance Serialize Cont where
    where
     checkMagic x = do
       magic <- getBytes 8
-      unless (magic == x) $ fail "Invalid Cont: magic number mismatch"
+      unless (magic == x) $ fail "Invalid Ext: magic number mismatch"
 
 --------------------------------------------------------------------------------
 -- Debugging cruft
 
-_dumpConts :: HalfsCapable b t r l m =>
-              Cont -> HalfsM b r l m ()
-_dumpConts stCont = do
-  conts <- expandConts Nothing stCont
-  if null conts
-   then dbug ("=== No conts ===") $ return ()
+_dumpExts :: HalfsCapable b t r l m =>
+              Ext -> HalfsM b r l m ()
+_dumpExts stExt = do
+  exts <- expandExts Nothing stExt
+  if null exts
+   then dbug ("=== No exts ===") $ return ()
    else do
-     dbug ("=== Conts ===") $ return ()
-     mapM_ (\c -> dbug ("  " ++ show c) $ return ()) conts
+     dbug ("=== Exts ===") $ return ()
+     mapM_ (\c -> dbug ("  " ++ show c) $ return ()) exts
 
 _allowNoUsesOf :: HalfsCapable b t r l m => HalfsM b r l m ()
 _allowNoUsesOf = do
-  contMapM undefined undefined >> return ()
+  extMapM undefined undefined >> return ()

@@ -20,16 +20,16 @@ import Test.QuickCheck.Monadic hiding (assert)
 
 import Halfs.BlockMap            (Extent(..))
 
-import Halfs.Inode               ( Cont(..)
-                                 , ContRef(..)
+import Halfs.Inode               ( Ext(..)
+                                 , ExtRef(..)
                                  , Inode(..)
                                  , InodeRef(..)
                                  , computeNumAddrs
-                                 , minimalContSize
+                                 , minimalExtSize
                                  , computeMinimalInodeSize
-                                 , minContBlocks
+                                 , minExtBlocks
                                  , minInodeBlocks
-                                 , nilCR
+                                 , nilER
                                  )
 import Halfs.Directory
 import Halfs.Protection          (UserID(..), GroupID(..))
@@ -206,7 +206,7 @@ instance (Arbitrary a, Ord a, Serialize a, Show a) => Arbitrary (Inode a) where
                         =<< computeMinimalInodeSize createTm
     Inode
       <$> IR `fmap` arbitrary                -- inoParent
-      <*> return (nilCR, 0)                  -- inoLastCR
+      <*> return (nilER, 0)                  -- inoLastER
       <*> IR `fmap` arbitrary                -- inoAddress
       <*> arbitrary                          -- inoFileSize
       <*> arbitrary                          -- inoAllocBlocks
@@ -222,7 +222,7 @@ instance (Arbitrary a, Ord a, Serialize a, Show a) => Arbitrary (Inode a) where
       <*> (arbitrary >>= \cont -> do         -- inoCont
              let blockCount' = min (blockCount cont) addrCnt
              return
-               cont{ address    = nilCR
+               cont{ address    = nilER
                    , blockCount = blockCount'
                    , blockAddrs = genericTake blockCount' (blockAddrs cont)
                    , numAddrs   = min (numAddrs cont) addrCnt
@@ -230,17 +230,16 @@ instance (Arbitrary a, Ord a, Serialize a, Show a) => Arbitrary (Inode a) where
           )
 
 
--- Generate an arbitrary inode 'continuation' (a Cont) with coherent
--- fields based on the minimal cont size computaton for an arbitrary
--- device geometry
-instance Arbitrary Cont where
+-- Generate an arbitrary inode 'extension' (i.e., an Ext) with coherent fields
+-- based on the minimal ext size computaton for an arbitrary device geometry
+instance Arbitrary Ext where
   arbitrary = do
     BDGeom _ blkSz <- arbitrary
-    addrCnt        <- computeNumAddrs blkSz minContBlocks =<< minimalContSize
+    addrCnt        <- computeNumAddrs blkSz minExtBlocks =<< minimalExtSize
     numBlocks      <- fromIntegral `fmap` choose (0, addrCnt)
-    Cont
-      <$> CR `fmap` (arbitrary `suchThat` (>=1)) -- address
-      <*> CR `fmap` arbitrary                    -- continuation
+    Ext
+      <$> ER `fmap` (arbitrary `suchThat` (>=1)) -- address
+      <*> ER `fmap` arbitrary                    -- nextExt
       <*> return (fromIntegral numBlocks)        -- blockCount
       <*> replicateM numBlocks validBlockAddr    -- blockAddrs
       -- Transient:

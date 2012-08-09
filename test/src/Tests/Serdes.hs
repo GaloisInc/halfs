@@ -35,7 +35,7 @@ qcProps quick =
   [ serdes prop_serdes 100 "SuperBlock"     (arbitrary :: Gen SuperBlock)
   , serdes prop_serdes 100 "UTCTime"        (arbitrary :: Gen UTCTime)
   , serdes prop_serdes 100 "DirectoryEntry" (arbitrary :: Gen DirectoryEntry)
-  , mkMemDevExec quick "Serdes" 100 "Cont"  propM_contSerdes
+  , mkMemDevExec quick "Serdes" 100 "Ext"  propM_extSerdes
   , mkMemDevExec quick "Serdes" 100 "Inode" propM_inodeSerdes
   ]
   where
@@ -64,16 +64,16 @@ propM_inodeSerdes _g dev = forAllM (arbitrary :: Gen (Inode UTCTime)) $ \i -> do
   runH dummyEnv (decodeInode (encode i))
     >>= assert . either (const False) (eq i nAddrs)
   where
-    eq inode na = (==) inode{ inoCont = (inoCont inode){ numAddrs = na } }
+    eq inode na = (==) inode{ inoExt = (inoExt inode){ numAddrs = na } }
 
-propM_contSerdes :: HalfsCapable b UTCTime r l m =>
+propM_extSerdes :: HalfsCapable b UTCTime r l m =>
                      BDGeom
                   -> BlockDevice m
                   -> PropertyM m ()
-propM_contSerdes _g dev = forAllM (arbitrary :: Gen Cont) $ \cont -> do
-  -- NB: We fill in the numAddrs field of the arbitrary Cont here based on the
+propM_extSerdes _g dev = forAllM (arbitrary :: Gen Ext) $ \ext -> do
+  -- NB: We fill in the numAddrs field of the arbitrary Ext here based on the
   -- device geometry rather than using the value given to us by the generator,
   -- which is arbitrary.
-  nAddrs <- computeNumAddrs (bdBlockSize dev) minContBlocks =<< minimalContSize
-  runHNoEnv (decodeCont (bdBlockSize dev) (encode cont))
-    >>= assert . either (const False) (== cont{ numAddrs = nAddrs })
+  nAddrs <- computeNumAddrs (bdBlockSize dev) minExtBlocks =<< minimalExtSize
+  runHNoEnv (decodeExt (bdBlockSize dev) (encode ext))
+    >>= assert . either (const False) (== ext{ numAddrs = nAddrs })

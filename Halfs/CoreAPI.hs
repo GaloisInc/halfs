@@ -251,11 +251,11 @@ fsck' dev sb used pinr inr = do
          logMsg "fsck: Critical failure: couldn't decode root directory"
          return Nothing
     --
-    val nd@Inode{ inoCont = cont, inoFileType = ftype } = do
+    val nd@Inode{ inoExt = ext, inoFileType = ftype } = do
       assert (inoAddress nd == inr) $ return ()
-      whenValid (drop 1 `fmap` expandConts Nothing cont) $ \conts -> do
+      whenValid (drop 1 `fmap` expandExts Nothing ext) $ \exts -> do
         let markUsed = mapM_ (setBit used) $
-                         unIR inr : map (unCR . address) conts
+                         unIR inr : map (unER . address) exts
         case ftype of
           Directory -> do
             whenValid (newDirHandle inr) $ \thisDH -> do
