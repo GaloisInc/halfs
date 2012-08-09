@@ -298,6 +298,10 @@ instance Arbitrary DiffTime where
                                       -- resolution
     return $ secondsToDiffTime sec + picosecondsToDiffTime ps
 
+instance Random Word64 where
+  randomR = integralRandomR
+  random  = randomR (minBound, maxBound)
+
 integralRandomR :: (Integral a, RandomGen g) => (a,a) -> g -> (a,g)
 integralRandomR (a,b) g =
   case randomR (fromIntegral a :: Integer, fromIntegral b :: Integer) g of
