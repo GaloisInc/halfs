@@ -12,7 +12,7 @@ category:       System
 stability:      experimental
 build-type:     Simple
 cabal-version:  >= 1.8
-tested-with:    GHC == 6.8.0
+tested-with:    GHC == 7.0.4 
 
 flag build-tests
   description: Build the test executables
@@ -95,7 +95,7 @@ executable halfs-tests
 
 executable halfs
   build-depends:
-                 HFuse >= 0.2.4,
+                 HFuse >= 0.2.4.1,
                  array,
                  base,
                  bytestring,
