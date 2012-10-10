@@ -6,9 +6,12 @@ author:        Joel Stanley <intractable@gmail.com>,
                Adam Wick <awick@galois.com>,
                Isaac Jones <ijones@galois.com>
 maintainer:    Joel Stanley <intractable@gmail.com>
-description:   A library implementing a file system in Haskell given an
-               underlying block layer.  Implemented atop FUSE.
-synopsis:      The Haskell File System (intended for use on the HaLVM)
+description:   A library implementing a file system suitable for use in 
+               HaLVMs.  Provides useful abstractions over the underlying 
+               block layer.  Implemented atop FUSE.  Note: This is a new
+               implementation of the halfs project, and bears little to
+               no resemblance to halfs 0.2.
+synopsis:      The HAskelL File System ("halfs" -- intended for use on the HaLVM)
 category:      System
 stability:     experimental
 build-type:    Simple
@@ -17,7 +20,7 @@ tested-with:   GHC == 7.0.4
 
 source-repository head
   type:     git
-  location: git clone https://github.com/GaloisInc/halfs.git 
+  location: https://github.com/GaloisInc/halfs.git 
 
 flag build-tests
   description: Build the test executables
@@ -26,7 +29,7 @@ library
   build-depends:
                     QuickCheck,
                     array,
-                    base,
+                    base >= 3 && <= 4,
                     bytestring,
                     cereal,
                     containers,
@@ -81,7 +84,7 @@ executable halfs-tests
   build-depends:
                  QuickCheck,
                  array,
-                 base,
+                 base >= 3 && < 5,
                  bytestring,
                  cereal,
                  containers,
@@ -102,7 +105,7 @@ executable halfs
   build-depends:
                  HFuse >= 0.2.4.1,
                  array,
-                 base,
+                 base >= 3 && < 5,
                  bytestring,
                  containers,
                  directory,
