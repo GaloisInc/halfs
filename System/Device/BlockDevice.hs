@@ -150,7 +150,7 @@ evictEntry m d
   | otherwise               = return $! Map.delete oldestEntry m
  where
   (oldestEntry, (block, dirty, _)) =
-    Map.foldWithKey (\ i igrp@(_, _, its) old@(_, (_, _, jts)) ->
-                      if its < jts then (i, igrp) else old)
-                    (maxBound, (undefined, undefined, maxBound))
-                    m
+    Map.foldrWithKey (\ i igrp@(_, _, its) old@(_, (_, _, jts)) ->
+                       if its < jts then (i, igrp) else old)
+                     (maxBound, (undefined, undefined, maxBound))
+                     m
