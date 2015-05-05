@@ -4,9 +4,9 @@
 -- Copyright   :  (c) Jérémy Bobbio, Taru Karttunen
 -- License     :  BSD-style
 -- 
--- Maintainer  :  taruti@taruti.net, jeremy.bobbio@etu.upmc.fr
+-- Maintainer  :  Montez Fitzpatrick
 -- Stability   :  experimental
--- Portability :  GHC 6.4-6.12
+-- Portability :  GHC 6.4-7.8.2
 --
 -- A binding for the FUSE (Filesystem in USErspace) library
 -- (<http://fuse.sourceforge.net/>), which allows filesystems to be implemented
@@ -20,6 +20,9 @@
 -- option).
 --
 -----------------------------------------------------------------------------
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE Rank2Types #-}
+{-# LANGUAGE CPP #-}
 module System.Fuse
     ( -- * Using FUSE
 
@@ -29,6 +32,7 @@ module System.Fuse
     , FuseOperations(..)
     , defaultFuseOps
     , fuseMain -- :: FuseOperations fh -> (Exception -> IO Errno) -> IO ()
+    , fuseRun -- :: String -> [String] -> FuseOperations fh -> (Exception -> IO Errno) -> IO ()
     , defaultExceptionHandler -- :: Exception -> IO Errno
       -- * Operations datatypes
     , FileStat(..)
@@ -40,6 +44,7 @@ module System.Fuse
     , FuseContext(fuseCtxUserID, fuseCtxGroupID, fuseCtxProcessID)
       -- * File modes
     , entryTypeToFileMode -- :: EntryType -> FileMode
+    , fileModeToEntryType -- :: FileMode -> EntryType
     , OpenMode(..)
     , OpenFileFlags(..)
     , intersectFileModes -- :: FileMode
@@ -49,7 +54,7 @@ module System.Fuse
 import Prelude hiding ( Read )
 
 import Control.Monad
-import Control.Exception as E( Exception, handle, finally )
+import Control.Exception as E(Exception, handle, finally, SomeException)
 import qualified Data.ByteString.Char8    as B
 import qualified Data.ByteString.Internal as B
 import qualified Data.ByteString.Unsafe   as B
@@ -65,9 +70,13 @@ import System.Posix.Directory(changeWorkingDirectory)
 import System.Posix.Process(forkProcess,createSession,exitImmediately)
 import System.Posix.IO ( OpenMode(..), OpenFileFlags(..) )
 import qualified System.Posix.Signals as Signals
-import GHC.Handle(hDuplicateTo)
+import GHC.IO.Handle(hDuplicateTo)
 import System.Exit
-import qualified System.IO.Error as IO(catch,ioeGetErrorString)
+#if MIN_VERSION_base(4,6,0)
+import System.IO.Error (catchIOError,ioeGetErrorString)
+#else
+import System.IO.Error (catch,ioeGetErrorString)
+#endif
 
 -- TODO: FileMode -> Permissions
 -- TODO: Arguments !
@@ -76,7 +85,11 @@ import qualified System.IO.Error as IO(catch,ioeGetErrorString)
 
 #define FUSE_USE_VERSION 26
 
-#include <sys/statvfs.h>
+#if defined MACFUSE || defined __FreeBSD__
+#include <sys/mount.h>
+#else
+#include <sys/statfs.h>
+#endif
 
 #include <dirent.h>
 #include <fuse.h>
@@ -216,23 +229,20 @@ fileModeToEntryType mode
     creation of all non directory, non symlink nodes.
 -}
 
--- | Type used by the 'fuseGetFileSystemStats'.  Not all fields are applicable
--- to all platforms.
+-- | Type used by the 'fuseGetFileSystemStats'.
 data FileSystemStats = FileSystemStats
     { fsStatBlockSize :: Integer
-      -- ^ Fundamental filesystem block size. FUSE default is 512.
+      -- ^ Optimal transfer block size. FUSE default is 512.
     , fsStatBlockCount :: Integer
       -- ^ Total data blocks in file system.
     , fsStatBlocksFree :: Integer
       -- ^ Free blocks in file system.
-    , fsStatBlocksAvail :: Integer
-      -- ^ Free blocks available to non-root.
+    , fsStatBlocksAvailable :: Integer
+      -- ^ Free blocks available to non-superusers.
     , fsStatFileCount :: Integer
-      -- ^ Total file nodes in file system (used inode count).
+      -- ^ Total file nodes in file system.
     , fsStatFilesFree :: Integer
-      -- ^ Free file nodes in file system (free inode count).
-    , fsStatFilesAvail :: Integer
-      -- ^ Free file nodes available to non-root.
+      -- ^ Free file nodes in file system.
     , fsStatMaxNameLength :: Integer
       -- ^ Maximum length of filenames. FUSE default is 255.
     }
@@ -431,11 +441,9 @@ defaultFuseOps =
                    }
 
 -- Allocates a fuse_args struct to hold the commandline arguments.
-withFuseArgs :: (Ptr CFuseArgs -> IO b) -> IO b
-withFuseArgs f =
-    do prog <- getProgName
-       args <- getArgs
-       let allArgs = (prog:args)
+withFuseArgs :: String -> [String] -> (Ptr CFuseArgs -> IO b) -> IO b
+withFuseArgs prog args f =
+    do let allArgs = (prog:args)
            argc = length allArgs
        withMany withCString allArgs (\ cArgs ->
            withArray cArgs $ (\ pArgv ->
@@ -446,7 +454,7 @@ withFuseArgs f =
                        finally (f fuseArgs)
                                (fuse_opt_free_args fuseArgs))))
 
-withStructFuse :: Ptr CFuseChan -> Ptr CFuseArgs -> FuseOperations fh -> (Exception -> IO Errno) -> (Ptr CStructFuse -> IO b) -> IO b
+withStructFuse :: forall e fh b. Exception e => Ptr CFuseChan -> Ptr CFuseArgs -> FuseOperations fh -> (e -> IO Errno) -> (Ptr CStructFuse -> IO b) -> IO b
 withStructFuse pFuseChan pArgs ops handler f =
     allocaBytes (#size struct fuse_operations) $ \ pOps -> do
       bzero pOps (#size struct fuse_operations)
@@ -492,8 +500,8 @@ withStructFuse pFuseChan pArgs ops handler f =
         then fail ""
         else E.finally (f structFuse)
                        (fuse_destroy structFuse)
-    where fuseHandler :: Exception -> IO CInt
-          fuseHandler e = handler e >>= return . unErrno
+    where fuseHandler :: e -> IO CInt
+          fuseHandler e = handler e >>= return . negate . unErrno
           wrapGetAttr :: CGetAttr
           wrapGetAttr pFilePath pStat = handle fuseHandler $
               do filePath <- peekCString pFilePath
@@ -623,40 +631,27 @@ withStructFuse pFuseChan pArgs ops handler f =
                    Left  (Errno errno) -> return (- errno)
                    Right bytes         -> return (fromIntegral bytes)
           wrapStatFS :: CStatFS
-          wrapStatFS pStr pStatFS = handle fuseHandler $
+          wrapStatFS pStr pStatVFS = handle fuseHandler $
             do str <- peekCString pStr
-               eitherStatFS <- (fuseGetFileSystemStats ops) str
-               case eitherStatFS of
+               eitherStatVFS <- (fuseGetFileSystemStats ops) str
+               case eitherStatVFS of
                  Left (Errno errno) -> return (- errno)
                  Right stat         ->
-                   do
-#ifdef MACFUSE
-                   -- NB: f_frsize ("fragment size") is used instead of f_bsize
-                   -- for block sizes on OS X 10.5+.  This is strange, but it
-                   -- works.
-                   (#poke struct statvfs, f_frsize)  pStatFS
-                     (fromIntegral (fsStatBlockSize stat)     :: (#type unsigned long))
-#else
-                   -- Linux uses the f_bsize field as we'd expect.
-                   (#poke struct statvfs, f_bsize)   pStatFS
-                     (fromIntegral (fsStatBlockSize stat)     :: (#type unsigned long))
-#endif
-                   (#poke struct statvfs, f_blocks)  pStatFS
-                     (fromIntegral (fsStatBlockCount stat)    :: (#type fsblkcnt_t))
-                   (#poke struct statvfs, f_bfree)   pStatFS
-                     (fromIntegral (fsStatBlocksFree stat)    :: (#type fsblkcnt_t))
-                   (#poke struct statvfs, f_bavail)  pStatFS
-                     (fromIntegral (fsStatBlocksAvail stat)   :: (#type fsblkcnt_t))
-                   (#poke struct statvfs, f_files)   pStatFS
-                     (fromIntegral (fsStatFileCount stat)     :: (#type fsfilcnt_t))
-                   (#poke struct statvfs, f_ffree)   pStatFS
-                     (fromIntegral (fsStatFilesFree stat)     :: (#type fsfilcnt_t))
-                   (#poke struct statvfs, f_favail)  pStatFS
-                     (fromIntegral (fsStatFilesAvail stat)    :: (#type fsfilcnt_t))
-                   (#poke struct statvfs, f_namemax) pStatFS
-                     (fromIntegral (fsStatMaxNameLength stat) :: (#type unsigned long))
-                   return 0
-
+                   do (#poke struct statvfs, f_bsize) pStatVFS
+                          (fromIntegral (fsStatBlockSize stat) :: (#type long))
+                      (#poke struct statvfs, f_blocks) pStatVFS
+                          (fromIntegral (fsStatBlockCount stat) :: (#type fsblkcnt_t))
+                      (#poke struct statvfs, f_bfree) pStatVFS
+                          (fromIntegral (fsStatBlocksFree stat) :: (#type fsblkcnt_t))
+                      (#poke struct statvfs, f_bavail) pStatVFS
+                          (fromIntegral (fsStatBlocksAvailable stat) :: (#type fsblkcnt_t))
+                      (#poke struct statvfs, f_files) pStatVFS
+                           (fromIntegral (fsStatFileCount stat) :: (#type fsfilcnt_t))
+                      (#poke struct statvfs, f_ffree) pStatVFS
+                          (fromIntegral (fsStatFilesFree stat) :: (#type fsfilcnt_t))
+                      (#poke struct statvfs, f_namemax) pStatVFS
+                          (fromIntegral (fsStatMaxNameLength stat) :: (#type long))
+                      return 0
           wrapFlush :: CFlush
           wrapFlush pFilePath pFuseFileInfo = handle fuseHandler $
               do filePath <- peekCString pFilePath
@@ -721,16 +716,16 @@ withStructFuse pFuseChan pArgs ops handler f =
                  return (- errno)
           wrapInit :: CInit
           wrapInit pFuseConnInfo =
-            handle (\e -> hPutStrLn stderr (show e) >> return nullPtr) $
+            handle (\e -> defaultExceptionHandler e >> return nullPtr) $
               do fuseInit ops
                  return nullPtr
           wrapDestroy :: CDestroy
-          wrapDestroy _ = handle (\e -> hPutStrLn stderr (show e)) $
+          wrapDestroy _ = handle (\e -> defaultExceptionHandler e >> return ()) $
               do fuseDestroy ops
 
 -- | Default exception handler.
 -- Print the exception on error output and returns 'eFAULT'.
-defaultExceptionHandler :: (Exception -> IO Errno)
+defaultExceptionHandler :: (SomeException -> IO Errno)
 defaultExceptionHandler e = hPutStrLn stderr (show e) >> return eFAULT
 
 -- Calls fuse_parse_cmdline to parses the part of the commandline arguments that
@@ -764,16 +759,17 @@ fuseParseCommandLine pArgs =
 -- Mimic's daemon()s use of _exit() instead of exit(); we depend on this in fuseMainReal,
 -- because otherwise we'll unmount the filesystem when the foreground process exits.
 daemon f = forkProcess d >> exitImmediately ExitSuccess
-  where d = IO.catch (do createSession
-                         changeWorkingDirectory "/"
-                         -- need to open /dev/null twice because hDuplicateTo can't dup a ReadWriteMode to a ReadMode handle
-                         withFile "/dev/null" WriteMode (\devNullOut ->
-                           do hDuplicateTo devNullOut stdout
-                              hDuplicateTo devNullOut stderr)
-                         withFile "/dev/null" ReadMode (\devNullIn -> hDuplicateTo devNullIn stdin)
-                         f
-                         exitWith ExitSuccess)
-                     (const exitFailure)
+  where d = catch (do createSession
+                      changeWorkingDirectory "/"
+                      -- need to open /dev/null twice because hDuplicateTo can't dup a
+                      -- ReadWriteMode to a ReadMode handle
+                      withFile "/dev/null" WriteMode (\devNullOut ->
+                         do hDuplicateTo devNullOut stdout
+                            hDuplicateTo devNullOut stderr)
+                      withFile "/dev/null" ReadMode (\devNullIn -> hDuplicateTo devNullIn stdin)
+                      f
+                      exitWith ExitSuccess)
+                  (const exitFailure)
 
 -- Installs signal handlers for the duration of the main loop.
 withSignalHandlers exitHandler f =
@@ -838,20 +834,26 @@ fuseMainReal foreground ops handler pArgs mountPt =
 --   * registers the operations ;
 --
 --   * calls FUSE event loop.
-fuseMain :: FuseOperations fh -> (Exception -> IO Errno) -> IO ()
-fuseMain ops handler =
+fuseMain :: Exception e => FuseOperations fh -> (e -> IO Errno) -> IO ()
+fuseMain ops handler = do
     -- this used to be implemented using libfuse's fuse_main. Doing this will fork()
     -- from C behind the GHC runtime's back, which deadlocks in GHC 6.8.
     -- Instead, we reimplement fuse_main in Haskell using the forkProcess and the
     -- lower-level fuse_new/fuse_loop_mt API.
-    IO.catch
-       (withFuseArgs (\pArgs ->
+    prog <- getProgName
+    args <- getArgs
+    fuseRun prog args ops handler
+
+fuseRun :: String -> [String] -> Exception e => FuseOperations fh -> (e -> IO Errno) -> IO ()
+fuseRun prog args ops handler =
+    catch
+       (withFuseArgs prog args (\pArgs ->
          do cmd <- fuseParseCommandLine pArgs
             case cmd of
               Nothing -> fail ""
               Just (Nothing, _, _) -> fail "Usage error: mount point required"
               Just (Just mountPt, _, foreground) -> fuseMainReal foreground ops handler pArgs mountPt))
-       ((\errStr -> when (not $ null errStr) (putStrLn errStr) >> exitFailure) . IO.ioeGetErrorString)
+       ((\errStr -> when (not $ null errStr) (putStrLn errStr) >> exitFailure) . ioeGetErrorString)
 
 -----------------------------------------------------------------------------
 -- Miscellaneous utilities
@@ -869,6 +871,11 @@ pokeCStringLen (pBuf, bufSize) src =
 pokeCStringLen0 :: CStringLen -> String -> IO ()
 pokeCStringLen0 (pBuf, bufSize) src =
     pokeArray0 0 pBuf $ take (bufSize - 1) $ map castCharToCChar src
+
+#if MIN_VERSION_base(4,6,0)
+catch = catchIOError
+#else
+#endif
 
 -----------------------------------------------------------------------------
 -- C land
@@ -993,8 +1000,8 @@ type CWrite = CString -> CString -> CSize -> COff -> Ptr CFuseFileInfo -> IO CIn
 foreign import ccall safe "wrapper"
     mkWrite :: CWrite -> IO (FunPtr CWrite)
 
-data CStructStatFS -- struct fuse_stat_fs
-type CStatFS = CString -> Ptr CStructStatFS -> IO CInt
+data CStructStatVFS -- struct fuse_stat_fs
+type CStatFS = CString -> Ptr CStructStatVFS -> IO CInt
 foreign import ccall safe "wrapper"
     mkStatFS :: CStatFS -> IO (FunPtr CStatFS)
 

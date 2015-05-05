@@ -241,19 +241,17 @@ allocBlocks :: (Monad m, Reffable r m, Bitmapped b m, Lockable l m) =>
             -> Word64
             -- ^ requested number of blocks to allocate
             -> m (Maybe BlockGroup)
-allocBlocks bm numBlocks = do
-  withLockM (bmLock bm) $ do 
-  available <- readRef $ bmNumFree bm
-  if available < numBlocks
-    then do
-      return Nothing
-    else do
-      freeTree <- readRef $ bmFreeTree bm
-      let (blkGroup, freeTree') = findSpace numBlocks freeTree
-      forM_ (blkRangeBG blkGroup) $ setBit $ bmUsedMap bm
-      writeRef (bmFreeTree bm) freeTree'
-      writeRef (bmNumFree bm) (available - numBlocks)
-      return $ Just blkGroup
+allocBlocks bm numBlocks = withLockM (bmLock bm) $ do
+    available <- readRef $ bmNumFree bm
+    if available < numBlocks
+      then return Nothing
+      else do
+        freeTree <- readRef $ bmFreeTree bm
+        let (blkGroup, freeTree') = findSpace numBlocks freeTree
+        forM_ (blkRangeBG blkGroup) $ setBit $ bmUsedMap bm
+        writeRef (bmFreeTree bm) freeTree'
+        writeRef (bmNumFree bm) (available - numBlocks)
+        return $ Just blkGroup
 
 -- | Allocate a single block
 alloc1 :: (Bitmapped b m, Reffable r m, Lockable l m) =>

@@ -339,45 +339,44 @@ propM_fileWROK pathFromRoot _g dev = do
   fh <- exec "open file" $ openFile thePath (fofReadWrite False)
 
   forAllM (FileWR `fmap` choose (1, maxBytes)) $ \(FileWR fileSz) -> do
-  forAllM (printableBytes fileSz)              $ \fileData        -> do
+    forAllM (printableBytes fileSz) $ \fileData -> do
+      (_, _, api, apc) <- exec "Obtaining sizes" $ IN.computeSizes (bdBlockSize dev)
+      let expBlks = calcExpBlockCount (bdBlockSize dev) api apc fileSz
 
-  (_, _, api, apc) <- exec "Obtaining sizes" $ IN.computeSizes (bdBlockSize dev)
-  let expBlks = calcExpBlockCount (bdBlockSize dev) api apc fileSz
+      let checkFileStat' atp mtp ctp = do
+            usr <- exec "get grp" getUser
+            grp <- exec "get usr" getGroup
+            st  <- exec "fstat file" $ fstat thePath
+            checkFileStat st fileSz RegularFile defaultFilePerms
+                          usr grp expBlks atp mtp ctp
 
-  let checkFileStat' atp mtp ctp = do
-        usr <- exec "get grp" getUser
-        grp <- exec "get usr" getGroup
-        st  <- exec "fstat file" $ fstat thePath
-        checkFileStat st fileSz RegularFile defaultFilePerms
-                      usr grp expBlks atp mtp ctp
+      t1 <- time
+      exec "bytes -> file" $ write fh 0 fileData
+      checkFileStat' (t1 <=) (t1 <=) (t1 <=)
 
-  t1 <- time
-  exec "bytes -> file" $ write fh 0 fileData
-  checkFileStat' (t1 <=) (t1 <=) (t1 <=)
+      -- Readback and check before closing the file
+      t2 <- time
+      fileData' <- exec "bytes <- file" $ read fh 0 (fromIntegral fileSz)
+      checkFileStat' (t2 <=) (t2 >=) (t2 <=)
+      assrt "File readback OK" $ fileData == fileData'
 
-  -- Readback and check before closing the file
-  t2 <- time
-  fileData' <- exec "bytes <- file" $ read fh 0 (fromIntegral fileSz)
-  checkFileStat' (t2 <=) (t2 >=) (t2 <=)
-  assrt "File readback OK" $ fileData == fileData'
+      exec "close file" $ closeFile fh
 
-  exec "close file" $ closeFile fh
+      -- Reacquire the FH, read and check
+      fh' <- exec "reopen file" $ openFile thePath fofReadOnly
+      fileData'' <- exec "bytes <- file 2" $ read fh' 0 (fromIntegral fileSz)
+      checkFileStat' (t2 <=) (t2 >=) (t2 <=)
+      assrt "Reopened file readback OK" $ fileData == fileData''
 
-  -- Reacquire the FH, read and check
-  fh' <- exec "reopen file" $ openFile thePath fofReadOnly
-  fileData'' <- exec "bytes <- file 2" $ read fh' 0 (fromIntegral fileSz)
-  checkFileStat' (t2 <=) (t2 >=) (t2 <=)
-  assrt "Reopened file readback OK" $ fileData == fileData''
+      quickRemountCheck fs
+      where
+        pathComps = splitDirectories $ fst $ splitFileName pathFromRoot
+        mkdirs    = drop 1 $ scanl (\l r -> l ++ [pathSeparator] ++ r) "" pathComps
+        thePath   = rootPath </> pathFromRoot
+        assrt     = assertMsg "propM_fileWROK"
+        maxBytes  = fromIntegral $ bdBlockSize dev * bdNumBlocks dev `div` 8
 
-  quickRemountCheck fs
-  where
-    pathComps = splitDirectories $ fst $ splitFileName pathFromRoot
-    mkdirs    = drop 1 $ scanl (\l r -> l ++ [pathSeparator] ++ r) "" pathComps
-    thePath   = rootPath </> pathFromRoot
-    assrt     = assertMsg "propM_fileWROK"
-    maxBytes  = fromIntegral $ bdBlockSize dev * bdNumBlocks dev `div` 8
-
--- | Ensure that simple file operations (e.g., setFileSize) are
+  -- | Ensure that simple file operations (e.g., setFileSize) are
 -- working correctly.
 propM_simpleFileOpsOK :: HalfsProp
 propM_simpleFileOpsOK _g dev = do
@@ -385,56 +384,56 @@ propM_simpleFileOpsOK _g dev = do
   let exec = execH "propM_simpleFileOpsOK" fs
 
   forAllM (choose (1, maxBytes))        $ \fileSz    -> do
-  forAllM (choose (0::Int, 2 * fileSz)) $ \resizedSz -> do
-  forAllM (printableBytes fileSz)       $ \fileData  -> do
+    forAllM (choose (0::Int, 2 * fileSz)) $ \resizedSz -> do
+      forAllM (printableBytes fileSz)       $ \fileData  -> do
 
-  let fp = rootPath </> "foo"
-  exec "create /foo"      $ createFile fp defaultFilePerms
-  fh0 <- exec "open /foo" $ openFile fp (fofWriteOnly True)
-  exec "bytes -> file"    $ write fh0 0 fileData
-  exec "close /foo"       $ closeFile fh0
-  exec "resize /foo"      $ setFileSize fp (fromIntegral resizedSz)
+        let fp = rootPath </> "foo"
+        exec "create /foo"      $ createFile fp defaultFilePerms
+        fh0 <- exec "open /foo" $ openFile fp (fofWriteOnly True)
+        exec "bytes -> file"    $ write fh0 0 fileData
+        exec "close /foo"       $ closeFile fh0
+        exec "resize /foo"      $ setFileSize fp (fromIntegral resizedSz)
 
-  -- Check that fstat is coherent
-  st <- exec "fstat /foo" $ fstat fp
-  let newSz = fsSize st
-  assert (newSz == fromIntegral resizedSz)
+        -- Check that fstat is coherent
+        st <- exec "fstat /foo" $ fstat fp
+        let newSz = fsSize st
+        assert (newSz == fromIntegral resizedSz)
 
-  -- Check that file contents have truncated/grown as expected
-  fh1       <- exec "reopen /foo" $ openFile fp fofReadOnly
-  fileData' <- exec "read /foo" $ read fh1 0 newSz
-  assert (newSz == fromIntegral (BS.length fileData'))
-  if resizedSz < fileSz
-   then assert (fileData' == BS.take resizedSz fileData)
-   else
-     assert (fileData' == fileData
-                         `BS.append`
-                         BS.replicate (resizedSz - fileSz) 0
-            )
-  exec "close /foo" $ closeFile fh1
+        -- Check that file contents have truncated/grown as expected
+        fh1       <- exec "reopen /foo" $ openFile fp fofReadOnly
+        fileData' <- exec "read /foo" $ read fh1 0 newSz
+        assert (newSz == fromIntegral (BS.length fileData'))
+        if resizedSz < fileSz
+         then assert (fileData' == BS.take resizedSz fileData)
+         else
+           assert (fileData' == fileData
+                               `BS.append`
+                               BS.replicate (resizedSz - fileSz) 0
+                  )
+        exec "close /foo" $ closeFile fh1
 
-  -- Check setFileTimes
-  now <- exec "get time" getTime
-  exec "setFileTimes" $ setFileTimes fp now now
-  st' <- exec "fstat /foo" $ fstat fp
+        -- Check setFileTimes
+        now <- exec "get time" getTime
+        exec "setFileTimes" $ setFileTimes fp now now
+        st' <- exec "fstat /foo" $ fstat fp
 
-{-
-  trace ("now = " ++ show now) $ do
-  trace ("fsAccessTime st' = " ++ show (fsAccessTime st')) $ do
-  trace ("fsModifyTime st' = " ++ show (fsModifyTime st')) $ do
-  trace ("fsChangeTime st' = " ++ show (fsChangeTime st')) $ do
--}
+      {-
+        trace ("now = " ++ show now) $ do
+        trace ("fsAccessTime st' = " ++ show (fsAccessTime st')) $ do
+        trace ("fsModifyTime st' = " ++ show (fsModifyTime st')) $ do
+        trace ("fsChangeTime st' = " ++ show (fsChangeTime st')) $ do
+      -}
 
-  -- NB: May need to have define a "close enough" equivalence function for
-  -- comparing times here, due to the second granularity of the time sampling
-  -- and truncation in the current implementation of getTime.
-  assert (fsAccessTime st' == now)
-  assert (fsModifyTime st' == now)
-  assert (fsChangeTime st' >= now)
+        -- NB: May need to have define a "close enough" equivalence function for
+        -- comparing times here, due to the second granularity of the time sampling
+        -- and truncation in the current implementation of getTime.
+        assert (fsAccessTime st' == now)
+        assert (fsModifyTime st' == now)
+        assert (fsChangeTime st' >= now)
 
-  quickRemountCheck fs
-  where
-    maxBytes = fromIntegral $ bdBlockSize dev * bdNumBlocks dev `div` 8
+        quickRemountCheck fs
+        where
+          maxBytes = fromIntegral $ bdBlockSize dev * bdNumBlocks dev `div` 8
 
 -- | Ensure that simple file operations (e.g., setFileSize) are
 -- working correctly.
@@ -449,32 +448,32 @@ propM_chmodchownOK _g dev = do
 
   -- chmod to a random and check
   forAllM arbitrary $ \perms -> do
-  exec "chmod 600 /foo"    $ chmod fp perms
-  st0 <- exec "fstat /foo" $ fstat fp
-  assert (fsMode st0 == perms)
+    exec "chmod 600 /foo"    $ chmod fp perms
+    st0 <- exec "fstat /foo" $ fstat fp
+    assert (fsMode st0 == perms)
 
-  -- chown/chgrp to random uid/gid and check
-  forAllM arbitrary $ \usr -> do
-  forAllM arbitrary $ \grp -> do
-  exec "ch{own,grp} /foo"  $ chown fp (Just usr) (Just grp)
-  st1 <- exec "fstat /foo" $ fstat fp
-  assert (fsUID st1 == usr)
-  assert (fsGID st1 == grp)
+    -- chown/chgrp to random uid/gid and check
+    forAllM arbitrary $ \usr -> do
+      forAllM arbitrary $ \grp -> do
+        exec "ch{own,grp} /foo"  $ chown fp (Just usr) (Just grp)
+        st1 <- exec "fstat /foo" $ fstat fp
+        assert (fsUID st1 == usr)
+        assert (fsGID st1 == grp)
 
-  -- No change variants
-  forAllM arbitrary $ \usr2 -> do
-  forAllM arbitrary $ \grp2 -> do
-  exec "chown /foo" $ chown fp (Just usr2) Nothing -- don't change group
-  st2 <- exec "fstat /foo" $ fstat fp
-  assert (fsUID st2 == usr2)
-  assert (fsGID st2 == grp)
+        -- No change variants
+        forAllM arbitrary $ \usr2 -> do
+          forAllM arbitrary $ \grp2 -> do
+            exec "chown /foo" $ chown fp (Just usr2) Nothing -- don't change group
+            st2 <- exec "fstat /foo" $ fstat fp
+            assert (fsUID st2 == usr2)
+            assert (fsGID st2 == grp)
 
-  exec "chgrp /foo" $ chown fp Nothing (Just grp2) -- don't change user
-  st3 <- exec "fstat /foo" $ fstat fp
-  assert (fsUID st3 == usr2)
-  assert (fsGID st3 == grp2)
+            exec "chgrp /foo" $ chown fp Nothing (Just grp2) -- don't change user
+            st3 <- exec "fstat /foo" $ fstat fp
+            assert (fsUID st3 == usr2)
+            assert (fsGID st3 == grp2)
 
-  quickRemountCheck fs
+            quickRemountCheck fs
 
 -- | Sanity check: multiple threads making many new directories
 -- simultaneously are interleaved in a sensible manner.
@@ -486,43 +485,42 @@ propM_dirMutexOK _g dev = do
   let exec = execH "propM_dirMutexOK" fs
 
   forAllM (DirMutexOk `fmap` choose (8, maxThreads)) $ \(DirMutexOk n) -> do
-  forAllM (mapM genNm [1..n])                        $ \nmss           -> do
+    forAllM (mapM genNm [1..n])                        $ \nmss           -> do
 
-  ch <- run newChan
-  mapM_ (run . forkIO . uncurry (threadTest fs ch)) (nmss `zip` [1..n])
-  -- ^ n threads attempting to create directories simultaneously in /
-  exceptions <- catMaybes `fmap` replicateM n (run $ readChan ch)
-  -- ^ barrier with exceptions aggregated from each thread
-  assrt ("Caught exception(s) from thread(s): " ++ show exceptions)
-        (null exceptions)
+      ch <- run newChan
+      mapM_ (run . forkIO . uncurry (threadTest fs ch)) (nmss `zip` [1..n])
+    -- ^ n threads attempting to create directories simultaneously in /
+      exceptions <- catMaybes `fmap` replicateM n (run $ readChan ch)
+    -- ^ barrier with exceptions aggregated from each thread
+      assrt ("Caught exception(s) from thread(s): " ++ show exceptions) (null exceptions)
 
-  dh               <- exec "openDir /" $ openDir "/"
-  (dnames, dstats) <- exec "readDir /" $ unzip `fmap` readDir dh
+      dh               <- exec "openDir /" $ openDir "/"
+      (dnames, dstats) <- exec "readDir /" $ unzip `fmap` readDir dh
 
-  let p = L.sort dnames; q = L.sort $ concat nmss ++ initDirEntNames
-  assrt ("Directory contents incoherent (found discrepancy: "
-          ++ show (nub $ (p \\ q) ++ (q \\ p)) ++ ")"
-        )
-        (p == q)
+      let p = L.sort dnames; q = L.sort $ concat nmss ++ initDirEntNames
+      assrt ("Directory contents incoherent (found discrepancy: "
+            ++ show (nub $ (p \\ q) ++ (q \\ p)) ++ ")"
+            )
+            (p == q)
 
-  -- Misc extra check; convenient to do it here
-  assrt "File stats reported non-Directory type" $
-    all (== Directory) $ map fsType dstats
+    -- Misc extra check; convenient to do it here
+      assrt "File stats reported non-Directory type" $
+        all (== Directory) $ map fsType dstats
 
-  quickRemountCheck fs
-  where
-    assrt      = assertMsg "propM_dirMutexOK"
-    maxDirs    = 50 -- } v
-    maxLen     = 40 -- } arbitrary name length, but fit into small devices
-    maxThreads = 8
-    ng f       = L.nub `fmap` resize maxDirs (listOf1 $ f maxLen)
-    --
-    genNm :: Int -> Gen [String]
-    genNm n = map ((++) ("f" ++ show n ++ "_")) `fmap` ng filename
-    --
-    threadTest fs ch nms _n =
-      runHalfs fs (mapM_ (flip mkdir defaultDirPerms . (</>) rootPath) nms)
-        >>= writeChan ch . either Just (const Nothing)
+      quickRemountCheck fs
+    where
+      assrt      = assertMsg "propM_dirMutexOK"
+      maxDirs    = 50 -- } v
+      maxLen     = 40 -- } arbitrary name length, but fit into small devices
+      maxThreads = 8
+      ng f       = L.nub `fmap` resize maxDirs (listOf1 $ f maxLen)
+      --
+      genNm :: Int -> Gen [String]
+      genNm n = map ((++) ("f" ++ show n ++ "_")) `fmap` ng filename
+      --
+      threadTest fs ch nms _n =
+        runHalfs fs (mapM_ (flip mkdir defaultDirPerms . (</>) rootPath) nms)
+          >>= writeChan ch . either Just (const Nothing)
 
 propM_hardlinksOK :: HalfsProp
 propM_hardlinksOK _g dev = do
@@ -539,44 +537,44 @@ propM_hardlinksOK _g dev = do
   exec "creat /foo/bar/source"      $ createFile src defaultFilePerms
   fh <- exec "open /foo/bar/source" $ openFile src (fofWriteOnly True)
   forAllM (choose (1, maxBytes))    $ \fileSz   -> do
-  forAllM (printableBytes fileSz)   $ \srcBytes -> do
-  exec "write /foo/bar/source"      $ write fh 0 srcBytes
-  exec "close /foo/bar/source"      $ closeFile fh
+    forAllM (printableBytes fileSz)   $ \srcBytes -> do
+      exec "write /foo/bar/source"      $ write fh 0 srcBytes
+      exec "close /foo/bar/source"      $ closeFile fh
 
-  -- Expected error: File named by path1 is a directory
-  expectErrno ePERM   =<< runH fs (mklink d1 dst1)
-  -- Expected error: A component of path1's prefix is not a directory
-  expectErrno eNOTDIR =<< runH fs (mklink (src </> "source") dst1)
-  -- Expected error: A component of path1's prefix does not exist
-  expectErrno eNOENT  =<< runH fs (mklink (d1 </> "bad" </> "source") dst1)
-  -- Expected error: The file named by path1 does not exist
-  expectErrno eNOENT  =<< runH fs (mklink (d1 </> "src2") dst1)
-  -- Expected error: A component of path2's prefix is not a directory
-  expectErrno eNOTDIR =<< runH fs (mklink src (src </> "dst1"))
-  -- Expected error: A component of path 2's prefix does not exist
-  expectErrno eNOENT  =<< runH fs (mklink src (d0 </> "bad" </> "bar"))
+      -- Expected error: File named by path1 is a directory
+      expectErrno ePERM   =<< runH fs (mklink d1 dst1)
+      -- Expected error: A component of path1's prefix is not a directory
+      expectErrno eNOTDIR =<< runH fs (mklink (src </> "source") dst1)
+      -- Expected error: A component of path1's prefix does not exist
+      expectErrno eNOENT  =<< runH fs (mklink (d1 </> "bad" </> "source") dst1)
+      -- Expected error: The file named by path1 does not exist
+      expectErrno eNOENT  =<< runH fs (mklink (d1 </> "src2") dst1)
+      -- Expected error: A component of path2's prefix is not a directory
+      expectErrno eNOTDIR =<< runH fs (mklink src (src </> "dst1"))
+      -- Expected error: A component of path 2's prefix does not exist
+      expectErrno eNOENT  =<< runH fs (mklink src (d0 </> "bad" </> "bar"))
 
-  mapM_ (\dst -> exec "mklink" $ mklink src dst) dests
+      mapM_ (\dst -> exec "mklink" $ mklink src dst) dests
 
-  fhs <- mapM (\nm -> exec "open dst" $ openFile nm fofReadOnly) dests
-  ds  <- mapM (\dh -> exec "read dst" $ read dh 0 (fromIntegral fileSz)) fhs
+      fhs <- mapM (\nm -> exec "open dst" $ openFile nm fofReadOnly) dests
+      ds  <- mapM (\dh -> exec "read dst" $ read dh 0 (fromIntegral fileSz)) fhs
 
-  assert $ all (== srcBytes) ds
+      assert $ all (== srcBytes) ds
 
-  mapM_ (exec "close dst" . closeFile) fhs
+      mapM_ (exec "close dst" . closeFile) fhs
 
-  -- TODO: Test rmlink here
+      -- TODO: Test rmlink here
 
-  quickRemountCheck fs
-  where
-    d0             = rootPath </> "foo"
-    d1             = d0 </> "bar"
-    src            = d1 </> "source"
-    dests@(dst1:_) = [ d1 </> "link_to_source"
-                     , d1 </> "link_2_to_source"
-                     , d1 </> "link_3_to_source"
-                     ]
-    maxBytes       = fromIntegral $ bdBlockSize dev * bdNumBlocks dev `div` 8
+      quickRemountCheck fs
+      where
+        d0             = rootPath </> "foo"
+        d1             = d0 </> "bar"
+        src            = d1 </> "source"
+        dests@(dst1:_) = [ d1 </> "link_to_source"
+                         , d1 </> "link_2_to_source"
+                         , d1 </> "link_3_to_source"
+                         ]
+        maxBytes       = fromIntegral $ bdBlockSize dev * bdNumBlocks dev `div` 8
 
 propM_simpleRmdirOK :: HalfsProp
 propM_simpleRmdirOK _g dev = do
@@ -634,43 +632,43 @@ propM_rmdirMutexOK _g dev = do
   chA <- run newChan
   chB <- run newChan
   forAllM (choose (100, 1000) :: Gen Int) $ \numTrials -> do
-  _ <- run $ forkIO $ threadA fs chA numTrials
-  _ <- run $ forkIO $ threadB fs chB numTrials
+    _ <- run $ forkIO $ threadA fs chA numTrials
+    _ <- run $ forkIO $ threadB fs chB numTrials
 
-  -- except only Left-constructed results from the worker threads
-  assert =<< (null . rights) `fmap` replicateM numTrials (run $ readChan chA)
-  assert =<< (null . rights) `fmap` replicateM numTrials (run $ readChan chB)
-  -- ^ barriers
+    -- except only Left-constructed results from the worker threads
+    assert =<< (null . rights) `fmap` replicateM numTrials (run $ readChan chA)
+    assert =<< (null . rights) `fmap` replicateM numTrials (run $ readChan chB)
+    -- ^ barriers
 
-  quickRemountCheck fs
-  where
-    dp = rootPath </> "theDir"
-    --
-    threadA fs ch n
-      | n == 0    = return () -- writeChan ch ()
-      | otherwise = do
-          -- Thread A create directory, should never fail
-          e0 <- runHalfs fs $ mkdir dp defaultDirPerms
-          merr <- case e0 of
-            Left e  -> return (Right e)
-            Right _ -> runHalfs fs (rmdir dp)
-                         >>= either (return . Right)
-                                    (const $ return $ Left "ok")
-          writeChan ch merr
-          threadA fs ch (n-1)
-    --
-    threadB fs ch n
-      | n == 0    = return ()
-      | otherwise = do
-          -- ThreadB readDir, should only fail if dir DNE or the DH is invalid
-          e0 <- runHalfs fs $ withDir dp readDir
-          merr <- case e0 of
-            Left HE_PathComponentNotFound{} -> return (Left "pcnf")
-            Left HE_InvalidDirHandle        -> return (Left "idh")
-            Left e                          -> return (Right e)
-            _                               -> return (Left "ok")
-          writeChan ch merr
-          threadB fs ch (n-1)
+    quickRemountCheck fs
+    where
+      dp = rootPath </> "theDir"
+      --
+      threadA fs ch n
+        | n == 0    = return () -- writeChan ch ()
+        | otherwise = do
+            -- Thread A create directory, should never fail
+            e0 <- runHalfs fs $ mkdir dp defaultDirPerms
+            merr <- case e0 of
+              Left e  -> return (Right e)
+              Right _ -> runHalfs fs (rmdir dp)
+                           >>= either (return . Right)
+                                      (const $ return $ Left "ok")
+            writeChan ch merr
+            threadA fs ch (n-1)
+      --
+      threadB fs ch n
+        | n == 0    = return ()
+        | otherwise = do
+            -- ThreadB readDir, should only fail if dir DNE or the DH is invalid
+            e0 <- runHalfs fs $ withDir dp readDir
+            merr <- case e0 of
+              Left HE_PathComponentNotFound{} -> return (Left "pcnf")
+              Left HE_InvalidDirHandle        -> return (Left "idh")
+              Left e                          -> return (Right e)
+              _                               -> return (Left "ok")
+            writeChan ch merr
+            threadB fs ch (n-1)
 
 
 propM_simpleRmlinkOK :: HalfsProp
@@ -818,7 +816,7 @@ propM_stressEndDeallocs =
     chunk  = BS.replicate blkSz 0x42
     sizes  = [ i * blkSzI | i <- reverse [0..(blkSzI-1)]]
 
-
+
 --------------------------------------------------------------------------------
 -- Misc
 

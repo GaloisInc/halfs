@@ -9,7 +9,7 @@ import Control.Monad (forM, forM_)
 import Control.Monad.Trans
 import Data.ByteString (ByteString)
 import Data.Word
-import Test.QuickCheck hiding (numTests)
+import Test.QuickCheck hiding (numTests, scale)
 import Test.QuickCheck.Monadic
   
 import System.Device.BlockDevice
@@ -96,7 +96,7 @@ qcProps quickMode =
   ]
   where
     numTests n  = (,) $ if quickMode then stdArgs{maxSuccess = n} else stdArgs
-    scale k g   = BDGeom (bdgSecCnt g `div` k) (bdgSecSz g * k)
+    scale k g   = BDGeom (bdgSecCnt g `div` k) (bdgSecSz g * k) -- Shadows existing bindings
     unscale k g = BDGeom (bdgSecCnt g * k)     (bdgSecSz g `div` k)
     geoLabel s  = "BlockDevice: " ++ s ++ " Block Device Geometry"
     wrLabel s   = "BlockDevice: " ++ s ++ " Single Block Write/Read"

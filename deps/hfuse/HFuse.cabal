@@ -1,41 +1,59 @@
 Name:                   HFuse
-Version:                0.2.2
+Version:                0.2.4.4
 License:                BSD3
-License-File:		LICENSE
+License-File:           LICENSE
 Author:                 Jeremy Bobbio
-Maintainer: 		Taru Karttunen <taruti@taruti.net>
+Maintainer:             Montez Fitzpatrick <montezf@gmail.com>
 Synopsis:               HFuse is a binding for the Linux FUSE library.
-Homepage:               http://code.haskell.org/hfuse
+Description:            Bindings for the FUSE library, compatible with Linux, OSXFUSE and FreeBSD.
+Homepage:               https://github.com/m15k/hfuse
 Category:               System
 Stability:              Experimental
-Cabal-Version:          >= 1.2
+Cabal-Version:          >= 1.10
 Build-Type:             Simple
-Extra-source-files:     README
+Extra-source-files:     
+        CHANGELOG.md
+        README.md
+
+flag developer
+  default: False
 
 Library
-  Build-Depends:          base >= 3 && < 4, unix, bytestring
-  exposed-Modules:        System.Fuse
-  Extensions:             ForeignFunctionInterface ScopedTypeVariables EmptyDataDecls
-
+  Build-Depends:          base >= 4 && < 5, unix, bytestring
+  Exposed-Modules:        System.Fuse
+  Default-Extensions:             ForeignFunctionInterface ScopedTypeVariables EmptyDataDecls
+  Includes:               dirent.h, fuse.h, fcntl.h
   Include-Dirs:           /usr/include, /usr/local/include, .
-  Includes:               dirent.h, fuse.h, fcntl.h, sys/statvfs.h
+  if os(darwin)
+      CC-Options:           "-DMACFUSE"
+      CC-Options:           "-DFUSE_USE_VERSION=26"
+      Include-Dirs:           /usr/local/include/osxfuse
+  else
+      if os(freebsd)
+         Includes:           sys/param.h, sys/mount.h
+         CC-Options:           "-Df_namelen=f_namemax"
+      else
+         Includes:               sys/statfs.h
 
-  if os(darwin) {
-    Include-Dirs:         /usr/local/include/fuse
-  }
-
-  if os(darwin) {
-    Extra-Libraries:      fuse_ino64
-  }
-  else {
-    Extra-Libraries:      fuse
-  }
+  if os(darwin)
+      Extra-Libraries:        osxfuse
+  else
+      Extra-Libraries:        fuse
   Extra-Lib-Dirs:         /usr/local/lib
+  CC-Options:             "-D_FILE_OFFSET_BITS=64"
+  Default-Language:       Haskell2010
 
-  CC-Options:             -D_FILE_OFFSET_BITS=64 -DFUSE_USE_VERSION=26
+executable HelloFS
+  if flag(developer)
+    buildable: True
+    build-depends:  base >= 4 && < 5, HFuse, unix, bytestring
+  else
+    buildable: False
+  main-is: HelloFS.hs
+  hs-source-dirs: examples
+  ghc-options: -threaded
+  Default-Language: Haskell2010
 
-  -- Following assumes Mac OS X on 64-bit x86 architectures
-  if os(darwin) {
---  CC-Options: -DMACFUSE -D__FreeBSD__=10 -D__DARWIN_64_BIT_INO_T=1 -arch i386
-    CC-Options: -DMACFUSE -D__FreeBSD__=10 -arch i386
-  }
+source-repository head
+    type:       git
+    location:   https://github.com/m15k/hfuse.git

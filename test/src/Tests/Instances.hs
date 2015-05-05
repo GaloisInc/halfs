@@ -132,10 +132,10 @@ arbExtents' (Extent b ub) = do
   assert (halfCnt >= quarterCnt &&
           quarterCnt >= sum (map extSz filledQuarter)) $ do
   -- distinct base addrs
-  assert (let bs = map extBase r in length bs == length (nub bs)) $ do
+    assert (let bs = map extBase r in length bs == length (nub bs)) $ do
   -- exactly covers input extent and contains and no 0-size extents
-  assert (ub == foldr (\e -> assert (extSz e > 0) (extSz e +)) 0 r) $ do
-  return r
+      assert (ub == foldr (\e -> assert (extSz e > 0) (extSz e +)) 0 r) $ do
+        return r
   where
     halfCnt    = ub `div` 2
     quarterCnt = ub `div` 4 + 1
@@ -297,9 +297,9 @@ instance Arbitrary DiffTime where
                                       -- resolution
     return $ secondsToDiffTime sec + picosecondsToDiffTime ps
 
-instance Random Word64 where
-  randomR = integralRandomR
-  random  = randomR (minBound, maxBound)
+-- instance Random Word64 where
+--   randomR = integralRandomR
+--   random  = randomR (minBound, maxBound)
 
 integralRandomR :: (Integral a, RandomGen g) => (a,a) -> g -> (a,g)
 integralRandomR (a,b) g =

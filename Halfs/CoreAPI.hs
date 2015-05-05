@@ -92,22 +92,22 @@ newfs dev uid gid rdirPerms = do
       uid
       gid
   assert (BS.length dirInode == fromIntegral (bdBlockSize dev)) $ do
-  lift $ bdWriteBlock dev rdirAddr dirInode
+    lift $ bdWriteBlock dev rdirAddr dirInode
 
-  finalFree <- readRef (bmNumFree blockMap)
-  -- Persist the remaining data structures
-  lift $ writeBlockMap dev blockMap
-  lift $ writeSB dev $ SuperBlock
-    { version        = 1
-    , devBlockSize   = bdBlockSize dev
-    , devBlockCount  = bdNumBlocks dev
-    , unmountClean   = True
-    , freeBlocks     = finalFree
-    , usedBlocks     = initFree - finalFree
-    , fileCount      = 0
-    , rootDir        = rdirIR
-    , blockMapStart  = blockAddrToInodeRef 1
-    }
+    finalFree <- readRef (bmNumFree blockMap)
+    -- Persist the remaining data structures
+    lift $ writeBlockMap dev blockMap
+    lift $ writeSB dev $ SuperBlock
+      { version        = 1
+      , devBlockSize   = bdBlockSize dev
+      , devBlockCount  = bdNumBlocks dev
+      , unmountClean   = True
+      , freeBlocks     = finalFree
+      , usedBlocks     = initFree - finalFree
+      , fileCount      = 0
+      , rootDir        = rdirIR
+      , blockMapStart  = blockAddrToInodeRef 1
+      }
 
 -- | Mounts a filesystem from a given block device.  After this operation
 -- completes, the superblock will have its unmountClean flag set to False.
@@ -133,26 +133,26 @@ mount dev usr grp rdirPerms = do
     newfs' d u g p = newfs d u g p >> mount d u g p
     --
     mount' = do
-    esb <- decode `fmap` lift (bdReadBlock dev 0)
-    case esb of
-      Left _msg -> do
-        -- Unable to read the superblock: for now, we just give up on the mount
-        -- and provide a new filesystem.
-        logMsg "mount: unable to read superblock, creating new filesystem."
-        newfs' dev usr grp rdirPerms
-      Right sb -> do
-        if unmountClean sb
-         then do
-           bm  <- lift $ readBlockMap dev
-           sb' <- lift $ writeSB dev sb{ unmountClean = False }
-           newHalfsState dev usr grp Nothing sb' bm
-         else do
-           mfs <- fsck dev sb usr grp rdirPerms
-           case mfs of
-             Just fs -> return fs
-             Nothing -> do
-               logMsg "mount: fsck failed. Creating new filesystem."
-               newfs' dev usr grp rdirPerms
+      esb <- decode `fmap` lift (bdReadBlock dev 0)
+      case esb of
+        Left _msg -> do
+          -- Unable to read the superblock: for now, we just give up on the mount
+          -- and provide a new filesystem.
+          logMsg "mount: unable to read superblock, creating new filesystem."
+          newfs' dev usr grp rdirPerms
+        Right sb -> do
+          if unmountClean sb
+           then do
+             bm  <- lift $ readBlockMap dev
+             sb' <- lift $ writeSB dev sb{ unmountClean = False }
+             newHalfsState dev usr grp Nothing sb' bm
+           else do
+             mfs <- fsck dev sb usr grp rdirPerms
+             case mfs of
+               Just fs -> return fs
+               Nothing -> do
+                 logMsg "mount: fsck failed. Creating new filesystem."
+                 newfs' dev usr grp rdirPerms
 
 -- | Unmounts the given filesystem.  After this operation completes, the
 -- superblock will have its unmountClean flag set to True.
@@ -168,23 +168,23 @@ unmount = do
   -- Grab everything; we do not want to permit other filesystem actions to
   -- occur in other threads during or after teardown. Needs testing. TODO
 
-  sb <- readRef sbRef
-  if (unmountClean sb)
-   then throwError HE_UnmountFailed
-   else do
+    sb <- readRef sbRef
+    if (unmountClean sb)
+     then throwError HE_UnmountFailed
+     else do
      -- TODO:
      -- - Persist all dirty data structures (dirents, files w/ buffered IO, etc.)
 
      -- Sync all directories; clean directory state is a no-op
-     mapM_ syncDirectory =<< M.elems `fmap` readRef dhMapRef
+       mapM_ syncDirectory =<< M.elems `fmap` readRef dhMapRef
 
-     lift $ bdFlush dev
+       lift $ bdFlush dev
 
      -- Finalize the superblock
-     let sb' = sb{ unmountClean = True }
-     writeRef sbRef sb'
-     _ <- lift $ writeSB dev sb'
-     return ()
+       let sb' = sb{ unmountClean = True }
+       writeRef sbRef sb'
+       _ <- lift $ writeSB dev sb'
+       return ()
 
 --------------------------------------------------------------------------------
 -- FileSystem ChecK (fsck)

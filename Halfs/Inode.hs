@@ -76,7 +76,7 @@ dbugM :: Monad m => String -> m ()
 dbugM _ = return ()
 
 type HalfsM b r l m a = HalfsT HalfsError (Maybe (HalfsState b r l m)) m a
-
+
 --------------------------------------------------------------------------------
 -- Inode/Ext constructors, geometry calculation, and helpful constructors
 
@@ -360,8 +360,7 @@ readStream :: HalfsCapable b t r l m =>
                                         --   until end of stream, including
                                         --   entire last block)
            -> HalfsM b r l m ByteString -- ^ Stream contents
-readStream startIR start mlen = do
-  withLockedInode startIR $ do
+readStream startIR start mlen = withLockedInode startIR $ do
   -- ====================== Begin inode critical section ======================
   dev        <- hasks hsBlockDev
   startInode <- drefInode startIR
@@ -372,17 +371,16 @@ readStream startIR start mlen = do
 
   if 0 == blockCount (inoExt startInode)
    then return BS.empty
-   else do
-     dbug ("==== readStream begin ===") $ do
+   else dbug ("==== readStream begin ===") $ do
      (sExtI, sBlkOff, sByteOff) <- gsi start
      sExt                       <- findExt startInode sExtI
      (eExtI, _, _)              <- gsi $ case mlen of
                                             Nothing  -> fileSz - 1
                                             Just len -> start + len - 1
 
-     dbug ("start                       = " ++ show start) $ do
-     dbug ("(sExtI, sBlkOff, sByteOff) = " ++ show (sExtI, sBlkOff, sByteOff)) $ do
-     dbug ("eExtI                      = " ++ show eExtI) $ do
+     dbugM ("start                       = " ++ show start)
+     dbugM ("(sExtI, sBlkOff, sByteOff) = " ++ show (sExtI, sBlkOff, sByteOff))
+     dbugM ("eExtI                      = " ++ show eExtI)
 
      rslt <- case mlen of
        Just len | len == 0 -> return BS.empty
@@ -500,12 +498,12 @@ writeStream_lckd startIR start trunc bytes              = do
   ------------------------------------------------------------------------------
   -- Debugging miscellany
 
-  dbug ("\nwriteStream: " ++ show (sExtI, sBlkOff, sByteOff)
+  dbugM ("\nwriteStream: " ++ show (sExtI, sBlkOff, sByteOff)
         ++ " (start=" ++ show start ++ ")"
         ++ " len = " ++ show len ++ ", trunc = " ++ show trunc
         ++ ", fileSz/newFileSz = " ++ show fileSz ++ "/" ++ show newFileSz
         ++ ", toAlloc(exts/blks/bytes) = " ++ show extsToAlloc ++ "/"
-        ++ show blksToAlloc ++ "/" ++ show bytesToAlloc) $ do
+        ++ show blksToAlloc ++ "/" ++ show bytesToAlloc)
 --   dbug ("inoLastExt startInode = " ++ show (lcInfo) )            $ return ()
 --   dbug ("inoExt startInode     = " ++ show (inoExt startInode)) $ return ()
 --   dbug ("Exts on entry, from inode ext:") $ return ()

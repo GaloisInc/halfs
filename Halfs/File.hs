@@ -83,19 +83,19 @@ removeFile mfname inr = do
   hbracket (openFilePrim fofReadOnly inr) closeFilePrim $ \fh -> do
     fhMap <- hasks hsFHMap
     withLockedRscRef fhMap $ \fhMapRef -> do
-    atomicModifyInode inr  $ \nd       -> do
-      when (inoNumLinks nd == 1) $ do
+      atomicModifyInode inr  $ \nd       -> do
+        when (inoNumLinks nd == 1) $ do
         -- We're removing the last link, so we inject a callback into the fhmap
         -- that will be invoked when all processes have closed the filehandle
         -- associated with inr.  The callback invalidates the filehandle and
         -- releases its inode.  NB: The callback must assume that both the fhmap
         -- and fh locks are held when it is executed.
-        mfhData <- lookupRM inr fhMapRef
-        case mfhData of 
-          Just (_, c, _) -> insertRM inr (fh, c, cb) fhMapRef
-            where cb = invalidateFH fh >> freeInode inr
-          Nothing        -> error "fh not found for open file, cannot happen"
-      return nd{ inoNumLinks = inoNumLinks nd - 1 }
+          mfhData <- lookupRM inr fhMapRef
+          case mfhData of 
+            Just (_, c, _) -> insertRM inr (fh, c, cb) fhMapRef
+              where cb = invalidateFH fh >> freeInode inr
+            Nothing        -> error "fh not found for open file, cannot happen"
+        return nd{ inoNumLinks = inoNumLinks nd - 1 }
                          
 openFilePrim :: HalfsCapable b t r l m =>
                 FileOpenFlags -> InodeRef -> HalfsM b r l m (FileHandle r l)
