@@ -69,19 +69,18 @@ propM_bmInOrderAllocUnallocIntegrity _g dev = do
   forAllM (arbExtents ext) $ \subs -> do
   ------------------------------------------------------------------------------
   -- (1a) Check integrity during sequence of contiguous block allocations
-  forM_ subs $ \sub -> do
-    blkGrp <- checkedAlloc bm (extSz sub)
-    case blkGrp of
-      Contig allocExt ->
-        assert (allocExt == sub) -- got expected base & size; this only works
+    forM_ subs $ \sub -> do
+      blkGrp <- checkedAlloc bm (extSz sub)
+      case blkGrp of
+        Contig allocExt ->
+          assert (allocExt == sub) -- got expected base & size; this only works
                                  -- because we are doing in-order contiguous
                                  -- allocation
-      _ ->
-        fail $ "propM_bmAllocUnallocIntegrity: Expected contiguous allocation"
+        _ -> fail $ "propM_bmAllocUnallocIntegrity: Expected contiguous allocation"
   ------------------------------------------------------------------------------
   -- (1b) Check blockmap state after all allocations are done
-  assert =<< isNothing `fmap` run (allocBlocks bm 1)
-  checkIntegrity bm 0 [ext] True
+    assert =<< isNothing `fmap` run (allocBlocks bm 1)
+    checkIntegrity bm 0 [ext] True
   ------------------------------------------------------------------------------
   -- (2a) Check integrity during sequence of contiguous block deallocations. NB:
   --      we unallocate in most-recently-allocated order to reduce freetree
@@ -90,11 +89,11 @@ propM_bmInOrderAllocUnallocIntegrity _g dev = do
   --      don't have to directly track the return value of prior checkedAlloc
   --      invocations in order to supply the correct BlockGroup to
   --      checkedUnalloc
-  forM_ (Prelude.reverse subs) $ checkedUnalloc bm . Contig
+    forM_ (Prelude.reverse subs) $ checkedUnalloc bm . Contig
   ------------------------------------------------------------------------------
   -- (2b) Check blockmap state after all unallocations are done
-  checkIntegrity bm (extSz ext) [ext] False
-  assert =<< isJust `fmap` run (allocBlocks bm 1)
+    checkIntegrity bm (extSz ext) [ext] False
+    assert =<< isJust `fmap` run (allocBlocks bm 1)
 
 -- | Ensures that a new blockmap subjected to a series of (1) random,
 -- out-of-order, block allocations intermixed with (2) potentially out-of-order
@@ -118,15 +117,15 @@ propM_bmOutOfOrderAllocUnallocIntegrity checkBM _g dev = do
   forAllM (map extSz `fmap` (permute =<< arbExtents ext)) $ \subSizes -> do
     -- toUnalloc contains BlockGroups allocated by the folded function that
     -- weren't already selected for unallocation
-    (bm', toUnalloc) <- foldM (\(bm', allocated) szToAlloc -> do
+    (bm', toUnalloc) <- foldM (\(bm', allocated) szToAlloc ->
       -- Randomly decide to unallocate a previously-allocated BlockGroup
       forAllM arbitrary $ \(UnallocDecision shouldUnalloc) -> do
-      let doUnalloc = shouldUnalloc && not (Prelude.null allocated)
-      when doUnalloc $ checkedUnalloc bm' $ head allocated
-      blkGroup <- checkedAlloc bm' szToAlloc
-      newBM    <- checkBM dev bm'
-      return $ (newBM, blkGroup : (if doUnalloc then tail else id) allocated)
-      ) (bm, []) subSizes
+        let doUnalloc = shouldUnalloc && not (Prelude.null allocated)
+        when doUnalloc $ checkedUnalloc bm' $ head allocated
+        blkGroup <- checkedAlloc bm' szToAlloc
+        newBM    <- checkBM dev bm'
+        return $ (newBM, blkGroup : (if doUnalloc then tail else id) allocated)
+        ) (bm, []) subSizes
 
     checkAvail bm' (extSz ext - sum (map blkGroupSz toUnalloc))
     mapM_ (checkedUnalloc bm') toUnalloc
@@ -143,8 +142,7 @@ propM_bmExtentAggregationIntegrity _g dev = do
   -- (3) Unallocating those small regions (fragmentation occurs)
   -- (4) Allocating a region that requires aggregation of small extents
   (bm, ext) <- initBM dev
-  forAllM (map extSz `fmap` arbExtents ext) $ \subSizes -> do
-  case subSizes of
+  forAllM (map extSz `fmap` arbExtents ext) $ \subSizes -> case subSizes of
     (large:med:smalls) | (large >= med && med >= sum smalls) -> do
       largeBG  <- checkedAlloc bm large            -- (1) alloc large regions
       medBG    <- checkedAlloc bm med              -- (1) alloc large regions

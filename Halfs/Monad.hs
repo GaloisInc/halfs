@@ -16,7 +16,7 @@ module Halfs.Monad
   )
   where
 
-import Control.Monad.Error
+import Control.Monad.Except
 import Control.Monad.Reader
 
 import Halfs.Classes

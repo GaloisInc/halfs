@@ -15,8 +15,8 @@ synopsis:      The HAskelL File System ("halfs" -- intended for use on the HaLVM
 category:      System
 stability:     experimental
 build-type:    Simple
-cabal-version: >= 1.8
-tested-with:   GHC == 7.0.4 
+cabal-version: >= 1.16
+tested-with:   GHC == 7.6.3
 
 source-repository head
   type:     git
@@ -29,7 +29,7 @@ library
   build-depends:
                     QuickCheck,
                     array,
-                    base >= 3 && <= 4,
+                    base >= 4 && < 5,
                     bytestring,
                     cereal,
                     containers,
@@ -64,7 +64,7 @@ library
                     Tests.Types,
                     Tests.Utils
 
-  extensions:
+  default-extensions:
                     BangPatterns,
                     FlexibleContexts,
                     FlexibleInstances,
@@ -76,6 +76,7 @@ library
   hs-source-dirs   : . test/src
   GHC-Options      : -Wall -fno-ignore-asserts 
   ghc-prof-options : -prof -auto-all
+  default-language : Haskell2010
 
 executable halfs-tests
   if !flag(build-tests)
@@ -84,7 +85,7 @@ executable halfs-tests
   build-depends:
                  QuickCheck,
                  array,
-                 base >= 3 && < 5,
+                 base >= 4 && < 5,
                  bytestring,
                  cereal,
                  containers,
@@ -100,12 +101,13 @@ executable halfs-tests
   main-is          : Driver.hs
   ghc-options      : -Wall -fno-ignore-asserts -threaded
   ghc-prof-options : -prof -auto-all
+  default-language : Haskell2010
 
 executable halfs
   build-depends:
-                 HFuse >= 0.2.4.1,
+                 HFuse >= 0.2.4.5,
                  array,
-                 base >= 3 && < 5,
+                 base >= 4 && < 5,
                  bytestring,
                  containers,
                  directory,
@@ -116,4 +118,4 @@ executable halfs
   main-is          : Halfs.hs
   ghc-options      : -Wall -fno-ignore-asserts -threaded
   ghc-prof-options : -prof -auto-all
-
+  default-language : Haskell2010

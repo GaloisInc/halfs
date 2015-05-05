@@ -46,7 +46,7 @@ import qualified Halfs.Protection as HP
 import qualified Halfs.Types      as H
 import qualified Tests.Utils      as TU
 import qualified Prelude
-import Prelude hiding (catch, log, read)
+import Prelude hiding (log, read)
 
 -- import Debug.Trace
 

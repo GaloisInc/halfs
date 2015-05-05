@@ -96,11 +96,11 @@ makeDirectory parentIR dname user group perms =
                               user
                               group
              assert (BS.length bstr == fromIntegral (bdBlockSize dev)) $ do
-             lift $ bdWriteBlock dev (inodeRefToBlockAddr thisIR) bstr
+               lift $ bdWriteBlock dev (inodeRefToBlockAddr thisIR) bstr
 
-             -- Add 'dname' to parent directory's contents
-             addDirEnt_lckd pdh dname thisIR user group perms Directory
-             return thisIR
+               -- Add 'dname' to parent directory's contents
+               addDirEnt_lckd pdh dname thisIR user group perms Directory
+               return thisIR
       -- End critical section over parent's DirHandle
 
 -- | Given a parent directory's inode ref, remove the directory with the given name.
